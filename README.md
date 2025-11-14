@@ -38,7 +38,7 @@ List of properties:
   
 - NMR
 - NBO, atomic
-- Charges Mulliken, NPA, Hirshfeld charge, CM5 charge
+- Charges Mulliken, NPA, Hirshfeld charge, CM5 charge, ChelpG ESP charges
 - atomic dipole
   
   Bond properties (2 Atoms):
