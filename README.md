@@ -32,7 +32,12 @@ pip install pandas rdkit morfeus-ml dbstep ipykernel
 
 List of properties:
 - SCF Energy
+- Enthalpy
 - Level of Theory
+- Polarizability
+- SASA
+- Volume
+- HOMO, LUMO or frontier orbitals
   
   Atomic properties (1 Atom):
   
@@ -40,6 +45,7 @@ List of properties:
 - NBO, atomic
 - Charges Mulliken, NPA, Hirshfeld charge, CM5 charge, ChelpG ESP charges
 - atomic dipole
+- visible volume
   
   Bond properties (2 Atoms):
   
@@ -47,6 +53,9 @@ List of properties:
 - NBO bonds
 - Sterimol L, B1, B5
 - Bond distances
+- Bond occupancy?
+- Antibonding occupancy?
+- SASA metal? different for metals than other atoms?
 
    Angles (3 Atoms):
   
@@ -57,3 +66,8 @@ List of properties:
   
 - pyramidalization
 - dihedral angles
+
+   5 Atoms:
+
+- quadrants
+- octants
