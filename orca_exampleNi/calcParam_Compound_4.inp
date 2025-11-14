@@ -1,0 +1,8 @@
+    %base "nmr"
+  
+    !M06 D4 def2-TZVP TightSCF NMR
+    %scf guess MORead end
+    %output
+      jsonpropfile true
+      jsongbwfile true
+    end

@@ -1,0 +1,95 @@
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_0_0
+   Array index 1       :  0
+   Dimension 1         :  5
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam
+   filename            :  empty
+   Value               : calcParam
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_1_0
+   Array index 1       :  1
+   Dimension 1         :  5
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  2
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_Compound_1
+   filename            :  empty
+   Value               : calcParam_Compound_1
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_2_0
+   Array index 1       :  2
+   Dimension 1         :  5
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  3
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_Compound_2
+   filename            :  empty
+   Value               : calcParam_Compound_2
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_3_0
+   Array index 1       :  3
+   Dimension 1         :  5
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  4
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_Compound_3
+   filename            :  empty
+   Value               : calcParam_Compound_3
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_4_0
+   Array index 1       :  4
+   Dimension 1         :  5
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  5
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_Compound_4
+   filename            :  empty
+   Value               : calcParam_Compound_4
