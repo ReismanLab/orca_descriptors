@@ -4,8 +4,8 @@ Parsing ORCA outputs for MLR descriptors
 
 1. orca outputs:
    - .out --> NBO
+   - optimization.xyz --> XYZ
    - .json(s):
-   -     job1.json; --> XYZ
    -     job2.json; --> SPE
    -     job3.json; --> NBO
    -     job4.json; --> NMR
