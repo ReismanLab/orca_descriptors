@@ -1,21 +1,30 @@
 {
   description = "A Nix-flake-based Python development environment";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-  # inputs.qchem.url = "github:markuskowa/NixOS-QChem/master";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    qchem.url = "github:Nix-QChem/NixOS-QChem";
+  };
+  
   outputs = {
     self,
     nixpkgs,
-    #qchem,
+    qchem,
   }: let
+    system = "x86_64-linux";
     pkgs = import nixpkgs {
-      #import qchem.inputs.nixpkgs {
-      system = "x86_64-linux";
-      #overlays = [qchem.overlays.default];
+      inherit system;
+      overlays = [qchem.overlays.default];
       config = {
         allowUnfree = true;
+        qchem-config = {
+          allowEnv = true;
+          optAVX = false;
+        };
       };
+      
     };
+    
 
     python-with-pkgs = pkgs.python3.withPackages (ps: [
       ps.jupyter
@@ -26,6 +35,7 @@
       ps.rdkit
       ps.numpy
       ps.semantic-version
+
 
       (ps.buildPythonPackage {
         pname = "morfeus-ml";
