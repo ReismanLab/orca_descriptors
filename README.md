@@ -28,4 +28,31 @@ pip install pandas rdkit morfeus-ml dbstep ipykernel
 
 3. job1.json:
   task: get the xyz in a format that can be plugged into the Sigman property extratction 
-   
+
+
+List of properties:
+- SCF Energy
+- Level of Theory
+  
+  Atomic properties (1 Atom):
+  
+- NMR
+- NBO, atomic
+- Charges Mulliken, NPA, other?
+  
+  Bond properties (2 Atoms):
+  
+- IR frequencies
+- NBO bonds
+- Sterimol L, B1, B5
+- Bond distances
+
+   Angles (3 Atoms):
+  
+- angles
+- cone angles
+
+   4 Atoms:
+  
+- pyramidalization
+- dihedral angles
