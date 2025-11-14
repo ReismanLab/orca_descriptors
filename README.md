@@ -1,6 +1,9 @@
 # orca_descriptors
 Parsing ORCA outputs for MLR descriptors
 
+Philosophy:
+
+Elementary block that takes a set of orca outputs for one calculation and generates a json file with extensive set of descriptors.
 
 1. orca outputs:
    - .out --> NBO
