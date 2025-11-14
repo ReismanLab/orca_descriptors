@@ -1,0 +1,443 @@
+{
+  "source_file": "test.out",
+  "analysis_type": "NBO 7.0",
+  "natural_population_analysis": {
+    "atoms": [
+      null,
+      {
+        "atom": "H",
+        "charge": 0.0,
+        "core": 0.0,
+        "valence": 0.99914,
+        "rydberg": 0.00086,
+        "total": 1.0
+      },
+      {
+        "atom": "H",
+        "charge": 0.0,
+        "core": 0.0,
+        "valence": 0.99914,
+        "rydberg": 0.00086,
+        "total": 1.0
+      }
+    ],
+    "totals": {
+      "charge": 0.0,
+      "core": 0.0,
+      "valence": 1.99829,
+      "rydberg": 0.00171,
+      "total": 2.0
+    }
+  },
+  "natural_atomic_orbitals": [
+    {
+      "orbital_num": 1,
+      "atom": "H",
+      "atom_num": 1,
+      "angular": "s",
+      "orbital_type": "Val( 1s)",
+      "occupancy": 0.99914,
+      "energy": 0.02931
+    },
+    {
+      "orbital_num": 2,
+      "atom": "H",
+      "atom_num": 1,
+      "angular": "s",
+      "orbital_type": "Ryd( 2s)",
+      "occupancy": 0.0,
+      "energy": 0.54615
+    },
+    {
+      "orbital_num": 3,
+      "atom": "H",
+      "atom_num": 1,
+      "angular": "s",
+      "orbital_type": "Ryd( 3s)",
+      "occupancy": 0.0,
+      "energy": 2.08934
+    },
+    {
+      "orbital_num": 4,
+      "atom": "H",
+      "atom_num": 1,
+      "angular": "px",
+      "orbital_type": "Ryd( 2p)",
+      "occupancy": 0.00086,
+      "energy": 2.63845
+    },
+    {
+      "orbital_num": 5,
+      "atom": "H",
+      "atom_num": 1,
+      "angular": "py",
+      "orbital_type": "Ryd( 2p)",
+      "occupancy": 0.0,
+      "energy": 1.6705
+    },
+    {
+      "orbital_num": 6,
+      "atom": "H",
+      "atom_num": 1,
+      "angular": "pz",
+      "orbital_type": "Ryd( 2p)",
+      "occupancy": 0.0,
+      "energy": 1.67092
+    },
+    {
+      "orbital_num": 7,
+      "atom": "H",
+      "atom_num": 2,
+      "angular": "s",
+      "orbital_type": "Val( 1s)",
+      "occupancy": 0.99914,
+      "energy": 0.02931
+    },
+    {
+      "orbital_num": 8,
+      "atom": "H",
+      "atom_num": 2,
+      "angular": "s",
+      "orbital_type": "Ryd( 2s)",
+      "occupancy": 0.0,
+      "energy": 0.88933
+    },
+    {
+      "orbital_num": 9,
+      "atom": "H",
+      "atom_num": 2,
+      "angular": "s",
+      "orbital_type": "Ryd( 3s)",
+      "occupancy": 0.0,
+      "energy": 1.74617
+    },
+    {
+      "orbital_num": 10,
+      "atom": "H",
+      "atom_num": 2,
+      "angular": "px",
+      "orbital_type": "Ryd( 2p)",
+      "occupancy": 0.00086,
+      "energy": 2.63845
+    },
+    {
+      "orbital_num": 11,
+      "atom": "H",
+      "atom_num": 2,
+      "angular": "py",
+      "orbital_type": "Ryd( 2p)",
+      "occupancy": 0.0,
+      "energy": 1.6705
+    },
+    {
+      "orbital_num": 12,
+      "atom": "H",
+      "atom_num": 2,
+      "angular": "pz",
+      "orbital_type": "Ryd( 2p)",
+      "occupancy": 0.0,
+      "energy": 1.67092
+    }
+  ],
+  "natural_bond_orbitals": [
+    {
+      "nbo_num": 1,
+      "nbo_type": "BD",
+      "bond_index": 1,
+      "atoms": [
+        1,
+        2
+      ],
+      "occupancy": 2.0,
+      "energy": -0.4352
+    },
+    {
+      "nbo_num": 2,
+      "nbo_type": "BD*",
+      "bond_index": 1,
+      "atoms": [
+        1,
+        2
+      ],
+      "occupancy": 0.0,
+      "energy": 0.51844
+    },
+    {
+      "nbo_num": 3,
+      "nbo_type": "RY",
+      "bond_index": 1,
+      "atoms": [
+        1
+      ],
+      "occupancy": 0.0,
+      "energy": 1.85236
+    },
+    {
+      "nbo_num": 4,
+      "nbo_type": "RY",
+      "bond_index": 2,
+      "atoms": [
+        1
+      ],
+      "occupancy": 0.0,
+      "energy": 0.79278
+    },
+    {
+      "nbo_num": 5,
+      "nbo_type": "RY",
+      "bond_index": 3,
+      "atoms": [
+        1
+      ],
+      "occupancy": 0.0,
+      "energy": 1.6705
+    },
+    {
+      "nbo_num": 6,
+      "nbo_type": "RY",
+      "bond_index": 4,
+      "atoms": [
+        1
+      ],
+      "occupancy": 0.0,
+      "energy": 1.67091
+    },
+    {
+      "nbo_num": 7,
+      "nbo_type": "RY",
+      "bond_index": 5,
+      "atoms": [
+        1
+      ],
+      "occupancy": 0.0,
+      "energy": 2.61649
+    },
+    {
+      "nbo_num": 8,
+      "nbo_type": "RY",
+      "bond_index": 1,
+      "atoms": [
+        2
+      ],
+      "occupancy": 0.0,
+      "energy": 2.09016
+    },
+    {
+      "nbo_num": 9,
+      "nbo_type": "RY",
+      "bond_index": 2,
+      "atoms": [
+        2
+      ],
+      "occupancy": 0.0,
+      "energy": 1.6705
+    },
+    {
+      "nbo_num": 10,
+      "nbo_type": "RY",
+      "bond_index": 3,
+      "atoms": [
+        2
+      ],
+      "occupancy": 0.0,
+      "energy": 1.67091
+    },
+    {
+      "nbo_num": 11,
+      "nbo_type": "RY",
+      "bond_index": 4,
+      "atoms": [
+        2
+      ],
+      "occupancy": 0.0,
+      "energy": 0.86824
+    },
+    {
+      "nbo_num": 12,
+      "nbo_type": "RY",
+      "bond_index": 5,
+      "atoms": [
+        2
+      ],
+      "occupancy": 0.0,
+      "energy": 2.30324
+    }
+  ],
+  "bond_orbital_details": [
+    {
+      "bond_num": 1,
+      "occupancy": 2.0,
+      "bond_type": "BD",
+      "bond_index": 1,
+      "atoms": [
+        1,
+        2
+      ],
+      "contributions": [
+        {
+          "percentage": 50.0,
+          "coefficient": 0.7071,
+          "atom": "H",
+          "atom_num": 1,
+          "s_percent": 99.91,
+          "p_power": 0.0,
+          "p_percent": 0.09
+        },
+        {
+          "percentage": 50.0,
+          "coefficient": 0.7071,
+          "atom": "H",
+          "atom_num": 2,
+          "s_percent": 99.91,
+          "p_power": 0.0,
+          "p_percent": 0.09
+        }
+      ]
+    },
+    {
+      "bond_num": 2,
+      "occupancy": 0.0,
+      "bond_type": "BD*",
+      "bond_index": 1,
+      "atoms": [
+        1,
+        2
+      ],
+      "contributions": [
+        {
+          "percentage": 50.0,
+          "coefficient": 0.7071,
+          "atom": "H",
+          "atom_num": 1,
+          "s_percent": 99.91,
+          "p_power": 0.0,
+          "p_percent": 0.09
+        },
+        {
+          "percentage": 50.0,
+          "coefficient": -0.7071,
+          "atom": "H",
+          "atom_num": 2,
+          "s_percent": 99.91,
+          "p_power": 0.0,
+          "p_percent": 0.09
+        }
+      ]
+    },
+    {
+      "bond_num": 3,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 1,
+      "atoms": [
+        1
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 4,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 2,
+      "atoms": [
+        1
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 5,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 3,
+      "atoms": [
+        1
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 6,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 4,
+      "atoms": [
+        1
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 7,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 5,
+      "atoms": [
+        1
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 8,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 1,
+      "atoms": [
+        2
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 9,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 2,
+      "atoms": [
+        2
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 10,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 3,
+      "atoms": [
+        2
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 11,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 4,
+      "atoms": [
+        2
+      ],
+      "contributions": []
+    },
+    {
+      "bond_num": 12,
+      "occupancy": 0.0,
+      "bond_type": "RY",
+      "bond_index": 5,
+      "atoms": [
+        2
+      ],
+      "contributions": []
+    }
+  ],
+  "nho_directionality": [],
+  "second_order_perturbation": [],
+  "analysis_info": {
+    "cycle": 1,
+    "center": 2,
+    "threshold": 1.9,
+    "lewis_occupancy": 2.0,
+    "non_lewis_occupancy": 0.0,
+    "num_core": 0,
+    "num_bonds": 1,
+    "num_non_bonding_cores": 0,
+    "num_lone_pairs": 0,
+    "low_occ_lewis": 0,
+    "high_occ_non_lewis": 0
+  }
+}
