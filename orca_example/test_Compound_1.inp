@@ -1,0 +1,14 @@
+    %base "optimization"
+      !B3LYP D4 def2-svp Opt Freq TightSCF
+      %basis
+        NewGTO Ni "def2-TZVP" end
+      end
+      %scf
+          maxiter 300
+      end
+      %geom
+          Constraints
+          
+         end
+      end
+      *xyzfile 0 1 init.xyz

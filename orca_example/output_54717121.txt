@@ -1,0 +1,18 @@
+Loading orca/6.1.0
+  Loading requirement: gcc-runtime/11.3.1-gcc-11.3.1-jw6fhud
+    zlib/1.2.13-gcc-11.3.1-dwcx77k openssl/3.1.2-gcc-11.3.1-mgoa6lt
+    libevent/2.1.12-gcc-11.3.1-bpr3m74 numactl/2.0.14-gcc-11.3.1-tqvsbcd
+    openssh/8.7p1-gcc-11.3.1-ddo4kmk slurm/22.05.6-gcc-11.3.1-atym2np
+    libnl/3.3.0-gcc-11.3.1-gh3muw7 rdma-core/41.0-gcc-11.3.1-isp54jw
+    ucx/1.14.1-gcc-11.3.1-o3wj4kz openmpi/4.1.6-gcc-11.3.1-phbhsc7
+Loading python/3.11.6-gcc-13.2.0-fh6i4o3
+  Loading requirement: bzip2/1.0.8-gcc-13.2.0-ypy2y5b
+    libmd/1.0.4-gcc-13.2.0-s3xkdtu libbsd/0.11.7-gcc-13.2.0-cl7lha3
+    expat/2.5.0-gcc-13.2.0-hymnqig gcc-runtime/13.2.0-gcc-13.2.0-ty4ummv
+    ncurses/6.4-gcc-13.2.0-4o2yj6n readline/8.2-gcc-13.2.0-pinqxvi
+    gdbm/1.23-gcc-13.2.0-exyzfc5 libiconv/1.17-gcc-13.2.0-ntov4te
+    xz/5.4.1-gcc-13.2.0-4xkm5xo zlib-ng/2.1.3-gcc-13.2.0-jetnfwa
+    libxml2/2.10.3-gcc-13.2.0-fr6jcjz tar/1.34-gcc-13.2.0-3nxpzly
+    gettext/0.21.1-gcc-13.2.0-yiohc4s libffi/3.4.4-gcc-13.2.0-6hw6v3w
+    libxcrypt/4.4.35-gcc-13.2.0-4fcttz6 openssl/3.1.2-gcc-13.2.0-egeilil
+    sqlite/3.42.0-gcc-13.2.0-wri5a47 util-linux-uuid/2.38.1-gcc-13.2.0-2dkujln
