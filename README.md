@@ -42,6 +42,8 @@ List of properties:
   Atomic properties (1 Atom):
   
 - NMR
+  - [x] aniso
+  - [x] iso
 - NBO, atomic
 - Charges Mulliken, NPA, Hirshfeld charge, CM5 charge, ChelpG ESP charges
 - atomic dipole
