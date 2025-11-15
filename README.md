@@ -31,14 +31,16 @@ pip install pandas rdkit morfeus-ml dbstep ipykernel
 
 
 List of properties:
-- SCF Energy
+- [x] SCF Energy
 - Enthalpy
-- Level of Theory
+- Level of Theory (parse input files)
 - Polarizability    
 -  [x] SASA
 -  [x] Volume
-- HOMO, LUMO or frontier orbitals
-  
+- [x] HOMO energy
+- [x] LUMO energy
+- [ ] frontier orbitals (need to adjust for UHF calc.)
+
   Atomic properties (1 Atom):
   
 - NMR
