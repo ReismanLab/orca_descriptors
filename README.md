@@ -45,7 +45,13 @@ List of properties:
   - [x] aniso
   - [x] iso
 - NBO, atomic
-- Charges Mulliken, NPA, Hirshfeld charge, CM5 charge, ChelpG ESP charges
+- Charges
+  - [x] Mulliken
+  - [x] Loewdin
+  - [ ] NPA
+  - [ ] Hirshfeld (needs Hirshfeld keyword)
+  - [ ] CM5 (must be calculated)
+  - [ ] ChelpG ESP (needs CHELPG ketword or orca_chelpg program)
 - atomic dipole
 - visible volume
 -  [x] accessible surface
