@@ -32,7 +32,7 @@ pip install pandas rdkit morfeus-ml dbstep ipykernel
 
 List of properties:
 - [x] SCF Energy
-- Enthalpy
+- [x] Enthalpy (need to check after rerunning to see if json parses right)
 - Level of Theory (parse input files)
 - Polarizability    
 -  [x] SASA

@@ -15,6 +15,11 @@ end
 
     !B3LYP D4 def2-svp Opt Freq TightSCF
 
+    %output
+      jsonpropfile true
+      jsongbwfile true
+    end
+
     %basis
       NewGTO Ni "def2-TZVP" end
     end
