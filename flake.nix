@@ -36,6 +36,7 @@
       ps.numpy
       ps.semantic-version
 
+      ps.periodictable
 
       (ps.buildPythonPackage {
         pname = "morfeus-ml";

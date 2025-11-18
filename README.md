@@ -10,7 +10,7 @@ conda create --name get_desc python==3.12
 
 conda activate get_desc
 
-pip install pandas rdkit morfeus-ml dbstep ipykernel
+pip install pandas rdkit morfeus-ml dbstep ipykernel periodictable
 
 
 1. orca outputs:
@@ -51,9 +51,9 @@ List of properties:
   - [x] Mulliken
   - [x] Loewdin
   - [ ] NPA
-  - [x] Hirshfeld (needs Hirshfeld keyword)
-  - [ ] CM5 (must be calculated)
-  - [x] ChelpG ESP (needs CHELPG ketword)
+  - [x] Hirshfeld
+  - [x] CM5 (NEEDS TO BE Checked)
+  - [x] ChelpG ESP
 - atomic dipole
 - visible volume
 -  [x] accessible surface
