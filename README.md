@@ -53,7 +53,7 @@ List of properties:
   - [ ] NPA
   - [ ] Hirshfeld (needs Hirshfeld keyword)
   - [ ] CM5 (must be calculated)
-  - [ ] ChelpG ESP (needs CHELPG ketword or orca_chelpg program)
+  - [ ] ChelpG ESP (needs CHELPG ketword)
 - atomic dipole
 - visible volume
 -  [x] accessible surface
