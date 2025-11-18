@@ -1,0 +1,5 @@
+%maxcore 1125
+ %pal
+     nprocs 16
+ end
+ 

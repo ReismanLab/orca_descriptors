@@ -1,0 +1,12 @@
+  
+  %base "nmr"
+  
+  ! wb97m-d4 def2-tzvp(-f)  TightSCF NMR
+  
+  %scf guess MORead end
+  
+  %output
+  jsonpropfile true
+  jsongbwfile true
+  end
+  

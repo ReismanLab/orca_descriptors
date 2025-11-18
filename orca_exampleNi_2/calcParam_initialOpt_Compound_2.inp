@@ -1,0 +1,18 @@
+  %base "frequency"
+  
+  ! B3LYP D4 def2-tzvp(-f)  Freq TightSCF
+  
+  %basis
+      NewGTO Ni "def2-tzvp" end
+  end
+  
+  %scf
+      guess MORead
+      maxiter 300
+  end
+  
+  %output
+      jsonpropfile true
+      jsongbwfile true
+  end
+  
