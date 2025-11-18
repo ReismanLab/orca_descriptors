@@ -12,7 +12,7 @@ Variable charge = "0";
 
 # ------ DFT Optimization + Freq of Lowest En ------
 Variable opt_method = "wb97m-d4 def2-tzvp(-f)";
-Variable extra_basis = "";
+Variable Ni_extra_basis = "";
 Variable opt_solvent = "";
 Variable geom_constraints = "";
 
@@ -33,7 +33,9 @@ NewStep
 
 ! &{opt_method} &{opt_solvent} Opt TightSCF
 
-&{extra_basis}
+%basis
+    NewGTO Ni &{Ni_extra_basis} end
+end
 
 %scf
     maxiter 300
@@ -62,7 +64,9 @@ NewStep
 
 ! &{opt_method} &{opt_solvent} Freq TightSCF
 
-&{extra_basis}
+%basis
+    NewGTO Ni &{Ni_extra_basis} end
+end
 
 %scf
     guess MORead

@@ -17,7 +17,7 @@ Variable goat_solvent = "";
 
 # ------ DFT Optimization + Freq of Lowest En ------
 Variable opt_method = "wb97m-d4 def2-tzvp(-f)";
-Variable extra_basis = "";
+Variable Ni_extra_basis = "";
 Variable opt_solvent = "";
 Variable geom_constraints = "";
 
@@ -49,7 +49,9 @@ NewStep
 
 ! &{opt_method} &{opt_solvent} Opt TightSCF PModel
 
-&{extra_basis}
+%basis
+    NewGTO Ni &{Ni_extra_basis} end
+end
 
 %scf
     maxiter 300
@@ -61,7 +63,7 @@ end
     end
 end
 
-*xyzfile 0 1 conf_search.globalminimum.xyz
+*xyzfile &{charge} &{multiplicity} conf_search.globalminimum.xyz
 
 StepEnd
 
@@ -78,8 +80,9 @@ NewStep
 
 ! &{opt_method} &{opt_solvent} Freq TightSCF
 
-&{extra_basis}
-
+%basis
+    NewGTO Ni &{Ni_extra_basis} end
+end
 %scf
     guess MORead
     maxiter 300
