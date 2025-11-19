@@ -33,7 +33,7 @@ pip install pandas rdkit morfeus-ml dbstep ipykernel periodictable
 List of properties:
 - [x] SCF Energy
 - [x] Enthalpy (need to check after rerunning to see if json parses right)
-- Level of Theory (parse input files)
+- [x] Level of Theory
 - Polarizability    
 -  [x] SASA
 -  [x] Volume
