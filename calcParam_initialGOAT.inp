@@ -111,7 +111,7 @@ ReadGeom(2);
 NewStep
 %base "singlepoint"
 
-! &{svp_method} &{property_solvent} TightSCF &{nbo_run} FMOPop HIRSHFELD CHELPG
+! &{svp_method} &{property_solvent} TightSCF &{nbo_run} FMOPop HIRSHFELD CHELPG ADLD
 
 %scf
     maxiter 300
@@ -121,6 +121,16 @@ end
     jsonpropfile true
     jsongbwfile true
 end
+
+%elprop
+Polar true
+PolarAtom true
+Dipole true
+DipoleAtom true
+Quadrupole true
+QuadrupoleAtom true
+end
+
 StepEnd
 
 
