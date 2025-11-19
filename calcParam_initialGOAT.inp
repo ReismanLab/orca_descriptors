@@ -7,8 +7,8 @@ end
 
 # ------ General Variables ------
 Variable input_xyz = "inp.xyz";
-Variable multiplicity = "1";
-Variable charge = "0";
+Variable multiplicity = 1;
+Variable charge = 0;
 
 # ------ GOAT optimization ------
 Variable goat_method = "XTB";
