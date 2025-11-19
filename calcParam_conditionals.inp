@@ -41,7 +41,9 @@ Variable ox_mult = multiplicity + 1;
 Variable red_chrg = charge - 1;
 Variable red_mult = multiplicity + 1;
 
-Variable opt_geom;
+Variable opt_xyz;
+Variable scf_guess = "PModel";
+
 
 if (conf_search) then
     # ------------------------------------
@@ -85,23 +87,18 @@ if (opt_geom) then
 
     StepEnd
 
-    opt_geom = "optimization.xyz"
+    opt_xyz = "optimization.xyz"
+    scf_guess = "MORead";
 
 else
-    opt_geom = input_xyz;
+    opt_xyz = input_xyz;
 
 EndIf
-
-Variable scf_guess = "PModel";
 
 if (freq_calc) then
     # ------------------------------------
     # Frequency calculation
     # ------------------------------------
-
-    if (opt_geom) then
-        scf_guess = "MORead";
-    EndIf
 
     NewStep
     %base "frequency"
@@ -121,7 +118,11 @@ if (freq_calc) then
         jsongbwfile true
     end
 
+    *xyzfile &{charge} &{multiplicity} &{opt_xyz}
+
     StepEnd
+
+    scf_guess = "MORead";
 endif
 
 # ------------------------------------
@@ -134,6 +135,7 @@ NewStep
 ! &{svp_method} &{property_solvent} TightSCF &{nbo_run} FMOPop HIRSHFELD CHELPG ADLD
 
 %scf
+    guess &{scf_guess}
     maxiter 300
 end
 
@@ -151,7 +153,10 @@ end
     QuadrupoleAtom true
 end
 
+*xyzfile &{charge} &{multiplicity} &{opt_xyz}
+
 StepEnd
+scf_guess = "MORead";
 
 if (nmr_calc) then
 
@@ -171,6 +176,9 @@ if (nmr_calc) then
     jsonpropfile true
     jsongbwfile true
     end
+
+    *xyzfile &{charge} &{multiplicity} &{opt_xyz}
+
 
     StepEnd
 endif
