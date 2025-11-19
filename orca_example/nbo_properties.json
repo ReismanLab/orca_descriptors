@@ -35,7 +35,8 @@
       "atom": "H",
       "atom_num": 1,
       "angular": "s",
-      "orbital_type": "Val( 1s)",
+      "orbital_type": "Val",
+      "orbital": "1s",
       "occupancy": 0.99914,
       "energy": 0.02931
     },
@@ -44,7 +45,8 @@
       "atom": "H",
       "atom_num": 1,
       "angular": "s",
-      "orbital_type": "Ryd( 2s)",
+      "orbital_type": "Ryd",
+      "orbital": "2s",
       "occupancy": 0.0,
       "energy": 0.54615
     },
@@ -53,7 +55,8 @@
       "atom": "H",
       "atom_num": 1,
       "angular": "s",
-      "orbital_type": "Ryd( 3s)",
+      "orbital_type": "Ryd",
+      "orbital": "3s",
       "occupancy": 0.0,
       "energy": 2.08934
     },
@@ -62,7 +65,8 @@
       "atom": "H",
       "atom_num": 1,
       "angular": "px",
-      "orbital_type": "Ryd( 2p)",
+      "orbital_type": "Ryd",
+      "orbital": "2p",
       "occupancy": 0.00086,
       "energy": 2.63845
     },
@@ -71,7 +75,8 @@
       "atom": "H",
       "atom_num": 1,
       "angular": "py",
-      "orbital_type": "Ryd( 2p)",
+      "orbital_type": "Ryd",
+      "orbital": "2p",
       "occupancy": 0.0,
       "energy": 1.6705
     },
@@ -80,7 +85,8 @@
       "atom": "H",
       "atom_num": 1,
       "angular": "pz",
-      "orbital_type": "Ryd( 2p)",
+      "orbital_type": "Ryd",
+      "orbital": "2p",
       "occupancy": 0.0,
       "energy": 1.67092
     },
@@ -89,7 +95,8 @@
       "atom": "H",
       "atom_num": 2,
       "angular": "s",
-      "orbital_type": "Val( 1s)",
+      "orbital_type": "Val",
+      "orbital": "1s",
       "occupancy": 0.99914,
       "energy": 0.02931
     },
@@ -98,7 +105,8 @@
       "atom": "H",
       "atom_num": 2,
       "angular": "s",
-      "orbital_type": "Ryd( 2s)",
+      "orbital_type": "Ryd",
+      "orbital": "2s",
       "occupancy": 0.0,
       "energy": 0.88933
     },
@@ -107,7 +115,8 @@
       "atom": "H",
       "atom_num": 2,
       "angular": "s",
-      "orbital_type": "Ryd( 3s)",
+      "orbital_type": "Ryd",
+      "orbital": "3s",
       "occupancy": 0.0,
       "energy": 1.74617
     },
@@ -116,7 +125,8 @@
       "atom": "H",
       "atom_num": 2,
       "angular": "px",
-      "orbital_type": "Ryd( 2p)",
+      "orbital_type": "Ryd",
+      "orbital": "2p",
       "occupancy": 0.00086,
       "energy": 2.63845
     },
@@ -125,7 +135,8 @@
       "atom": "H",
       "atom_num": 2,
       "angular": "py",
-      "orbital_type": "Ryd( 2p)",
+      "orbital_type": "Ryd",
+      "orbital": "2p",
       "occupancy": 0.0,
       "energy": 1.6705
     },
@@ -134,7 +145,8 @@
       "atom": "H",
       "atom_num": 2,
       "angular": "pz",
-      "orbital_type": "Ryd( 2p)",
+      "orbital_type": "Ryd",
+      "orbital": "2p",
       "occupancy": 0.0,
       "energy": 1.67092
     }
