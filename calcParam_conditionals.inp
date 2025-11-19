@@ -180,9 +180,6 @@ if (vertical_redox) then
     # Vertical (no optimization) oxidation
     # ------------------------------------------------------------------------
 
-    ReadGeom(2); #from optimization
-    ReadMOs(4); #from high-level singlepoint
-
     NewStep
 
     %base "oxidation"
