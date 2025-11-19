@@ -46,11 +46,11 @@ List of properties:
 - NMR
   - [x] aniso
   - [x] iso
-- NBO, atomic
+
 - Charges
   - [x] Mulliken
   - [x] Loewdin
-  - [ ] NPA
+  - [x] NPA
   - [x] Hirshfeld
   - [x] CM5 (NEEDS TO BE Checked)
   - [x] ChelpG ESP
@@ -61,7 +61,7 @@ List of properties:
   Bond properties (2 Atoms):
   
 - IR frequencies
-- NBO bonds
+- [x] NBO bonds
 -  [x] Sterimol L, B1, B5
 -  [x] Bond distances
 - Bond occupancy?
