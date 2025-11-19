@@ -6,7 +6,7 @@ end
 %Compound
 
 # ------Settings -------
-Variable conf_search = true;
+Variable conf_search = false;
 Variable opt_geom = true;
 Variable freq_calc = true;
 Variable nmr_calc = true;
@@ -87,7 +87,7 @@ if (opt_geom) then
 
     StepEnd
 
-    opt_xyz = "optimization.xyz"
+    opt_xyz = "optimization.xyz";
     scf_guess = "MORead";
 
 else
