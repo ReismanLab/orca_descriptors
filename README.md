@@ -39,7 +39,7 @@ List of properties:
 -  [x] Volume
 - [x] HOMO energy
 - [x] LUMO energy
-- [ ] frontier orbitals (need to adjust for UHF calc.)
+- [x] frontier orbitals
 
   Atomic properties (1 Atom):
   
