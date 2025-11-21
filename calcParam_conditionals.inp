@@ -29,9 +29,9 @@ Variable opt_solvent = "";
 Variable geom_constraints = "";
 
 # -- Single Point variables -- 
-Variable svp_method = "m06 d3bj def2-tzvp";
+Variable svp_method = "m06 d4 def2-tzvp";
 Variable property_solvent = "";
-Variable nmr_method = "m06 d3bj def2-tzvp";
+Variable nmr_method = "m06 d4 def2-tzvp";
 
 Variable nbo_run = "NBO NPA"; # NBOEXE and GENEXE must be set (external to Orca)
 
