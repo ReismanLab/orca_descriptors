@@ -7,10 +7,10 @@ end
 
 # ------Settings -------
 Variable conf_search = false;
-Variable opt_geom = true;
-Variable freq_calc = true;
+Variable opt_geom = false;
+Variable freq_calc = false;
 Variable nmr_calc = true;
-Variable vertical_redox = true;
+Variable vertical_redox = false;
 
 # ------ General Variables ------
 Variable input_xyz = "inp.xyz";
@@ -29,9 +29,9 @@ Variable opt_solvent = "";
 Variable geom_constraints = "";
 
 # -- Single Point variables -- 
-Variable svp_method = "wb97m-d4 def2-tzvp(-f)";
+Variable svp_method = "m06 d3bj def2-tzvp";
 Variable property_solvent = "";
-Variable nmr_method = "wb97m-d4 def2-tzvp(-f)";
+Variable nmr_method = "m06 d3bj def2-tzvp";
 
 Variable nbo_run = "NBO NPA"; # NBOEXE and GENEXE must be set (external to Orca)
 
