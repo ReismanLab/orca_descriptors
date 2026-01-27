@@ -1,0 +1,182 @@
+%maxcore 1125
+%pal
+    nprocs 16
+end
+
+%Compound
+
+# -------- General Variables ------------------------------------------
+Variable input_xyz = "inp.xyz";
+Variable multiplicity = 1;
+Variable charge = 0;
+
+# -------- DFT Optimization + Freq of Lowest En -----------------------
+Variable opt_method = "B3LYP D4 def2-tzvp(-f)";
+Variable Ni_extra_basis = "def2-tzvp";
+Variable opt_solvent = "";
+Variable geom_constraints = "";
+
+#---------- Single Point variables ------------------------------------ 
+Variable svp_method = "wb97m-d4 def2-tzvp(-f)";
+Variable property_solvent = "";
+Variable nmr_method = "wb97m-d4 def2-tzvp(-f)";
+
+Variable nbo_run = "NBO NPA"; # NBOEXE and GENEXE must be set (external to Orca)
+
+# -------- vertical oxidation/reduction multiplicity and charges ------
+Variable ox_chrg = charge + 1;
+Variable ox_mult = multiplicity + 1;
+Variable red_chrg = charge - 1;
+Variable red_mult = multiplicity + 1;
+
+# ------------------------------------------------------------------------
+# First job (Step 1)
+# Optimize geometry
+# ------------------------------------------------------------------------
+
+NewStep
+%base "optimization"
+
+! &{opt_method} &{opt_solvent} Opt TightSCF
+
+%basis
+    NewGTO Ni "&{Ni_extra_basis}" end
+end
+
+%scf
+    maxiter 300
+end
+
+%geom
+    Constraints
+    &{geom_constraints}
+    end
+end
+
+*xyzfile &{charge} &{multiplicity} &{input_xyz}
+
+StepEnd
+
+# ------------------------------------------------------------------------
+# Second job (Step 2) with geometry (Step 1)
+# Frequency
+# ------------------------------------------------------------------------
+
+ReadGeom(1); #from optimization
+ReadMOs(1); #from optimization 
+
+NewStep
+%base "frequency"
+
+! &{opt_method} &{opt_solvent} Freq TightSCF
+
+%basis
+    NewGTO Ni "&{Ni_extra_basis}" end
+end
+
+%scf
+    guess MORead
+    maxiter 300
+end
+
+%output
+    jsonpropfile true
+    jsongbwfile true
+end
+
+StepEnd
+
+# ------------------------------------------------------------------------
+# Third job (Step 3) with geometry (Step 1)
+# but different functional
+# ------------------------------------------------------------------------
+
+ReadGeom(1); #from optimization
+
+NewStep
+%base "singlepoint"
+
+! &{svp_method} &{property_solvent} TightSCF &{nbo_run} FMOPop HIRSHFELD CHELPG
+
+%scf
+    maxiter 300
+end
+
+%output
+    jsonpropfile true
+    jsongbwfile true
+end
+StepEnd
+
+
+# ------------------------------------------------------------------------
+# Forth job (Step 4) with geometry (Step 1)
+# adding NMR calculation, uses GIAO by default
+# ------------------------------------------------------------------------
+
+ReadGeom(1); #from optimization
+ReadMOs(3); #from high-level singlepoint
+
+NewStep
+
+%base "nmr"
+
+! &{nmr_method} &{property_solvent} TightSCF NMR
+
+%scf guess MORead end
+
+%output
+jsonpropfile true
+jsongbwfile true
+end
+
+StepEnd
+
+# ------------------------------------------------------------------------
+# Fifth job (Step 5) with geometry (Step 1)
+# Vertical (no optimization) oxidation
+# ------------------------------------------------------------------------
+
+ReadGeom(1); #from optimization
+ReadMOs(3); #from high-level singlepoint
+
+NewStep
+
+%base "oxidation"
+
+! &{svp_method} &{property_solvent} TightSCF &{nbo_run} HIRSHFELD CHELPG
+
+%output
+jsonpropfile true
+jsongbwfile true
+end
+
+*xyzfile &{ox_chrg} &{ox_mult} optimization.xyz
+
+StepEnd
+
+
+# ------------------------------------------------------------------------
+# Sixth job (Step 6) with geometry (Step 1)
+# Vertical (no optimization) reduction
+# ------------------------------------------------------------------------
+
+ReadGeom(1); #from optimization
+ReadMOs(3); #from high-level singlepoint
+
+NewStep
+
+%base "reduction"
+
+! &{svp_method} &{property_solvent} TightSCF &{nbo_run} HIRSHFELD CHELPG
+
+%output
+jsonpropfile true
+jsongbwfile true
+end
+
+*xyzfile &{red_chrg} &{red_mult} optimization.xyz
+
+StepEnd
+
+EndRun

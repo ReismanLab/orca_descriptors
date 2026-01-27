@@ -1,0 +1,418 @@
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_0_0
+   Array index 1       :  0
+   Dimension 1         :  7
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_initialOpt
+   filename            :  empty
+   Value               : calcParam_initialOpt
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  INPUT_XYZ
+   Variable ORCAName   :  input_xyz_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  inp.xyz
+   filename            :  empty
+   Value               : inp.xyz
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  MULTIPLICITY
+   Variable ORCAName   :  multiplicity_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  Integer
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  1
+   filename            :  empty
+   Value               : 1
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  CHARGE
+   Variable ORCAName   :  charge_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  Integer
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  0
+   filename            :  empty
+   Value               : 0
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  OPT_METHOD
+   Variable ORCAName   :  opt_method_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  B3LYP D4 def2-tzvp(-f)
+   filename            :  empty
+   Value               : B3LYP D4 def2-tzvp(-f)
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  NI_EXTRA_BASIS
+   Variable ORCAName   :  Ni_extra_basis_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  def2-tzvp
+   filename            :  empty
+   Value               : def2-tzvp
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  OPT_SOLVENT
+   Variable ORCAName   :  opt_solvent_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  
+   filename            :  empty
+   Value               : 
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  GEOM_CONSTRAINTS
+   Variable ORCAName   :  geom_constraints_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  
+   filename            :  empty
+   Value               : 
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  SVP_METHOD
+   Variable ORCAName   :  svp_method_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  wb97m-d4 def2-tzvp(-f)
+   filename            :  empty
+   Value               : wb97m-d4 def2-tzvp(-f)
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  PROPERTY_SOLVENT
+   Variable ORCAName   :  property_solvent_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  
+   filename            :  empty
+   Value               : 
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  NMR_METHOD
+   Variable ORCAName   :  nmr_method_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  wb97m-d4 def2-tzvp(-f)
+   filename            :  empty
+   Value               : wb97m-d4 def2-tzvp(-f)
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  NBO_RUN
+   Variable ORCAName   :  nbo_run_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  NBO NPA
+   filename            :  empty
+   Value               : NBO NPA
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  OX_CHRG
+   Variable ORCAName   :  ox_chrg_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  Integer
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  1
+   filename            :  empty
+   Value               : 1
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  OX_MULT
+   Variable ORCAName   :  ox_mult_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  Integer
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  2
+   filename            :  empty
+   Value               : 2
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  RED_CHRG
+   Variable ORCAName   :  red_chrg_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  Integer
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  -1
+   filename            :  empty
+   Value               : -1
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  RED_MULT
+   Variable ORCAName   :  red_mult_0_0
+   Array index 1       :  0
+   Dimension 1         :  0
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  0
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  Integer
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  2
+   filename            :  empty
+   Value               : 2
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_1_0
+   Array index 1       :  1
+   Dimension 1         :  7
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  2
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_initialOpt_Compound_1
+   filename            :  empty
+   Value               : calcParam_initialOpt_Compound_1
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_2_0
+   Array index 1       :  2
+   Dimension 1         :  7
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  3
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_initialOpt_Compound_2
+   filename            :  empty
+   Value               : calcParam_initialOpt_Compound_2
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_3_0
+   Array index 1       :  3
+   Dimension 1         :  7
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  4
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_initialOpt_Compound_3
+   filename            :  empty
+   Value               : calcParam_initialOpt_Compound_3
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_4_0
+   Array index 1       :  4
+   Dimension 1         :  7
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  5
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_initialOpt_Compound_4
+   filename            :  empty
+   Value               : calcParam_initialOpt_Compound_4
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_5_0
+   Array index 1       :  5
+   Dimension 1         :  7
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  6
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_initialOpt_Compound_5
+   filename            :  empty
+   Value               : calcParam_initialOpt_Compound_5
+
+-----------------------------------------------
+---------------Details of variable-------------
+   Variable Name       :  Basenames
+   Variable ORCAName   :  Basenames_6_0
+   Array index 1       :  6
+   Dimension 1         :  7
+   Array index 2       :  0
+   Dimension 2         :  0
+   Step ID             :  7
+   Geometry Index      :  -1
+   isPredefined        :  FALSE
+   DataType            :  String
+   Object Name         :   
+   Object Member       :   
+   Object Serial Number:  0
+   evalString          :  calcParam_initialOpt_Compound_6
+   filename            :  empty
+   Value               : calcParam_initialOpt_Compound_6

@@ -10,7 +10,7 @@ conda create --name get_desc python==3.12
 
 conda activate get_desc
 
-pip install pandas rdkit morfeus-ml dbstep ipykernel
+pip install pandas rdkit morfeus-ml dbstep ipykernel periodictable
 
 
 1. orca outputs:
@@ -33,27 +33,27 @@ pip install pandas rdkit morfeus-ml dbstep ipykernel
 List of properties:
 - [x] SCF Energy
 - [x] Enthalpy (need to check after rerunning to see if json parses right)
-- Level of Theory (parse input files)
+- [x] Level of Theory
 - Polarizability    
 -  [x] SASA
 -  [x] Volume
 - [x] HOMO energy
 - [x] LUMO energy
-- [ ] frontier orbitals (need to adjust for UHF calc.)
+- [x] frontier orbitals
 
   Atomic properties (1 Atom):
   
 - NMR
   - [x] aniso
   - [x] iso
-- NBO, atomic
+
 - Charges
   - [x] Mulliken
   - [x] Loewdin
-  - [ ] NPA
-  - [ ] Hirshfeld (needs Hirshfeld keyword)
-  - [ ] CM5 (must be calculated)
-  - [ ] ChelpG ESP (needs CHELPG ketword)
+  - [x] NPA
+  - [x] Hirshfeld
+  - [x] CM5 (NEEDS TO BE Checked)
+  - [x] ChelpG ESP
 - atomic dipole
 - visible volume
 -  [x] accessible surface
@@ -61,7 +61,7 @@ List of properties:
   Bond properties (2 Atoms):
   
 - IR frequencies
-- NBO bonds
+- [x] NBO bonds
 -  [x] Sterimol L, B1, B5
 -  [x] Bond distances
 - Bond occupancy?

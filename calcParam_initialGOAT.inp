@@ -7,8 +7,8 @@ end
 
 # ------ General Variables ------
 Variable input_xyz = "inp.xyz";
-Variable multiplicity = "1";
-Variable charge = "0";
+Variable multiplicity = 1;
+Variable charge = 0;
 
 # ------ GOAT optimization ------
 Variable goat_method = "XTB";
@@ -17,7 +17,7 @@ Variable goat_solvent = "";
 
 # ------ DFT Optimization + Freq of Lowest En ------
 Variable opt_method = "wb97m-d4 def2-tzvp(-f)";
-Variable Ni_extra_basis = "";
+Variable Ni_extra_basis = "def2-tzvp";
 Variable opt_solvent = "";
 Variable geom_constraints = "";
 
@@ -27,6 +27,12 @@ Variable property_solvent = "";
 Variable nmr_method = "wb97m-d4 def2-tzvp(-f)";
 
 Variable nbo_run = "NBO NPA"; # NBOEXE and GENEXE must be set (external to Orca)
+
+# -------- vertical oxidation/reduction multiplicity and charges ------
+Variable ox_chrg = charge + 1;
+Variable ox_mult = multiplicity + 1;
+Variable red_chrg = charge - 1;
+Variable red_mult = multiplicity + 1;
 
 # ------------------------------------
 # First job (Step 1)
@@ -50,7 +56,7 @@ NewStep
 ! &{opt_method} &{opt_solvent} Opt TightSCF PModel
 
 %basis
-    NewGTO Ni &{Ni_extra_basis} end
+    NewGTO Ni "&{Ni_extra_basis}" end
 end
 
 %scf
@@ -81,7 +87,7 @@ NewStep
 ! &{opt_method} &{opt_solvent} Freq TightSCF
 
 %basis
-    NewGTO Ni &{Ni_extra_basis} end
+    NewGTO Ni "&{Ni_extra_basis}" end
 end
 %scf
     guess MORead
@@ -105,7 +111,7 @@ ReadGeom(2);
 NewStep
 %base "singlepoint"
 
-! &{svp_method} &{property_solvent} TightSCF &{nbo_run} FMOPop HIRSHFELD CHELPG
+! &{svp_method} &{property_solvent} TightSCF &{nbo_run} FMOPop HIRSHFELD CHELPG ADLD
 
 %scf
     maxiter 300
@@ -115,6 +121,16 @@ end
     jsonpropfile true
     jsongbwfile true
 end
+
+%elprop
+Polar true
+PolarAtom true
+Dipole true
+DipoleAtom true
+Quadrupole true
+QuadrupoleAtom true
+end
+
 StepEnd
 
 
@@ -140,5 +156,54 @@ jsongbwfile true
 end
 
 StepEnd
+
+# ------------------------------------------------------------------------
+# Sixth job (Step 6) with geometry (Step 2)
+# Vertical (no optimization) oxidation
+# ------------------------------------------------------------------------
+
+ReadGeom(2); #from optimization
+ReadMOs(4); #from high-level singlepoint
+
+NewStep
+
+%base "oxidation"
+
+! &{svp_method} &{property_solvent} TightSCF &{nbo_run} HIRSHFELD CHELPG
+
+%output
+jsonpropfile true
+jsongbwfile true
+end
+
+*xyzfile &{ox_chrg} &{ox_mult} optimization.xyz
+
+StepEnd
+
+
+# ------------------------------------------------------------------------
+# Seventh job (Step 7) with geometry (Step 2)
+# Vertical (no optimization) reduction
+# ------------------------------------------------------------------------
+
+ReadGeom(2); #from optimization
+ReadMOs(4); #from high-level singlepoint
+
+NewStep
+
+%base "reduction"
+
+! &{svp_method} &{property_solvent} TightSCF &{nbo_run} HIRSHFELD CHELPG
+
+%output
+jsonpropfile true
+jsongbwfile true
+end
+
+*xyzfile &{red_chrg} &{red_mult} optimization.xyz
+
+StepEnd
+
+
 
 EndRun
