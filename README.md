@@ -2,7 +2,19 @@
 Parsing ORCA outputs for MLR descriptors
 
 ## Philosophy:
-Elementary block that takes a set of orca outputs for one calculation and generates a json file with extensive set of descriptors.
+
+- Numbering atoms: -> make it a python file
+
+- Orca descriptor extraction (single output): Elementary block that takes a set of orca outputs for one calculation and generates a json file with extensive set of descriptors.
+- Orca calculation
+
+- Notebook:
+   input: specify a folder with conformers computed
+   - get the smiles
+   - check that the orca file converged
+   - get the atoms numbers for atomic descriptors
+   - extract descriptors from each conformer
+   - ensemble to get the overall descripotrs (_min, _max, _low_E, _Boltz)
 
 ## Installation:
 
