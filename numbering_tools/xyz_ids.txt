@@ -1,0 +1,6 @@
+./bipy.xyz
+./biox.xyz
+./pyox.xyz
+./biim.xyz
+./box.xyz
+./phen.xyz

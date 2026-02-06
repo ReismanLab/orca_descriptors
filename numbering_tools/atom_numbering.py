@@ -407,5 +407,8 @@ def compile_final(path):
     df_pyox_corrected = find_pyox_ligands_and_renumber(ligand_consistent_atom_numbering)
     return df_pyox_corrected
 
+def atom_numbers(df):
+    
+
     
 
