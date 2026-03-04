@@ -9,6 +9,7 @@ pybel.ob.obErrorLog.StopLogging()
 from rdkit import Chem
 from rdkit import Chem
 from rdkit.Chem import SDMolSupplier, SDWriter
+from rdkit.Chem import AllChem, rdDetermineBonds, rdMolAlign, GetMolFrags
 from rdkit.Chem import Draw
 from rdkit.Chem.Draw import rdMolDraw2D
 from IPython.display import SVG, display
@@ -24,7 +25,7 @@ def get_sdf_from_xyz(path):
                 mol.write("sdf", sdf_path, overwrite=True)
 
 def get_xyz_ids(path):
-    with open("xyz_ids.txt", "w") as a:
+    with open(f"{path}/xyz_ids.txt", "w") as a:
         for filename in os.listdir(path):
             if filename.endswith('.xyz'):
                 f = os.path.join(path, filename)
@@ -34,7 +35,7 @@ def get_ligand_core_type_xyz(path):
     mols_5 = {} #5-membered metallacycles
     mols_6 = {} #6-membered metallacycles
     results = []
-    with open('xyz_ids.txt', 'r') as file: #get list of xyz files
+    with open(f"{path}/xyz_ids.txt", 'r') as file: #get list of xyz files
         xyz_names = [line.strip() for line in file]
 
     for xyz in xyz_names:
@@ -55,11 +56,10 @@ def get_ligand_core_type_xyz(path):
 
         if Ni_ringsize_5 and not Ni_ringsize_6:
             mols_5[base_name] = original_mol
-            results.append({'id': base_name, 'ligand_type': 'core_5'})
+            results.append({'id': xyz, 'ligand_type': 'core_5'})
         elif not Ni_ringsize_5 and Ni_ringsize_6:
             mols_6[base_name] = original_mol
-            results.append({'id': base_name, 'ligand_type': 'core_6'})
-
+            results.append({'id': xyz,  'ligand_type': 'core_6'})
     return mols_5, mols_6, pd.DataFrame(results)
 
 def get_initial_atom_numbers(mol_dict5, mol_dict6, path):
@@ -106,7 +106,7 @@ def get_initial_atom_numbers(mol_dict5, mol_dict6, path):
         if ligID not in [entry['xyz_name'] for entry in results6]: #rdkit is weird sometimes just generating the mol again fixes the issue
             sdf_name = key + '.sdf'
             print (sdf_name)
-            sdf_path = os.path.join(sdf_directory, sdf_name)
+            sdf_path = os.path.join(path, sdf_name)
             suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
             mol = next((m for m in suppl if m is not None), None) 
             for substructure in substructure_6:
@@ -211,7 +211,7 @@ def verify_atom_numbering(df, path):
             if H1_atomic_num !=1 or H2_atomic_num !=1:
                 print (f'error in atom numbering for {xyz_name_base}')
 
-def find_pyox_ligands_and_renumber(df, sdf_dir=os.getcwd()):
+def find_pyox_ligands_and_renumber(df, path):
     # first deal with the 5-membered cores
     df5 = df[df['ligand_type'] == 'core_5'].copy()
     pyox_ligands = []
@@ -228,7 +228,7 @@ def find_pyox_ligands_and_renumber(df, sdf_dir=os.getcwd()):
         C2_index = row['C2'] 
         
         sdf_name = xyz_name_base + '.sdf'
-        sdf_path = os.path.join(sdf_dir,sdf_name)
+        sdf_path = os.path.join(path,sdf_name)
 
         try:
             suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
@@ -282,7 +282,7 @@ def find_pyox_ligands_and_renumber(df, sdf_dir=os.getcwd()):
                 C2_index = row['C2'] 
 
                 sdf_name = xyz_name_base + '.sdf'
-                sdf_path = os.path.join(sdf_dir,sdf_name)
+                sdf_path = os.path.join(path,sdf_name)
 
                 try:
                     suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
@@ -327,13 +327,14 @@ def find_pyox_ligands_and_renumber(df, sdf_dir=os.getcwd()):
         C2_index = row['C2'] 
         
         sdf_name = xyz_name_base + '.sdf'
-        sdf_path = os.path.join(sdf_dir,sdf_name)
+        sdf_path = os.path.join(path,sdf_name)
 
         try:
             suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
             mol = next((m for m in suppl if m is not None), None)
         except:
             print (f'bad input file for {sdf_path}')
+
         ringsize_N1_is_6 = mol.GetAtomWithIdx(N1_index).IsInRingSize(6)
         ringsize_N1_is_5 = mol.GetAtomWithIdx(N1_index).IsInRingSize(5)
 
@@ -360,7 +361,7 @@ def find_pyox_ligands_and_renumber(df, sdf_dir=os.getcwd()):
                 C2_index = row['C2'] 
 
                 sdf_name = xyz_name_base + '.sdf'
-                sdf_path = os.path.join(sdf_dir,sdf_name)
+                sdf_path = os.path.join(path,sdf_name)
 
                 try:
                     suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
@@ -396,18 +397,88 @@ def find_pyox_ligands_and_renumber(df, sdf_dir=os.getcwd()):
     
     return df_pyox_corrected
 
-    
-def compile_final(path):
-    get_sdf_from_xyz(path)
-    get_xyz_ids(path)
-    mols_5, mols_6, ligand_core_class = get_ligand_core_type_xyz(path)
-    ligand_initial_atom_numbering = get_initial_atom_numbers(mols_5, mols_6, path)
-    ligand_consistent_atom_numbering = make_ensemble_atom_numbering_consistent(ligand_initial_atom_numbering)
-    verify_atom_numbering(ligand_consistent_atom_numbering, path)
-    df_pyox_corrected = find_pyox_ligands_and_renumber(ligand_consistent_atom_numbering)
-    return df_pyox_corrected
+def get_smiles(df, path):
+    df.insert(2, 'smiles', '') # add empty column for smiles
+    df.insert(1, 'path', '') # add empty column for path
+    df.insert(3, 'inchi', '') # add empty column for inchikey
+    for i, row in df.iterrows():
+        xyz_name_base = row['xyz_name']
+        sdf_name = xyz_name_base + '.sdf'
+        xyz_name = xyz_name_base + '.xyz'
+        sdf_path = os.path.join(path, sdf_name)
+        xyz_path = os.path.join(path, xyz_name)
+        df.loc[i, 'path'] = path
+        Ni_index = row['Ni']
+        try:
+            suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
+            mol = next((m for m in suppl if m is not None), None)
+        except:
+            print (f'bad input file for {sdf_path}')
+        rw_mol = Chem.rdchem.RWMol(mol)  # Make a writable copy of the molecule
+        rw_mol = Chem.rdchem.RWMol(mol)  # Make a writable copy of the molecule
+        Chem.rdchem.RWMol.RemoveAtom(rw_mol, Ni_index)
+        frags = GetMolFrags(rw_mol, asMols=True)
+        for frag in frags:
+            if len(frag.GetAtoms()) > 1:
+                lig = Chem.MolToSmiles(frag)
+                df.loc[i, 'smiles'] = lig
+                inchi = Chem.rdinchi.MolToInchiKey(Chem.MolFromSmiles(lig))
+                df.loc[i, 'inchi'] = inchi
+                break
+    return df
 
-def atom_numbers(df):
+
+def compile_final(path, index=1, subdirectory=True):
+    if not path[-1] == '/':
+        path = path + '/'
+        print (f'added slash to end of path, new path is {path}')
+    if subdirectory == False:
+        get_sdf_from_xyz(path)
+        get_xyz_ids(path)
+        mols_5, mols_6, ligand_core_class = get_ligand_core_type_xyz(path)
+        ligand_initial_atom_numbering = get_initial_atom_numbers(mols_5, mols_6, path)
+        ligand_consistent_atom_numbering = make_ensemble_atom_numbering_consistent(ligand_initial_atom_numbering)
+        verify_atom_numbering(ligand_consistent_atom_numbering, path)
+        df_pyox_corrected = find_pyox_ligands_and_renumber(ligand_consistent_atom_numbering, path)
+        df_with_smiles = get_smiles(df_pyox_corrected, path)
+        if index == 1: #change zero indexing to 1-indexing if desired
+            df_with_smiles['H1'] = df_with_smiles['H1'] + 1
+            df_with_smiles['Ni'] = df_with_smiles['Ni'] + 1
+            df_with_smiles['H2'] = df_with_smiles['H2'] + 1
+            df_with_smiles['N1'] = df_with_smiles['N1'] + 1
+            df_with_smiles['C1'] = df_with_smiles['C1'] + 1
+            df_with_smiles['C2'] = df_with_smiles['C2'] + 1
+            df_with_smiles['N2'] = df_with_smiles['N2'] + 1
+        df_final = df_with_smiles
+    else:
+        df_final = pd.DataFrame()
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if entry.is_dir():
+                    sub_path = os.path.join(path, entry.name)
+                    if not sub_path[-1] == '/':
+                        sub_path = sub_path + '/'
+                    get_sdf_from_xyz(sub_path)
+                    get_xyz_ids(sub_path)
+                    mols_5, mols_6, ligand_core_class = get_ligand_core_type_xyz(sub_path)
+                    ligand_initial_atom_numbering = get_initial_atom_numbers(mols_5, mols_6, sub_path)
+                    ligand_consistent_atom_numbering = make_ensemble_atom_numbering_consistent(ligand_initial_atom_numbering)
+                    verify_atom_numbering(ligand_consistent_atom_numbering, sub_path)
+                    df_pyox_corrected = find_pyox_ligands_and_renumber(ligand_consistent_atom_numbering, sub_path)
+                    df_with_smiles = get_smiles(df_pyox_corrected, sub_path)
+                    if index == 1: #change zero indexing to 1-indexing if desired
+                        df_with_smiles['H1'] = df_with_smiles['H1'] + 1
+                        df_with_smiles['Ni'] = df_with_smiles['Ni'] + 1
+                        df_with_smiles['H2'] = df_with_smiles['H2'] + 1
+                        df_with_smiles['N1'] = df_with_smiles['N1'] + 1
+                        df_with_smiles['C1'] = df_with_smiles['C1'] + 1
+                        df_with_smiles['C2'] = df_with_smiles['C2'] + 1
+                        df_with_smiles['N2'] = df_with_smiles['N2'] + 1
+                    df_final = pd.concat([df_final, df_with_smiles], ignore_index=True)
+                
+    return df_final
+
+
     
 
     
