@@ -14,6 +14,7 @@ from rdkit.Chem import Draw
 from rdkit.Chem.Draw import rdMolDraw2D
 from IPython.display import SVG, display
 from IPython.display import Image, display
+import orca_descriptors as od
 
 def get_sdf_from_xyz(path):
     for filename in os.listdir(path):
@@ -427,6 +428,21 @@ def get_smiles(df, path):
                 break
     return df
 
+def get_scf_energy(df):
+    df.insert(4, 'SCF_energy', '') # add empty column for scf energy
+    for i, row in df.iterrows():
+        path = row['path']
+        out_file_path = os.path.join(path, 'calcParam.out')
+        singlepoint = od.OrcaReader(directory       = f"{path}",   #<- this is the folder with the job outputs
+                                    basename        = "singlepoint",        #<- this is the type of job outputs the parameters will be extracted from (to extract descriptors for the json summary file)
+                                    out_file_path   = f"{out_file_path}") #<- this is the complete ORCA output file path
+        singlepoint.parse_property_json()               #<- loads the json file associated with the basename 
+        singlepoint.get_scfenergy()                     #<- extract scf energy
+        df.at[i, 'SCF_energy'] = singlepoint.results['SCF_energy']                      
+        
+    return df
+
+
 
 def compile_final(path, index=1, subdirectory=True):
     if not path[-1] == '/':
@@ -441,6 +457,7 @@ def compile_final(path, index=1, subdirectory=True):
         verify_atom_numbering(ligand_consistent_atom_numbering, path)
         df_pyox_corrected = find_pyox_ligands_and_renumber(ligand_consistent_atom_numbering, path)
         df_with_smiles = get_smiles(df_pyox_corrected, path)
+        df_with_energy = get_scf_energy(df_with_smiles)
         if index == 1: #change zero indexing to 1-indexing if desired
             df_with_smiles['H1'] = df_with_smiles['H1'] + 1
             df_with_smiles['Ni'] = df_with_smiles['Ni'] + 1
@@ -449,7 +466,7 @@ def compile_final(path, index=1, subdirectory=True):
             df_with_smiles['C1'] = df_with_smiles['C1'] + 1
             df_with_smiles['C2'] = df_with_smiles['C2'] + 1
             df_with_smiles['N2'] = df_with_smiles['N2'] + 1
-        df_final = df_with_smiles
+        df_final = df_with_energy
     else:
         df_final = pd.DataFrame()
         with os.scandir(path) as entries:
@@ -466,15 +483,16 @@ def compile_final(path, index=1, subdirectory=True):
                     verify_atom_numbering(ligand_consistent_atom_numbering, sub_path)
                     df_pyox_corrected = find_pyox_ligands_and_renumber(ligand_consistent_atom_numbering, sub_path)
                     df_with_smiles = get_smiles(df_pyox_corrected, sub_path)
+                    df_with_energy = get_scf_energy(df_with_smiles)
                     if index == 1: #change zero indexing to 1-indexing if desired
-                        df_with_smiles['H1'] = df_with_smiles['H1'] + 1
-                        df_with_smiles['Ni'] = df_with_smiles['Ni'] + 1
-                        df_with_smiles['H2'] = df_with_smiles['H2'] + 1
-                        df_with_smiles['N1'] = df_with_smiles['N1'] + 1
-                        df_with_smiles['C1'] = df_with_smiles['C1'] + 1
-                        df_with_smiles['C2'] = df_with_smiles['C2'] + 1
-                        df_with_smiles['N2'] = df_with_smiles['N2'] + 1
-                    df_final = pd.concat([df_final, df_with_smiles], ignore_index=True)
+                        df_with_energy['H1'] = df_with_energy['H1'] + 1
+                        df_with_energy['Ni'] = df_with_energy['Ni'] + 1
+                        df_with_energy['H2'] = df_with_energy['H2'] + 1
+                        df_with_energy['N1'] = df_with_energy['N1'] + 1
+                        df_with_energy['C1'] = df_with_energy['C1'] + 1
+                        df_with_energy['C2'] = df_with_energy['C2'] + 1
+                        df_with_energy['N2'] = df_with_energy['N2'] + 1
+                    df_final = pd.concat([df_final, df_with_energy], ignore_index=True)
                 
     return df_final
 
