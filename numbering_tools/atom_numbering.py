@@ -422,8 +422,8 @@ def get_smiles(df, path):
         for frag in frags:
             if len(frag.GetAtoms()) > 1:
                 lig = Chem.MolToSmiles(frag)
-                df.loc[i, 'smiles'] = lig
-                inchi = Chem.rdinchi.MolToInchiKey(Chem.MolFromSmiles(lig))
+                df.loc[i, 'smiles'] = lig 
+                inchi = os.path.basename(os.path.dirname(os.path.normpath(path)))
                 df.loc[i, 'inchi'] = inchi
                 break
     return df
