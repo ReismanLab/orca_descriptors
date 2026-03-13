@@ -14,7 +14,7 @@ from rdkit.Chem import Draw
 from rdkit.Chem.Draw import rdMolDraw2D
 from IPython.display import SVG, display
 from IPython.display import Image, display
-import orca_descriptors as od
+import desc_utils.orca_descriptors as od
 
 def get_sdf_from_xyz(path):
     for filename in os.listdir(path):
@@ -441,8 +441,6 @@ def get_scf_energy(df):
         df.at[i, 'SCF_energy'] = singlepoint.results['SCF_energy']                      
         
     return df
-
-
 
 def compile_final(path, index=1, subdirectory=True):
     if not path[-1] == '/':

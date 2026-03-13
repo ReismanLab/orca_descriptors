@@ -428,7 +428,6 @@ class OrcaReader:
         except Exception as e:
             print(f"Failed writing results file: {e}")
 
-
 class NBOProps:
     """Properties from out file from Orca NBO calculations"""
 
@@ -867,6 +866,127 @@ class NBOProps:
         with open(output_path, 'w') as f:
             json.dump(self.results, f, indent=4)
 
+class PropertiesJOB:
+    """Properties from JSON file from Orca NMR calculations"""
+
+    def __init__(self, path):
+        """this class reads an orca json file from a given path and extracts properties
+        Args:
+            path (Path): Path to the orca property.json file
+        The class is initialized by reading the json file
+        """
+        
+        self.path = path
+
+        #find the *compound_detailed.txt file in the path
+        compound_files = [f for f in os.listdir(path) if f.endswith('_compound_detailed.txt')]
+        if compound_files:
+            self.compound_file = compound_files[0]
+            with open(os.path.join(path, self.compound_file), 'r') as f:
+                self.compound_text = f.read()
+        else:
+            self.compound_file = None
+            self.compound_text = None
+            print("No compound_detailed.txt file found in the specified path.")
+
+        self.results = {}
+
+    def get_opt_theory(self):
+        """Extract optimization method from compound_detailed.txt file"""
+        if self.compound_text is None:
+            print("Compound_detailed.txt file is not defined. Please ensure it exists in the specified path.")
+            return
+
+        # Find OPT_METHOD section and extract the value
+        if "OPT_METHOD" in self.compound_text:
+            # Split at OPT_METHOD and search for Value in the rest
+            after_opt_method = self.compound_text.split("OPT_METHOD", 1)[1]
+            if "Value" in after_opt_method:
+                value_line = after_opt_method.split("Value", 1)[1].split('\n', 1)[0]
+                opt_method = value_line.split(':', 1)[1].strip()
+                self.results["opt_method"] = opt_method.lower()
+
+    def get_svp_theory(self):
+        """Extract svp theory from compound_detailed.txt file"""
+        if self.compound_text is None:
+            print("Compound_detailed.txt file is not defined. Please ensure it exists in the specified path.")
+            return
+
+        # Find SVP_METHOD section and extract the value
+        if "SVP_METHOD" in self.compound_text:
+            # Split at SVP_METHOD and search for Value in the rest
+            after_svp_theory = self.compound_text.split("SVP_METHOD", 1)[1]
+            if "Value" in after_svp_theory:
+                value_line = after_svp_theory.split("Value", 1)[1].split('\n', 1)[0]
+                svp_theory = value_line.split(':', 1)[1].strip()
+                self.results["svp_theory"] = svp_theory.lower()
+
+class RedoxSet:
+    def __init__(self, neutralReader=None, cationReader=None, anionReader=None, descriptorPrefixes=None):
+        self.neutralReader = neutralReader
+        self.cationReader = cationReader
+        self.anionReader = anionReader
+        self.descriptorPrefixes = descriptorPrefixes or ["mulliken", "loewdin", "nbo_charge", "cm5", "chelpg", "hirshfeld"]
+        self.results = {}
+        # Adopt atom list and labels from neutral reader if available
+        self.atom_labels_map = {}
+        self.atom_list = None
+        if self.neutralReader and getattr(self.neutralReader, 'atom_list', None):
+            self.atom_list = list(self.neutralReader.atom_list)
+            self.atom_labels_map = dict(getattr(self.neutralReader, 'atom_labels_map', {}))
+
+    def _atom_key(self, prefix, atom_index):
+        label = self.atom_labels_map.get(atom_index)
+        if label:
+            return f"{prefix}_{label}"
+        return f"{prefix}_{atom_index}"
+
+    def _pull_charge(self, reader, prefix, atom_index):
+        if reader is None:
+            return None
+        # Attempt labeled key first
+        labeled = self._atom_key(prefix, atom_index)
+        if labeled in reader.results:
+            return reader.results.get(labeled)
+        # Fallback to numeric key
+        return reader.results.get(f"{prefix}_{atom_index}")
+
+    def get_redox_properties(self):
+        self.results['Vertical_Ionization_Potential'] = self.neutralReader.results.get('SCF_energy') - self.cationReader.results.get('SCF_energy') if (self.neutralReader and self.cationReader and self.neutralReader.results.get('SCF_energy') is not None and self.cationReader.results.get('SCF_energy') is not None) else None
+        self.results['Vertical_Electron_Affinity'] = self.anionReader.results.get('SCF_energy') - self.neutralReader.results.get('SCF_energy') if (self.neutralReader and self.anionReader and self.anionReader.results.get('SCF_energy') is not None and self.neutralReader.results.get('SCF_energy') is not None) else None
+        ip = self.results['Vertical_Ionization_Potential']
+        ea = self.results['Vertical_Electron_Affinity']
+        if ip is not None and ea is not None:
+            hardness = (ip - ea) / 2
+            electronegativity = (ip + ea) / 2
+            self.results['Hardness'] = hardness
+            self.results['Electronegativity'] = electronegativity
+            self.results['Electrophilicity'] = (electronegativity ** 2) / (2 * hardness) if hardness else None
+        else:
+            self.results['Hardness'] = None
+            self.results['Electronegativity'] = None
+            self.results['Electrophilicity'] = None
+
+    def get_fukui_functions(self):
+        if not self.atom_list:
+            print("Atom list not available in RedoxSet.")
+            return
+        for prefix in self.descriptorPrefixes:
+            for idx in self.atom_list:
+                qN = self._pull_charge(self.neutralReader, prefix, idx)
+                qC = self._pull_charge(self.cationReader, prefix, idx)
+                qA = self._pull_charge(self.anionReader, prefix, idx)
+                f_plus = (qN - qA) if (qN is not None and qA is not None) else None
+                f_minus = (qC - qN) if (qC is not None and qN is not None) else None
+                f_zero = (0.5 * (f_plus + f_minus)) if (f_plus is not None and f_minus is not None) else None
+                self.results[self._atom_key(f"fplus_{prefix}", idx)] = f_plus
+                self.results[self._atom_key(f"fminus_{prefix}", idx)] = f_minus
+                self.results[self._atom_key(f"fzero_{prefix}", idx)] = f_zero
+
+    def aggregate(self):
+        self.get_redox_properties()
+        self.get_fukui_functions()
+        return self.results
 
 class PropertiesXYZ:
     """Properties from XYZ file using Morfeus"""
@@ -931,6 +1051,12 @@ class PropertiesXYZ:
     def define_dihedral_list(self, dihedral_list):
         self.dihedral_list = dihedral_list
 
+    def define_dihedral_list(self, dihedral_list):
+        self.dihedral_list = dihedral_list
+        
+    def define_quadrant_list(self, quadrant_list):
+        self.quadrant_list = quadrant_list
+
     ## 0 atom properties ##
     #-- SASA -- & -- Molecular Volume --#
     def get_SASA_and_Volume(self):
@@ -986,9 +1112,9 @@ class PropertiesXYZ:
         Args:
             dihedral_list (list): list of four atom indexes (1-based)
         """
-        pyramidalization = Pyramidalization(self.coordinates, at_idx, method="connectivity") # calls Morfeus
-        key1 = 'Pyr_' + str(self.elements[at_idx[0]-1]) + str(at_idx[0]) 
-        key2 = 'Pyr_angle_' + str(self.elements[at_idx[0]-1]) + str(at_idx[0]) 
+        pyramidalization = Pyramidalization(self.coordinates, at_idx, elements=self.elements, method="connectivity") # calls Morfeus AVC: edited ot call elements
+        key1 = 'Pyr_' + str(self.elements[at_idx-1]) + str(at_idx) 
+        key2 = 'Pyr_angle_' + str(self.elements[at_idx-1]) + str(at_idx) #AVC: altered to not treat at_idx as list
         self.results[key1] = pyramidalization.P
         self.results[key2] = pyramidalization.P_angle
 
@@ -1007,7 +1133,7 @@ class PropertiesXYZ:
 
         for at_idx in self.atom_list:
             key = 'SASA_' + str(self.elements[at_idx-1]) + str(at_idx)
-            self.results[key] = atomic_areas[at_idx-1]
+            self.results[key] = atomic_areas[at_idx] #AVC: changed to convert back to correct indexing 
     
 
     ## 2 atom properties ##
@@ -1033,7 +1159,7 @@ class PropertiesXYZ:
         key = 'Bond_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list])
         self.results[key] = bond.bond_length
 
-    def get_Sterimol_parameters(self):
+    def get_Sterimol_parameters(self, morfeus=True):
         """Calculate Sterimol parameters for all sets of two atoms in bond_list
         The bond_list must be defined before calling this function.
         Results are stored in the results dictionary with keys formatted as 'Sterimol_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_L', 'Sterimol_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_B1', and 'Sterimol_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_B5'.
@@ -1043,17 +1169,26 @@ class PropertiesXYZ:
             return
         
         for bond_atoms in self.bond_list:
-            self.get_Sterimol_parameters_for_bond(bond_atoms)
+            self.get_Sterimol_parameters_for_bond(bond_atoms, morfeus=morfeus)
 
-    def get_Sterimol_parameters_for_bond(self, bond_list):
+    def get_Sterimol_parameters_for_bond(self, bond_list, morfeus=True):
         """Calculate Sterimol parameters for a specific set of two atoms using dbstep (fallback to Morfeus).
         Args:
             bond_list (list): list of two atom indexes (1-based)
         """
+        # Add morfeus option
+
+        if morfeus:
+            bond = Sterimol(self.elements, self.coordinates, bond_list[0], bond_list[1]) # calls Morfeus
+            key_prefix = 'Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list])
+            self.results[key_prefix + '_Bmin'] = bond.B_1_value
+            self.results[key_prefix + '_Bmax'] = bond.B_5_value
+            self.results[key_prefix + '_L']  = float(bond.L_value)
+            
 
         # case where sterimol parameters are computed along a scan
-        if self.sterimol_scan is not None:
-            mol = db.dbstep(self.path + 'optimization.xyz', atom1=bond_list[0], atom2=bond_list[1], 
+        elif self.sterimol_scan is not None:
+            mol = db.dbstep(self.path + 'optimization.xyz', atom1=(bond_list[0]), atom2=(bond_list[1]),
                         commandline=True, verbose=False, sterimol=True,
                         scan=self.sterimol_scan)
             
@@ -1069,6 +1204,8 @@ class PropertiesXYZ:
                 self.results[key_prefix + '_Bmin'] = mol.sterimol[scan_value].Bmin[_]
                 self.results[key_prefix + '_Bmax'] = mol.sterimol[scan_value].Bmax[_]
 
+            self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_L']  = float(mol.L)
+
 
         # default case without scan
         else:
@@ -1078,7 +1215,7 @@ class PropertiesXYZ:
             self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_Bmin'] = mol.Bmin
             self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_Bmax'] = mol.Bmax
         
-        self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_L']  = float(mol.L)
+            self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_L']  = float(mol.L)
 
     ## 3 atom properties ##
     #-- Angles --#
@@ -1118,7 +1255,7 @@ class PropertiesXYZ:
         # convert to degrees
         angle_deg = np.degrees(angle_rad)
         key = 'Angle_' + '_'.join([str(self.elements[i-1]) + str(i) for i in angle_list])
-        print(f"Calculated angle for {key}: {angle_deg} degrees, type: {type(angle_deg)}")
+        #print(f"Calculated angle for {key}: {angle_deg} degrees, type: {type(angle_deg)}")
         self.results[key] = float(angle_deg)
 
     ## 4 atom properties ##
@@ -1245,127 +1382,3 @@ class PropertiesXYZ:
         self.results = sorted_results
         with open(self.path + filename, 'w') as json_file:
             json.dump(self.results, json_file, indent=4)
-
-    
-
-class PropertiesJOB:
-    """Properties from JSON file from Orca NMR calculations"""
-
-    def __init__(self, path):
-        """this class reads an orca json file from a given path and extracts properties
-        Args:
-            path (Path): Path to the orca property.json file
-        The class is initialized by reading the json file
-        """
-        
-        self.path = path
-
-        #find the *compound_detailed.txt file in the path
-        compound_files = [f for f in os.listdir(path) if f.endswith('_compound_detailed.txt')]
-        if compound_files:
-            self.compound_file = compound_files[0]
-            with open(os.path.join(path, self.compound_file), 'r') as f:
-                self.compound_text = f.read()
-        else:
-            self.compound_file = None
-            self.compound_text = None
-            print("No compound_detailed.txt file found in the specified path.")
-
-        self.results = {}
-
-    def get_opt_theory(self):
-        """Extract optimization method from compound_detailed.txt file"""
-        if self.compound_text is None:
-            print("Compound_detailed.txt file is not defined. Please ensure it exists in the specified path.")
-            return
-
-        # Find OPT_METHOD section and extract the value
-        if "OPT_METHOD" in self.compound_text:
-            # Split at OPT_METHOD and search for Value in the rest
-            after_opt_method = self.compound_text.split("OPT_METHOD", 1)[1]
-            if "Value" in after_opt_method:
-                value_line = after_opt_method.split("Value", 1)[1].split('\n', 1)[0]
-                opt_method = value_line.split(':', 1)[1].strip()
-                self.results["opt_method"] = opt_method.lower()
-
-    def get_svp_theory(self):
-        """Extract svp theory from compound_detailed.txt file"""
-        if self.compound_text is None:
-            print("Compound_detailed.txt file is not defined. Please ensure it exists in the specified path.")
-            return
-
-        # Find SVP_METHOD section and extract the value
-        if "SVP_METHOD" in self.compound_text:
-            # Split at SVP_METHOD and search for Value in the rest
-            after_svp_theory = self.compound_text.split("SVP_METHOD", 1)[1]
-            if "Value" in after_svp_theory:
-                value_line = after_svp_theory.split("Value", 1)[1].split('\n', 1)[0]
-                svp_theory = value_line.split(':', 1)[1].strip()
-                self.results["svp_theory"] = svp_theory.lower()
-
-class RedoxSet:
-    def __init__(self, neutralReader=None, cationReader=None, anionReader=None, descriptorPrefixes=None):
-        self.neutralReader = neutralReader
-        self.cationReader = cationReader
-        self.anionReader = anionReader
-        self.descriptorPrefixes = descriptorPrefixes or ["mulliken", "loewdin", "nbo_charge", "cm5", "chelpg", "hirshfeld"]
-        self.results = {}
-        # Adopt atom list and labels from neutral reader if available
-        self.atom_labels_map = {}
-        self.atom_list = None
-        if self.neutralReader and getattr(self.neutralReader, 'atom_list', None):
-            self.atom_list = list(self.neutralReader.atom_list)
-            self.atom_labels_map = dict(getattr(self.neutralReader, 'atom_labels_map', {}))
-
-    def _atom_key(self, prefix, atom_index):
-        label = self.atom_labels_map.get(atom_index)
-        if label:
-            return f"{prefix}_{label}"
-        return f"{prefix}_{atom_index}"
-
-    def _pull_charge(self, reader, prefix, atom_index):
-        if reader is None:
-            return None
-        # Attempt labeled key first
-        labeled = self._atom_key(prefix, atom_index)
-        if labeled in reader.results:
-            return reader.results.get(labeled)
-        # Fallback to numeric key
-        return reader.results.get(f"{prefix}_{atom_index}")
-
-    def get_redox_properties(self):
-        self.results['Vertical_Ionization_Potential'] = self.neutralReader.results.get('SCF_energy') - self.cationReader.results.get('SCF_energy') if (self.neutralReader and self.cationReader and self.neutralReader.results.get('SCF_energy') is not None and self.cationReader.results.get('SCF_energy') is not None) else None
-        self.results['Vertical_Electron_Affinity'] = self.anionReader.results.get('SCF_energy') - self.neutralReader.results.get('SCF_energy') if (self.neutralReader and self.anionReader and self.anionReader.results.get('SCF_energy') is not None and self.neutralReader.results.get('SCF_energy') is not None) else None
-        ip = self.results['Vertical_Ionization_Potential']
-        ea = self.results['Vertical_Electron_Affinity']
-        if ip is not None and ea is not None:
-            hardness = (ip - ea) / 2
-            electronegativity = (ip + ea) / 2
-            self.results['Hardness'] = hardness
-            self.results['Electronegativity'] = electronegativity
-            self.results['Electrophilicity'] = (electronegativity ** 2) / (2 * hardness) if hardness else None
-        else:
-            self.results['Hardness'] = None
-            self.results['Electronegativity'] = None
-            self.results['Electrophilicity'] = None
-
-    def get_fukui_functions(self):
-        if not self.atom_list:
-            print("Atom list not available in RedoxSet.")
-            return
-        for prefix in self.descriptorPrefixes:
-            for idx in self.atom_list:
-                qN = self._pull_charge(self.neutralReader, prefix, idx)
-                qC = self._pull_charge(self.cationReader, prefix, idx)
-                qA = self._pull_charge(self.anionReader, prefix, idx)
-                f_plus = (qN - qA) if (qN is not None and qA is not None) else None
-                f_minus = (qC - qN) if (qC is not None and qN is not None) else None
-                f_zero = (0.5 * (f_plus + f_minus)) if (f_plus is not None and f_minus is not None) else None
-                self.results[self._atom_key(f"fplus_{prefix}", idx)] = f_plus
-                self.results[self._atom_key(f"fminus_{prefix}", idx)] = f_minus
-                self.results[self._atom_key(f"fzero_{prefix}", idx)] = f_zero
-
-    def aggregate(self):
-        self.get_redox_properties()
-        self.get_fukui_functions()
-        return self.results
