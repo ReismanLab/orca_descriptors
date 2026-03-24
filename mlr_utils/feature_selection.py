@@ -219,12 +219,118 @@ def auto_feature_selection(
         extreme=extreme,
     )
 
-    if selection_mode == 'sfs':
+    def _select_with_model(chosen_model):
         if top_k < 1 or not isinstance(top_k, int):
             raise ValueError("top_k must be an integer >= 1")
 
+        if selection_mode == 'sfs':
+            history = []
+            selectors = []
+            top_by_k = {}
+            allowed_features = X_numeric.columns.tolist()
+
+            for k in n_features_to_select:
+                if k < 1 or k > len(allowed_features):
+                    continue
+
+                sfs = SequentialFeatureSelector(
+                    chosen_model,
+                    n_features_to_select=k,
+                    direction=direction,
+                    cv=cv_splits,
+                    n_jobs=n_jobs,
+                )
+                sfs.fit(X_numeric, y)
+                selected = X_numeric.columns[sfs.get_support()].tolist()
+
+                cv_res = cross_validate(
+                    chosen_model,
+                    X_numeric[selected],
+                    y,
+                    cv=cv_splits,
+                    scoring=scoring,
+                    return_train_score=True,
+                    n_jobs=n_jobs,
+                )
+                mean_train = np.mean(cv_res['train_score'])
+                mean_test = np.mean(cv_res['test_score'])
+
+                sfs_record = {
+                    'n_features': k,
+                    'features': selected,
+                    'train_score': mean_train,
+                    'val_score': mean_test,
+                    'selector': sfs,
+                    'method': 'sfs',
+                }
+                history.append(sfs_record)
+                selectors.append(sfs)
+
+                k_records = [sfs_record]
+
+                if top_k > 1:
+                    combos = list(combinations(allowed_features, k))
+                    if len(combos) > max_combinations:
+                        warnings.warn(
+                            f"Number of combinations for k={k} is {len(combos)} > max_combinations={max_combinations}. "
+                            "Continuing evaluation of all combinations; this may take a long time. "
+                            "To limit runtime, reduce n_features_to_select or set max_combinations smaller.",
+                            UserWarning,
+                        )
+
+                    for combo in tqdm(combos, desc=f"k={k} combos", unit='combo'):
+                        combo_features = list(combo)
+                        selected_df = X_numeric[combo_features]
+                        cv_res_combo = cross_validate(
+                            chosen_model,
+                            selected_df,
+                            y,
+                            cv=cv_splits,
+                            scoring=scoring,
+                            return_train_score=True,
+                            n_jobs=n_jobs,
+                        )
+                        mean_train_combo = np.mean(cv_res_combo['train_score'])
+                        mean_test_combo = np.mean(cv_res_combo['test_score'])
+
+                        combo_record = {
+                            'n_features': k,
+                            'features': combo_features,
+                            'train_score': mean_train_combo,
+                            'val_score': mean_test_combo,
+                            'selector': None,
+                            'method': 'combo',
+                        }
+                        history.append(combo_record)
+                        k_records.append(combo_record)
+
+                top_by_k[k] = sorted(k_records, key=lambda r: r['val_score'], reverse=True)[:top_k]
+
+            sorted_history = sorted(history, key=lambda r: r['val_score'], reverse=True)
+            top = sorted_history[:top_k]
+            best_output = top[0] if top else None
+
+            mlr_info = None
+            if print_ml_equation and best_output is not None:
+                mlr_info = report_mlr_equation(chosen_model, X_numeric[best_output['features']], y, target_col)
+
+            return {
+                'selected_features': best_output['features'] if best_output else [],
+                'selector': best_output.get('selector') if best_output else None,
+                'selectors': selectors,
+                'X_numeric': X_numeric,
+                'y': y,
+                'history': history,
+                'top': top,
+                'top_by_k': top_by_k,
+                'best': best_output,
+                'dropped_corr': dropped_corr,
+                'excluded_cols': cols_to_exclude,
+                'mlr_info': mlr_info,
+            }
+
+        # exhaustive mode
         history = []
-        selectors = []
         top_by_k = {}
         allowed_features = X_numeric.columns.tolist()
 
@@ -232,76 +338,39 @@ def auto_feature_selection(
             if k < 1 or k > len(allowed_features):
                 continue
 
-            sfs = SequentialFeatureSelector(
-                model,
-                n_features_to_select=k,
-                direction=direction,
-                cv=cv_splits,
-                n_jobs=n_jobs,
-            )
-            sfs.fit(X_numeric, y)
-            selected = X_numeric.columns[sfs.get_support()].tolist()
+            combos = list(combinations(allowed_features, k))
+            if len(combos) > max_combinations:
+                warnings.warn(
+                    f"Number of combinations for k={k} is {len(combos)} > max_combinations={max_combinations}. "
+                    "Continuing evaluation of all combinations; this may take a long time. "
+                    "To limit runtime, reduce n_features_to_select or set max_combinations smaller.",
+                    UserWarning,
+                )
 
-            cv_res = cross_validate(
-                model,
-                X_numeric[selected],
-                y,
-                cv=cv_splits,
-                scoring=scoring,
-                return_train_score=True,
-                n_jobs=n_jobs,
-            )
-            mean_train = np.mean(cv_res['train_score'])
-            mean_test = np.mean(cv_res['test_score'])
+            k_records = []
+            for combo in tqdm(combos, desc=f"k={k} combos", unit='combo'):
+                selected_df = X_numeric[list(combo)]
+                cv_res = cross_validate(
+                    chosen_model,
+                    selected_df,
+                    y,
+                    cv=cv_splits,
+                    scoring=scoring,
+                    return_train_score=True,
+                    n_jobs=n_jobs,
+                )
 
-            sfs_record = {
-                'n_features': k,
-                'features': selected,
-                'train_score': mean_train,
-                'val_score': mean_test,
-                'selector': sfs,
-                'method': 'sfs',
-            }
-            history.append(sfs_record)
-            selectors.append(sfs)
+                mean_train = np.mean(cv_res['train_score'])
+                mean_test = np.mean(cv_res['test_score'])
 
-            k_records = [sfs_record]
-
-            if top_k > 1:
-                combos = list(combinations(allowed_features, k))
-                if len(combos) > max_combinations:
-                    warnings.warn(
-                        f"Number of combinations for k={k} is {len(combos)} > max_combinations={max_combinations}. "
-                        "Continuing evaluation of all combinations; this may take a long time. "
-                        "To limit runtime, reduce n_features_to_select or set max_combinations smaller.",
-                        UserWarning,
-                    )
-
-                for combo in tqdm(combos, desc=f"k={k} combos", unit='combo'):
-                    combo_features = list(combo)
-                    selected_df = X_numeric[combo_features]
-                    cv_res_combo = cross_validate(
-                        model,
-                        selected_df,
-                        y,
-                        cv=cv_splits,
-                        scoring=scoring,
-                        return_train_score=True,
-                        n_jobs=n_jobs,
-                    )
-                    mean_train_combo = np.mean(cv_res_combo['train_score'])
-                    mean_test_combo = np.mean(cv_res_combo['test_score'])
-
-                    combo_record = {
-                        'n_features': k,
-                        'features': combo_features,
-                        'train_score': mean_train_combo,
-                        'val_score': mean_test_combo,
-                        'selector': None,
-                        'method': 'combo',
-                    }
-                    history.append(combo_record)
-                    k_records.append(combo_record)
+                record = {
+                    'n_features': k,
+                    'features': list(combo),
+                    'train_score': mean_train,
+                    'val_score': mean_test,
+                }
+                history.append(record)
+                k_records.append(record)
 
             top_by_k[k] = sorted(k_records, key=lambda r: r['val_score'], reverse=True)[:top_k]
 
@@ -310,13 +379,12 @@ def auto_feature_selection(
         best_output = top[0] if top else None
 
         mlr_info = None
-        if print_ml_equation and best_output is not None:
-            mlr_info = report_mlr_equation(model, X_numeric[best_output['features']], y, target_col)
+        if print_ml_equation and best_output:
+            mlr_info = report_mlr_equation(chosen_model, X_numeric[best_output['features']], y, target_col)
 
         return {
             'selected_features': best_output['features'] if best_output else [],
-            'selector': best_output.get('selector') if best_output else None,
-            'selectors': selectors,
+            'selector': None,
             'X_numeric': X_numeric,
             'y': y,
             'history': history,
@@ -328,74 +396,44 @@ def auto_feature_selection(
             'mlr_info': mlr_info,
         }
 
-    # exhaustive mode
-    if top_k < 1 or not isinstance(top_k, int):
-        raise ValueError("top_k must be an integer >= 1")
+    model_list = model
+    if model_list is None:
+        model_list = [LinearRegression()]
+    elif not isinstance(model_list, (list, tuple)):
+        model_list = [model_list]
 
-    history = []
-    allowed_features = X_numeric.columns.tolist()
+    model_results = {}
+    for m in model_list:
+        model_key = getattr(m, 'name', None) or type(m).__name__
+        if model_key in model_results:
+            suffix = 2
+            while f"{model_key}_{suffix}" in model_results:
+                suffix += 1
+            model_key = f"{model_key}_{suffix}"
+        model_results[model_key] = _select_with_model(m)
 
-    top_by_k = {}
-    for k in n_features_to_select:
-        if k < 1 or k > len(allowed_features):
-            continue
+    if len(model_results) == 1:
+        return next(iter(model_results.values()))
 
-        combos = list(combinations(allowed_features, k))
-        if len(combos) > max_combinations:
-            warnings.warn(
-                f"Number of combinations for k={k} is {len(combos)} > max_combinations={max_combinations}. "
-                "Continuing evaluation of all combinations; this may take a long time. "
-                "To limit runtime, reduce n_features_to_select or set max_combinations smaller.",
-                UserWarning,
-            )
-
-        k_records = []
-        for combo in tqdm(combos, desc=f"k={k} combos", unit='combo'):
-            selected_df = X_numeric[list(combo)]
-            cv_res = cross_validate(
-                model,
-                selected_df,
-                y,
-                cv=cv_splits,
-                scoring=scoring,
-                return_train_score=True,
-                n_jobs=n_jobs,
-            )
-
-            mean_train = np.mean(cv_res['train_score'])
-            mean_test = np.mean(cv_res['test_score'])
-
-            record = {
-                'n_features': k,
-                'features': list(combo),
-                'train_score': mean_train,
-                'val_score': mean_test,
-            }
-            history.append(record)
-            k_records.append(record)
-
-        top_by_k[k] = sorted(k_records, key=lambda r: r['val_score'], reverse=True)[:top_k]
-
-    sorted_history = sorted(history, key=lambda r: r['val_score'], reverse=True)
-    top = sorted_history[:top_k]
-    best_output = top[0] if top else None
-
-    mlr_info = None
-    if print_ml_equation and best_output:
-        mlr_info = report_mlr_equation(model, X_numeric[best_output['features']], y, target_col)
+    best_model_key, best_result = max(
+        model_results.items(),
+        key=lambda kv: (kv[1]['best']['val_score'] if kv[1].get('best') and kv[1]['best'] is not None else -np.inf),
+    )
 
     return {
-        'selected_features': best_output['features'] if best_output else [],
-        'selector': None,
+        'model_results': model_results,
+        'best_model': best_model_key,
+        'best': best_result['best'],
+        'top': best_result['top'],
+        'top_by_k': best_result['top_by_k'],
+        'history': best_result['history'],
+        'selected_features': best_result['selected_features'],
+        'selector': best_result['selector'],
         'X_numeric': X_numeric,
         'y': y,
-        'history': history,
-        'top': top,
-        'top_by_k': top_by_k,
-        'best': best_output,
         'dropped_corr': dropped_corr,
         'excluded_cols': cols_to_exclude,
-        'mlr_info': mlr_info,
+        'mlr_info': best_result.get('mlr_info'),
     }
 
 
