@@ -1,7 +1,46 @@
 # orca_descriptors
-Parsing ORCA outputs for MLR descriptors
 
-## Philosophy:
+Parsing ORCA and Gaussian outputs for MLR descriptors and perform subsequent modeling.
+
+## References
+
+This repository necessitates the installation of two other repositories:
+
+1. [DescriPyTor](https://github.com/edenspec2/DescriPyTor): for the generation of molecular descriptors and their visualization.
+
+2. [ROBERT](https://github.com/jvalegre/robert): for the generation and validation of MLR models.
+
+This repository is designed after the strategy developped by the Sigman Group for descriptor selection that can be found on their [Get_Properties](https://github.com/SigmanGroup/Get_Properties) repository. Of course we use [morfeus-ml](https://github.com/digital-chemistry-laboratory/morfeus) for extraction of steric parameters.
+
+## Installation
+
+We provide a single environemment to run all the notebooks that can be installed using the following commands 
+
+```
+git clone https://github.com/ReismanLab/orca_descriptors
+git clone https://github.com/edenspec2/DescriPyTor
+git clone https://github.com/jvalegre/robert
+conda create -n robert_fish python=3.12
+conda activate robert_fish
+python XXX (to be finished)
+```
+
+
+# The repository is organized as follow:
+
+1. [DATA](DATA): examples of calculation outputs
+2. [desc_utils](desc_utils): contains (a) script for the automated numbering of the substructures, you might want to tune that depending on the molecules you are studying... (b) descriptors extraction for ORCA outputs.
+3. [mlr_utils](mlr_utils): in-house scripts for multi-variate regression feature selection.
+4. [scripts-for-orca-computations](scripts-for-orca-computations): in-house scripts to launch the ORCA jobs & conformer searches on the cluster.
+5. [orca2gaussian](orca2gaussian): in-house scripts to convert ORCA jobs to a pseudo log Gaussian that can be read by DescriPyTor utils.
+
+## Pipeline
+
+1. If needed ORCA 2 Gaussian conversion.
+2. Atom numbering + DescriPyTor descriptor extraction.
+3. Extraction of conformer averaged descriptors (_min, _max, _low_E and _Boltz). 
+
+## Descriptors included
 
 - Numbering atoms: -> make it a python file
 
