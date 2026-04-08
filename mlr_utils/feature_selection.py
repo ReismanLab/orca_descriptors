@@ -22,30 +22,57 @@ def remove_highly_correlated_features(X, threshold=0.95):
 
 
 def report_mlr_equation(model, X, y, target_col):
-    """Fit model and print MLR equation / coefficients."""
+    """Fit model and print an equation-like summary plus feature importance coefficients."""
     model = clone(model)
     model.fit(X, y)
-    coefs = np.asarray(model.coef_).ravel()
-    intercept = float(model.intercept_)
     feature_names = list(X.columns)
 
-    terms = [f"({coef:.4f} * {name})" for coef, name in zip(coefs, feature_names)]
-    equation = " + ".join(terms)
+    if hasattr(model, 'coef_'):
+        coefs = np.asarray(model.coef_).ravel()
+        intercept = float(model.intercept_ if hasattr(model, 'intercept_') else 0.0)
+        terms = [f"({coef:.4f} * {name})" for coef, name in zip(coefs, feature_names)]
+        equation = " + ".join(terms)
 
-    print('\nMLR equation:')
-    print(f"{target_col} = {intercept:.4f} + {equation}")
-    print('\nMLR parameters:')
-    for name, coef in zip(feature_names, coefs):
-        print(f"  {name}: {coef:.6f}")
-    print(f"intercept: {intercept:.6f}")
-    print(f"R2 (full data fit): {model.score(X, y):.4f}")
+        print('\nMLR equation:')
+        print(f"{target_col} = {intercept:.4f} + {equation}")
+        print('\nMLR parameters:')
+        for name, coef in zip(feature_names, coefs):
+            print(f"  {name}: {coef:.6f}")
+        print(f"intercept: {intercept:.6f}")
 
+        return {
+            'model': model,
+            'intercept': intercept,
+            'coefs': coefs,
+            'features': feature_names,
+            'equation': f"{target_col} = {intercept:.4f} + {equation}",
+            'r2': model.score(X, y),
+        }
+
+    # For models without coef_ (e.g., RandomForest), use feature importances.
+    if hasattr(model, 'feature_importances_'):
+        importances = np.asarray(model.feature_importances_).ravel()
+        print('\nModel feature importances:')
+        for name, imp in zip(feature_names, importances):
+            print(f"  {name}: {imp:.6f}")
+
+        return {
+            'model': model,
+            'intercept': None,
+            'coefs': importances,
+            'features': feature_names,
+            'equation': None,
+            'r2': model.score(X, y),
+        }
+
+    # fallback if neither coef_ nor feature_importances_ exists
+    print('\nModel has neither coef_ nor feature_importances_. Model summary only.')
     return {
         'model': model,
-        'intercept': intercept,
-        'coefs': coefs,
+        'intercept': None,
+        'coefs': None,
         'features': feature_names,
-        'equation': f"{target_col} = {intercept:.4f} + {equation}",
+        'equation': None,
         'r2': model.score(X, y),
     }
 
