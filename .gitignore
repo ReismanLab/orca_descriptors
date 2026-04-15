@@ -208,4 +208,4 @@ __marimo__/
 
 .direnv
 
-orca_conformers_example/
+.DS_Store
