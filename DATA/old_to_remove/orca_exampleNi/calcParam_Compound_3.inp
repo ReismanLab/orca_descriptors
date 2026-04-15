@@ -1,8 +1,0 @@
-    %base "nborun"
-  
-    !M06 D4 def2-TZVP TightSCF NBO NPA
-    %scf guess MORead end
-    %output
-      jsonpropfile true
-      jsongbwfile true
-    end
