@@ -15,6 +15,28 @@ logging.basicConfig(level=logging.WARNING)
 h_to_eV = 27.2114
 bohr_to_A = 0.529177
 
+COVALENT_RADII = {
+    "H": 0.31,
+    "B": 0.85,
+    "C": 0.76,
+    "N": 0.71,
+    "O": 0.66,
+    "F": 0.57,
+    "Si": 1.11,
+    "P": 1.07,
+    "S": 1.05,
+    "Cl": 1.02,
+    "Br": 1.20,
+    "I": 1.39,
+    "Fe": 1.24,
+    "Co": 1.26,
+    "Ni": 1.24,
+    "Cu": 1.32,
+    "Zn": 1.22,
+    "Pd": 1.39,
+    "Pt": 1.36,
+}
+
 
 class OrcaReader:
     """ORCA results reader with unified atom index labeling.
@@ -41,6 +63,8 @@ class OrcaReader:
 
         # Unified atom index mapping (1-based indices)
         self.atom_index_map = {}
+        self.atom_labels_map = {}
+        self.atom_list = []
 
         # NBO parsing caches (kept for future extension)
         self.nbo_sections = []
@@ -53,15 +77,26 @@ class OrcaReader:
     # ---------------- Atom management ----------------
     def set_atoms(self, atoms):
         """Define atom indices with optional labels.
-        atoms: list[int] or dict[int,str] (1-based indices).
-        list -> labels are their numeric string; dict -> explicit labels.
+
+        Supported inputs:
+        - `list[int]` -> labels default to the numeric atom indices
+        - `dict[label, index]` -> preferred labeled form
+        - `dict[index, label]` -> legacy form
         """
         if isinstance(atoms, dict):
-            self.atom_index_map = {int(k): (str(v) if v is not None else str(k)) for k, v in atoms.items()}
+            if all(isinstance(v, (int, np.integer)) or str(v).isdigit() for v in atoms.values()):
+                self.atom_index_map = {int(v): str(k).strip() for k, v in atoms.items()}
+            else:
+                self.atom_index_map = {
+                    int(k): (str(v).strip() if v is not None else str(k)) for k, v in atoms.items()
+                }
         elif isinstance(atoms, (list, tuple)):
             self.atom_index_map = {int(k): str(int(k)) for k in atoms}
         else:
-            raise TypeError("atoms must be list[int] or dict[int,str]")
+            raise TypeError("atoms must be list[int] or a dict mapping labels and indices")
+
+        self.atom_labels_map = dict(self.atom_index_map)
+        self.atom_list = list(self.atom_index_map.keys())
 
     def set_atom_labels(self, labels):
         """Update labels (dict[int,str] or list[str] matching current order)."""
@@ -82,6 +117,9 @@ class OrcaReader:
                     self.atom_index_map[key] = new_label.strip()
         else:
             raise TypeError("labels must be dict or list[str]")
+
+        self.atom_labels_map = dict(self.atom_index_map)
+        self.atom_list = list(self.atom_index_map.keys())
 
     @property
     def atom_indices(self):
@@ -132,7 +170,7 @@ class OrcaReader:
     # -------------------- atom label helpers --------------------
     def _atom_key(self, prefix, atom_index):
         """Return result key using custom label if present else index."""
-        label = self.atom_labels_map.get(atom_index)
+        label = self.atom_index_map.get(atom_index)
         if label:
             return f"{prefix}_{label}"
         return f"{prefix}_{atom_index}"
@@ -427,6 +465,25 @@ class OrcaReader:
                 json.dump(self.results, f, indent=4)
         except Exception as e:
             print(f"Failed writing results file: {e}")
+
+    def aggregate_results(self):
+        # Electronic properties are read from the current basename (typically singlepoint).
+        self.parse_property_json()
+        self.parse_gbw_json()
+        self.get_all_charges()
+        self.get_scfenergy()
+        self.get_homolumo()
+        self.get_enthalpy()
+        self.get_gfe()
+
+        # NMR shielding is often written to nmr.property.json, not singlepoint.property.json.
+        original_basename = self.basename
+        if original_basename != "nmr":
+            self.basename = "nmr"
+            self.parse_property_json()
+        self.get_saniso()
+        self.get_siso()
+        self.basename = original_basename
 
 class NBOProps:
     """Properties from out file from Orca NBO calculations"""
@@ -991,10 +1048,11 @@ class RedoxSet:
 class PropertiesXYZ:
     """Properties from XYZ file using Morfeus"""
 
-    def __init__(self, path):
+    def __init__(self, path, overwrite_results=False):
         """this class reads an xyz file from a given path and extracts properties using Morfeus
         Args:
             path (str): path to the folder containing optimization.xyz
+            overwrite_results (bool): whether to overwrite existing results in xyz.json or to load them if they exist. Default is False (load existing results if available).
         The class is initialized by reading the xyz file and storing the number of atoms, elements, and coordinates
         and reading a json file with results from DFT calculations.
         """
@@ -1007,17 +1065,29 @@ class PropertiesXYZ:
         self.elements = [line.split()[0] for line in lines[2:] if line.strip()]
         self.coordinates = [[float(x) for x in line.split()[1:4]] for line in lines[2:] if line.strip()]
 
-        if 'xyz.json' in os.listdir(path):
+        if 'xyz.json' in os.listdir(path) and not overwrite_results:
+            print(f"Loading existing results from {path + 'xyz.json'}.")
             self.results = json.load(open(path + 'xyz.json'))
         else:
-            print("No xyz.json file found in the specified path. Results dictionary will be empty.")
+            print("No xyz.json file found in the specified path or overwrite_results is True. Results dictionary will be empty.")
             self.results = {}
+
+        # add path to results for reference
+        self.results['path'] = self.path
 
         # initialize lists for atoms, bonds, angles, dihedrals
         self.atom_list = None
         self.bond_list = None
         self.angle_list = None
         self.dihedral_list = None
+        self.atom_connectivity = {}
+        self.atom_neighbor_counts = {}
+        self.atom_labels_map = {}
+        self.atom_index_to_label = {}
+        self.bond_labels_map = {}
+        self.angle_labels_map = {}
+        self.dihedral_labels_map = {}
+        self.quadrant_labels_map = {}
 
         # default radius list for Vbur calculation
         self.radius_list = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
@@ -1037,25 +1107,116 @@ class PropertiesXYZ:
         if os.path.exists(json_path):
             os.remove(json_path)
 
+    def _default_atom_label(self, at_idx):
+        """Fallback label for an atom when no custom label is provided."""
+        at_idx = int(at_idx)
+        return f"{self.elements[at_idx - 1]}{at_idx}"
 
+    def _get_atom_label(self, at_idx):
+        """Return the custom atom label if available, else the default element/index label."""
+        return self.atom_index_to_label.get(int(at_idx), self._default_atom_label(at_idx))
+
+    def _normalize_atom_map(self, atom_list):
+        """Accept either a dict[label, atom_index] or a legacy list of atom indices."""
+        if isinstance(atom_list, dict):
+            return {str(label): int(at_idx) for label, at_idx in atom_list.items()}
+        if isinstance(atom_list, (list, tuple)):
+            return {self._default_atom_label(at_idx): int(at_idx) for at_idx in atom_list}
+        raise TypeError("atom_list must be a dict[label, atom_index] or a list/tuple of atom indices")
+
+    def _normalize_group_map(self, items, expected_len, item_name):
+        """Accept either a dict[label, index_sequence] or a legacy list of index sequences."""
+        if isinstance(items, dict):
+            iterable = items.items()
+        elif isinstance(items, (list, tuple)):
+            iterable = [
+                ("_".join(self._get_atom_label(i) for i in entry), tuple(int(i) for i in entry))
+                for entry in items
+            ]
+        else:
+            raise TypeError(
+                f"{item_name} must be a dict[label, indices] or a list/tuple of index sequences"
+            )
+
+        normalized = {}
+        for label, indices in iterable:
+            indices = tuple(int(i) for i in indices)
+            if len(indices) != expected_len:
+                raise ValueError(f"Each {item_name} entry must contain exactly {expected_len} atom indices.")
+            normalized[str(label)] = indices
+        return normalized
+
+    def _normalize_quadrant_map(self, quadrant_list):
+        """Accept either a dict[label, index_sequence] or a legacy list of index sequences for quadrant/octant analysis."""
+        if isinstance(quadrant_list, dict):
+            iterable = quadrant_list.items()
+        elif isinstance(quadrant_list, (list, tuple)):
+            iterable = [
+                ("_".join(self._get_atom_label(i) for i in atom_group), tuple(int(i) for i in atom_group))
+                for atom_group in quadrant_list
+            ]
+        else:
+            raise TypeError(
+                "quadrant_list must be a dict[label, indices] or a list/tuple of index sequences"
+            )
+
+        normalized = {}
+        for label, indices in iterable:
+            indices = tuple(int(i) for i in indices)
+            if len(indices) < 4:
+                raise ValueError("Each quadrant entry must contain at least 4 atom indices.")
+            normalized[str(label)] = indices
+        return normalized
+
+    def _get_covalent_radius(self, element):
+        """Return an approximate covalent radius in Å for connectivity estimation."""
+        return COVALENT_RADII.get(str(element).capitalize(), 0.77)
+
+    def compute_connectivity(self, scale_factor=1.25):
+        """Estimate bonded neighbors from the XYZ geometry using covalent radii."""
+        coords = np.array(self.coordinates, dtype=float)
+        connectivity = {idx: [] for idx in range(1, self.n_atoms + 1)}
+
+        for i in range(self.n_atoms):
+            for j in range(i + 1, self.n_atoms):
+                distance = np.linalg.norm(coords[i] - coords[j])
+                cutoff = scale_factor * (
+                    self._get_covalent_radius(self.elements[i]) + self._get_covalent_radius(self.elements[j])
+                )
+                if 0.1 < distance <= cutoff:
+                    connectivity[i + 1].append(j + 1)
+                    connectivity[j + 1].append(i + 1)
+
+        self.atom_connectivity = connectivity
+        self.atom_neighbor_counts = {idx: len(neighbors) for idx, neighbors in connectivity.items()}
+        return connectivity
 
     def define_atom_list(self, atom_list):
-        self.atom_list = atom_list
+        """Define atoms via dict[label, atom_index] or a legacy list of atom indices."""
+        self.atom_labels_map = self._normalize_atom_map(atom_list)
+        self.atom_list = list(self.atom_labels_map.values())
+        self.atom_index_to_label = {idx: label for label, idx in self.atom_labels_map.items()}
+        self.compute_connectivity()
 
     def define_bond_list(self, bond_list):
-        self.bond_list = bond_list
+        """Define bonds via dict[label, (atom1, atom2)] or a legacy list of atom-index pairs."""
+        self.bond_labels_map = self._normalize_group_map(bond_list, expected_len=2, item_name="bond")
+        self.bond_list = list(self.bond_labels_map.values())
 
     def define_angle_list(self, angle_list):
-        self.angle_list = angle_list
+        """Define angles via dict[label, (atom1, atom2, atom3)] or a legacy list of triplets."""
+        self.angle_labels_map = self._normalize_group_map(angle_list, expected_len=3, item_name="angle")
+        self.angle_list = list(self.angle_labels_map.values())
     
     def define_dihedral_list(self, dihedral_list):
-        self.dihedral_list = dihedral_list
-
-    def define_dihedral_list(self, dihedral_list):
-        self.dihedral_list = dihedral_list
+        """Define dihedrals via dict[label, (atom1, atom2, atom3, atom4)] or a legacy list of quartets."""
+        self.dihedral_labels_map = self._normalize_group_map(dihedral_list, expected_len=4, item_name="dihedral")
+        self.dihedral_list = list(self.dihedral_labels_map.values())
         
     def define_quadrant_list(self, quadrant_list):
-        self.quadrant_list = quadrant_list
+        """Define quadrant/octant analysis entries via dict[label, indices] or a legacy list of index sequences."""
+        self.quadrant_labels_map = self._normalize_quadrant_map(quadrant_list)
+        self.quadrant_list = list(self.quadrant_labels_map.values())
 
     ## 0 atom properties ##
     #-- SASA -- & -- Molecular Volume --#
@@ -1071,212 +1232,210 @@ class PropertiesXYZ:
     #-- Vbur calculation --#
     def get_Vbur(self):
         """
-        Calculate buried volume for all atoms in atom_list at radius from 2.0 to 5.0 Å with a step of 0.5 Å
-        The calculation is done using Morfeus.
-        The atom_list must be defined before calling this function.
-        The radius list is [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] by default but can be changed by modifying the radius parameter: self.radius_list
-        Results are stored in the results dictionary with keys formatted as 'Vbur_atom_{at_idx}_radius_{radius}'.
+        Calculate buried volume for all atoms in atom_list at radius from 2.0 to 5.0 Å with a step of 0.5 Å.
+        Result keys use the provided atom labels when available.
         """
         if self.atom_list is None:
             print("Atom list is not defined. Please define it using define_atom_list().")
             return
-        
-        for at_idx in self.atom_list:
+
+        atom_items = self.atom_labels_map.items() if self.atom_labels_map else [
+            (self._default_atom_label(at_idx), at_idx) for at_idx in self.atom_list
+        ]
+        for atom_label, at_idx in atom_items:
             for radius in self.radius_list:
-                self.get_Vbur_at_radii(at_idx, radius)
+                self.get_Vbur_at_radii(at_idx, radius, atom_label=atom_label)
           
-    def get_Vbur_at_radii(self, at_idx, radius=3.5):
-        """Calculate buried volume for a specific atom at a specific radius using Morfeus
-        Args:
-            at_idx (int): index of the atom (1-based)
-            radius (float): radius in Å for the buried volume calculation
-        """
-        vbur = BuriedVolume(self.elements, self.coordinates, int(at_idx), include_hs=True, radius=radius) # calls Morfeus
-        self.results['%Vbur_atom_' + str(self.elements[at_idx-1]) + str(at_idx) + '_radius_' + str(radius)] = vbur.fraction_buried_volume * 100
+    def get_Vbur_at_radii(self, at_idx, radius=3.5, atom_label=None):
+        """Calculate buried volume for a specific atom at a specific radius using Morfeus."""
+        vbur = BuriedVolume(self.elements, self.coordinates, int(at_idx), include_hs=True, radius=radius)
+        atom_label = atom_label or self._get_atom_label(at_idx)
+        self.results[f'%Vbur_atom_{atom_label}_radius_{radius}'] = vbur.fraction_buried_volume * 100
 
     #-- Pyramidalization --#
     def get_pyramidalizations(self):
-        """Calculate dihedral angles for all sets of four atoms in dihedral_list
-        The dihedral_list must be defined before calling this function.
-        Results are stored in the results dictionary with keys formatted as 'Dihedral_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_{atom3_symbol}{atom3}_{atom4_symbol}{atom4}'.
-        """
+        """Calculate pyramidalization for all labeled atoms in `define_atom_list()`."""
         if self.atom_list is None:
-            print("Dihedral list is not defined. Please define it using define_dihedral_list().")
+            print("Atom list is not defined. Please define it using define_atom_list().")
             return
-        
-        for atoms in self.atom_list:
-            self.get_pyramidalization(atoms)
 
-    def get_pyramidalization(self, at_idx):
-        """Calculate dihedral angle for a specific set of four atoms using Morfeus
-        Args:
-            dihedral_list (list): list of four atom indexes (1-based)
-        """
-        pyramidalization = Pyramidalization(self.coordinates, at_idx, elements=self.elements, method="connectivity") # calls Morfeus AVC: edited ot call elements
-        key1 = 'Pyr_' + str(self.elements[at_idx-1]) + str(at_idx) 
-        key2 = 'Pyr_angle_' + str(self.elements[at_idx-1]) + str(at_idx) #AVC: altered to not treat at_idx as list
-        self.results[key1] = pyramidalization.P
-        self.results[key2] = pyramidalization.P_angle
+        atom_items = self.atom_labels_map.items() if self.atom_labels_map else [
+            (self._default_atom_label(at_idx), at_idx) for at_idx in self.atom_list
+        ]
+        for atom_label, at_idx in atom_items:
+            self.get_pyramidalization(at_idx, atom_label=atom_label)
+
+    def get_pyramidalization(self, at_idx, atom_label=None):
+        """Calculate pyramidalization for a single atom when it has exactly three neighbors."""
+        if not self.atom_connectivity:
+            self.compute_connectivity()
+
+        atom_label = atom_label or self._get_atom_label(at_idx)
+        neighbors = self.atom_connectivity.get(at_idx, [])
+        neighbor_count = len(neighbors)
+        if neighbor_count != 3:
+            logging.info(
+                "Skipping pyramidalization for %s: expected 3 neighbors, found %s (%s)",
+                atom_label,
+                neighbor_count,
+                neighbors,
+            )
+            return
+
+        pyramidalization = Pyramidalization(
+            self.coordinates,
+            at_idx,
+            elements=self.elements,
+            method="connectivity",
+        )
+        self.results[f'Pyr_{atom_label}'] = pyramidalization.P
+        self.results[f'Pyr_angle_{atom_label}'] = pyramidalization.P_angle
 
     #-- Atomic SASA --#
     def get_atomic_SASA(self):
-        """Calculate atomic solvent accessible surface area (SASA) for all atoms in atom_list using Morfeus
-        The atom_list must be defined before calling this function.
-        Results are stored in the results dictionary with keys formatted as 'Atomic_SASA_{atom_symbol}{atom_index}'.
-        """
+        """Calculate atomic solvent accessible surface area (SASA) for all labeled atoms using Morfeus."""
         if self.atom_list is None:
             print("Atom list is not defined. Please define it using define_atom_list().")
             return
         
-        sasa = SASA(self.elements, self.coordinates) # calls Morfeus
+        sasa = SASA(self.elements, self.coordinates)
         atomic_areas = sasa.atom_areas
 
-        for at_idx in self.atom_list:
-            key = 'SASA_' + str(self.elements[at_idx-1]) + str(at_idx)
-            self.results[key] = atomic_areas[at_idx] #AVC: changed to convert back to correct indexing 
+        atom_items = self.atom_labels_map.items() if self.atom_labels_map else [
+            (self._default_atom_label(at_idx), at_idx) for at_idx in self.atom_list
+        ]
+        for atom_label, at_idx in atom_items:
+            self.results[f'SASA_{atom_label}'] = atomic_areas[at_idx]
     
 
     ## 2 atom properties ##
     #-- Bond Distances --#
     def get_bond_distances(self):
-        """Calculate bond distances for all sets of two atoms in bond_list
-        The bond_list must be defined before calling this function.
-        Results are stored in the results dictionary with keys formatted as 'Bond_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}'.
-        """
+        """Calculate bond distances for all labeled entries in `define_bond_list()`."""
         if self.bond_list is None:
             print("Bond list is not defined. Please define it using define_bond_list().")
             return
-        
-        for bond_atoms in self.bond_list:
-            self.get_bond_distance(bond_atoms)
 
-    def get_bond_distance(self, bond_list):
-        """Calculate bond distance for a specific set of two atoms using Morfeus
-        Args:
-            bond_list (list): list of two atom indexes (1-based)
-        """
-        bond = Sterimol(self.elements, self.coordinates, bond_list[0], bond_list[1]) # calls Morfeus
-        key = 'Bond_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list])
-        self.results[key] = bond.bond_length
+        bond_items = self.bond_labels_map.items() if self.bond_labels_map else [
+            ("_".join(self._get_atom_label(i) for i in bond_atoms), bond_atoms) for bond_atoms in self.bond_list
+        ]
+        for bond_label, bond_atoms in bond_items:
+            self.get_bond_distance(bond_atoms, bond_label=bond_label)
+
+    def get_bond_distance(self, bond_list, bond_label=None):
+        """Calculate bond distance for a specific set of two atoms using Morfeus."""
+        bond = Sterimol(self.elements, self.coordinates, bond_list[0], bond_list[1])
+        bond_label = bond_label or '_'.join(self._get_atom_label(i) for i in bond_list)
+        self.results[f'Bond_{bond_label}'] = bond.bond_length
 
     def get_Sterimol_parameters(self, morfeus=True):
-        """Calculate Sterimol parameters for all sets of two atoms in bond_list
-        The bond_list must be defined before calling this function.
-        Results are stored in the results dictionary with keys formatted as 'Sterimol_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_L', 'Sterimol_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_B1', and 'Sterimol_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_B5'.
-        """
+        """Calculate Sterimol parameters for all labeled entries in `define_bond_list()`."""
         if self.bond_list is None:
             print("Bond list is not defined. Please define it using define_bond_list().")
             return
-        
-        for bond_atoms in self.bond_list:
-            self.get_Sterimol_parameters_for_bond(bond_atoms, morfeus=morfeus)
 
-    def get_Sterimol_parameters_for_bond(self, bond_list, morfeus=True):
-        """Calculate Sterimol parameters for a specific set of two atoms using dbstep (fallback to Morfeus).
-        Args:
-            bond_list (list): list of two atom indexes (1-based)
-        """
-        # Add morfeus option
+        bond_items = self.bond_labels_map.items() if self.bond_labels_map else [
+            ("_".join(self._get_atom_label(i) for i in bond_atoms), bond_atoms) for bond_atoms in self.bond_list
+        ]
+        for bond_label, bond_atoms in bond_items:
+            self.get_Sterimol_parameters_for_bond(bond_atoms, morfeus=morfeus, bond_label=bond_label)
+
+    def get_Sterimol_parameters_for_bond(self, bond_list, morfeus=True, bond_label=None):
+        """Calculate Sterimol parameters for a specific bond using dbstep (fallback) or Morfeus."""
+        key_prefix = 'Sterimol_' + (bond_label or '_'.join(self._get_atom_label(i) for i in bond_list))
 
         if morfeus:
-            bond = Sterimol(self.elements, self.coordinates, bond_list[0], bond_list[1]) # calls Morfeus
-            key_prefix = 'Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list])
+            bond = Sterimol(self.elements, self.coordinates, bond_list[0], bond_list[1])
             self.results[key_prefix + '_Bmin'] = bond.B_1_value
             self.results[key_prefix + '_Bmax'] = bond.B_5_value
-            self.results[key_prefix + '_L']  = float(bond.L_value)
-            
+            self.results[key_prefix + '_L'] = float(bond.L_value)
 
-        # case where sterimol parameters are computed along a scan
         elif self.sterimol_scan is not None:
-            mol = db.dbstep(self.path + 'optimization.xyz', atom1=(bond_list[0]), atom2=(bond_list[1]),
-                        commandline=True, verbose=False, sterimol=True,
-                        scan=self.sterimol_scan)
-            
+            mol = db.dbstep(
+                self.path + 'optimization.xyz',
+                atom1=bond_list[0],
+                atom2=bond_list[1],
+                commandline=True,
+                verbose=False,
+                sterimol=True,
+                scan=self.sterimol_scan,
+            )
+
             start, end, step = self.sterimol_scan.split(':')
             values = []
             v = float(start)
-            while v < end:
+            while v < float(end):
                 values.append(v)
                 v += float(step)
 
-            for _, scan_value in enumerate(values):
-                key_prefix = 'Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + f'_{scan_value}Å'
-                self.results[key_prefix + '_Bmin'] = mol.sterimol[scan_value].Bmin[_]
-                self.results[key_prefix + '_Bmax'] = mol.sterimol[scan_value].Bmax[_]
+            for idx, scan_value in enumerate(values):
+                scan_key_prefix = key_prefix + f'_{scan_value}Å'
+                self.results[scan_key_prefix + '_Bmin'] = mol.sterimol[scan_value].Bmin[idx]
+                self.results[scan_key_prefix + '_Bmax'] = mol.sterimol[scan_value].Bmax[idx]
 
-            self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_L']  = float(mol.L)
+            self.results[key_prefix + '_L'] = float(mol.L)
 
-
-        # default case without scan
         else:
-            mol = db.dbstep(self.path + 'optimization.xyz', atom1=bond_list[0], atom2=bond_list[1], 
-                        commandline=True, verbose=False, sterimol=True)
-        
-            self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_Bmin'] = mol.Bmin
-            self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_Bmax'] = mol.Bmax
-        
-            self.results['Sterimol_' + '_'.join([str(self.elements[i-1]) + str(i) for i in bond_list]) + '_L']  = float(mol.L)
+            mol = db.dbstep(
+                self.path + 'optimization.xyz',
+                atom1=bond_list[0],
+                atom2=bond_list[1],
+                commandline=True,
+                verbose=False,
+                sterimol=True,
+            )
+            self.results[key_prefix + '_Bmin'] = mol.Bmin
+            self.results[key_prefix + '_Bmax'] = mol.Bmax
+            self.results[key_prefix + '_L'] = float(mol.L)
 
     ## 3 atom properties ##
     #-- Angles --#
     def get_angles(self):
-        """Calculate angles for all sets of three atoms in angle_list
-        The angle_list must be defined before calling this function.
-        Results are stored in the results dictionary with keys formatted as 'Angle_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_{atom3_symbol}{atom3}'.
-        """
+        """Calculate angles for all labeled entries in `define_angle_list()`."""
         if self.angle_list is None:
             print("Angle list is not defined. Please define it using define_angle_list().")
             return
-        
-        for angle_atoms in self.angle_list:
-            self.get_angle(angle_atoms)
 
-    def get_bite_angle(self, angle_list: list):
-        """Calculate angle for a specific set of three atoms using Morfeus
-        Args:
-            angle_list (list): list of three atom indexes (1-based)
-        """
-        angle = BiteAngle(self.coordinates, angle_list[0], angle_list[1], angle_list[2]) # calls Morfeus
-        key = 'BiteAngle_' + '_'.join([str(self.elements[i-1]) + str(i) for i in angle_list])
-        self.results[key] = angle.angle
+        angle_items = self.angle_labels_map.items() if self.angle_labels_map else [
+            ("_".join(self._get_atom_label(i) for i in angle_atoms), angle_atoms) for angle_atoms in self.angle_list
+        ]
+        for angle_label, angle_atoms in angle_items:
+            self.get_angle(angle_atoms, angle_label=angle_label)
+
+    def get_bite_angle(self, angle_list: list, angle_label=None):
+        """Calculate bite angle for a specific set of three atoms using Morfeus."""
+        angle = BiteAngle(self.coordinates, angle_list[0], angle_list[1], angle_list[2])
+        angle_label = angle_label or '_'.join(self._get_atom_label(i) for i in angle_list)
+        self.results[f'BiteAngle_{angle_label}'] = angle.angle
     
-    def get_angle(self, angle_list: list):
-        """Calculate angle for a specific set of three atoms using 3D coordinates
-        Args:
-            angle_list (list): list of three atom indexes (1-based)
-        """
-        # define the two vectors (1->0 and 1->2) 0, 1, 2 are the indexes in angle_list
+    def get_angle(self, angle_list: list, angle_label=None):
+        """Calculate angle for a specific set of three atoms using 3D coordinates."""
         u = np.array(self.coordinates[angle_list[0]-1]) - np.array(self.coordinates[angle_list[1]-1])
         v = np.array(self.coordinates[angle_list[2]-1]) - np.array(self.coordinates[angle_list[1]-1])
         
-        # calculate the angle in radians 
         cos_theta = np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v))
-        angle_rad = np.arccos(cos_theta) # 
-        # convert to degrees
+        angle_rad = np.arccos(cos_theta)
         angle_deg = np.degrees(angle_rad)
-        key = 'Angle_' + '_'.join([str(self.elements[i-1]) + str(i) for i in angle_list])
-        #print(f"Calculated angle for {key}: {angle_deg} degrees, type: {type(angle_deg)}")
-        self.results[key] = float(angle_deg)
+        angle_label = angle_label or '_'.join(self._get_atom_label(i) for i in angle_list)
+        self.results[f'Angle_{angle_label}'] = float(angle_deg)
 
     ## 4 atom properties ##
     #-- Dihedrals --#
     def get_dihedrals(self):
-        """Calculate dihedral angles for all sets of four atoms in dihedral_list
-        The dihedral_list must be defined before calling this function.
-        Results are stored in the results dictionary with keys formatted as 'Dihedral_{atom1_symbol}{atom1}_{atom2_symbol}{atom2}_{atom3_symbol}{atom3}_{atom4_symbol}{atom4}'.
-        """
+        """Calculate dihedral angles for all labeled entries in `define_dihedral_list()`."""
         if self.dihedral_list is None:
             print("Dihedral list is not defined. Please define it using define_dihedral_list().")
             return
-        
-        for dihedral_atoms in self.dihedral_list:
-            self.get_dihedral(dihedral_atoms)
 
-    def get_dihedral(self, dihedral_list):
-        """Calculate dihedral angle for a specific set of four atoms using Morfeus
-        Args:
-            dihedral_list (list): list of four atom indexes (1-based)
-        """
+        dihedral_items = self.dihedral_labels_map.items() if self.dihedral_labels_map else [
+            ("_".join(self._get_atom_label(i) for i in dihedral_atoms), dihedral_atoms)
+            for dihedral_atoms in self.dihedral_list
+        ]
+        for dihedral_label, dihedral_atoms in dihedral_items:
+            self.get_dihedral(dihedral_atoms, dihedral_label=dihedral_label)
+
+    def get_dihedral(self, dihedral_list, dihedral_label=None):
+        """Calculate dihedral angle for a specific set of four atoms using Morfeus."""
 
         b1 = np.array(self.coordinates[dihedral_list[1]-1]) - np.array(self.coordinates[dihedral_list[0]-1])
         b2 = np.array(self.coordinates[dihedral_list[2]-1]) - np.array(self.coordinates[dihedral_list[1]-1])
@@ -1285,90 +1444,99 @@ class PropertiesXYZ:
         n1 = np.cross(b1, b2)
         n2 = np.cross(b2, b3)
 
-        # atan2(y, x) form recommended in molecular mechanics
         x = np.dot(n1, n2)
         y = np.dot(np.cross(n1, n2), b2 / np.linalg.norm(b2))
         
         dihedral = np.degrees(np.arctan2(y, x))
-        dihedral_key = 'Dihed_' + '_'.join([str(self.elements[i-1]) + str(i) for i in dihedral_list])  
-        self.results[dihedral_key] = float(dihedral)  
+        dihedral_label = dihedral_label or '_'.join(self._get_atom_label(i) for i in dihedral_list)
+        self.results[f'Dihed_{dihedral_label}'] = float(dihedral)
 
     
     ## 5 atom properties ##
     #-- quadrants --#
     def get_vbur_quadrants(self):
-        """Calculate buried volume in quadrants for a specific atom at a specific radius using Morfeus
-        Args:
-            at_idx (int): index of the atom (1-based)
-            radius (float): radius in Å for the buried volume calculation
-        """
+        """Calculate buried volume in quadrants for all labeled entries in `define_quadrant_list()`."""
         if self.quadrant_list is None:
             print("Quadrant list is not defined. Please define it using define_quadrant_list().")
             return
 
-        for atom_list in self.quadrant_list:
-            self.get_vbur_quadrants_only(atom_list)
+        quadrant_items = self.quadrant_labels_map.items() if self.quadrant_labels_map else [
+            ("_".join(self._get_atom_label(i) for i in atom_list), atom_list) for atom_list in self.quadrant_list
+        ]
+        for quadrant_label, atom_list in quadrant_items:
+            self.get_vbur_quadrants_only(atom_list, quadrant_label=quadrant_label)
 
-    def get_vbur_quadrants_only(self, atom_list): #uses morfeus to calculate vbur at a single radius for an atom (a1) in df
-        # check documentation of morfeus buried volume for explanation of parameters: https://digital-chemistry-laboratory.github.io/morfeus/buried_volume.html
-        metal_center   = atom_list[0]
-        z_axis_atoms   = [atom_list[1], atom_list[2]]
+    def get_vbur_quadrants_only(self, atom_list, quadrant_label=None):
+        """Use Morfeus to calculate buried volume in quadrants for one labeled entry."""
+        metal_center = atom_list[0]
+        z_axis_atoms = [atom_list[1], atom_list[2]]
         xz_plane_atoms = atom_list[3:]
+        quadrant_label = quadrant_label or '_'.join(self._get_atom_label(i) for i in atom_list)
         
-        vbur = BuriedVolume(self.elements, self.coordinates, metal_center,
-                            radius=self.quadrant_radius, 
-                            include_hs=True, 
-                            excluded_atoms=self.quadrant_excluded_atoms, 
-                            z_axis_atoms=z_axis_atoms, 
-                            xz_plane_atoms=xz_plane_atoms) #calls morfeus
+        vbur = BuriedVolume(
+            self.elements,
+            self.coordinates,
+            metal_center,
+            radius=self.quadrant_radius,
+            include_hs=True,
+            excluded_atoms=self.quadrant_excluded_atoms,
+            z_axis_atoms=z_axis_atoms,
+            xz_plane_atoms=xz_plane_atoms,
+        )
                 
         vbur.octant_analysis()
                 
         quadrants = vbur.quadrants
         bv_quadrants = quadrants['percent_buried_volume']
 
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_quadrant_+,+'] = bv_quadrants[1]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_quadrant_–,+'] = bv_quadrants[2]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_quadrant_–,–'] = bv_quadrants[3]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_quadrant_+,–'] = bv_quadrants[4]                  
+        self.results[f'%Vbur_{quadrant_label}_quadrant_+,+'] = bv_quadrants[1]
+        self.results[f'%Vbur_{quadrant_label}_quadrant_–,+'] = bv_quadrants[2]
+        self.results[f'%Vbur_{quadrant_label}_quadrant_–,–'] = bv_quadrants[3]
+        self.results[f'%Vbur_{quadrant_label}_quadrant_+,–'] = bv_quadrants[4]
 
     #-- octants --#
     def get_vbur_octants(self):
-        """Calculate buried volume in octants for a specific atom at a specific radius using Morfeus
-        """
+        """Calculate buried volume in octants for all labeled entries in `define_quadrant_list()`."""
         if self.quadrant_list is None:
             print("Quadrant list is not defined. Please define it using define_quadrant_list().")
             return
 
-        for atom_list in self.quadrant_list:
-            self.get_vbur_octants_only(atom_list)
+        quadrant_items = self.quadrant_labels_map.items() if self.quadrant_labels_map else [
+            ("_".join(self._get_atom_label(i) for i in atom_list), atom_list) for atom_list in self.quadrant_list
+        ]
+        for quadrant_label, atom_list in quadrant_items:
+            self.get_vbur_octants_only(atom_list, quadrant_label=quadrant_label)
 
-    def get_vbur_octants_only(self, atom_list): 
-        # check documentation of morfeus buried volume for explanation of parameters: https://digital-chemistry-laboratory.github.io/morfeus/buried_volume.html
-        metal_center   = atom_list[0]
-        z_axis_atoms   = [atom_list[1], atom_list[2]]
+    def get_vbur_octants_only(self, atom_list, quadrant_label=None): 
+        metal_center = atom_list[0]
+        z_axis_atoms = [atom_list[1], atom_list[2]]
         xz_plane_atoms = atom_list[3:]
+        quadrant_label = quadrant_label or '_'.join(self._get_atom_label(i) for i in atom_list)
         
-        vbur = BuriedVolume(self.elements, self.coordinates, metal_center,
-                            radius=self.quadrant_radius, 
-                            include_hs=True, 
-                            excluded_atoms=self.quadrant_excluded_atoms, 
-                            z_axis_atoms=z_axis_atoms, 
-                            xz_plane_atoms=xz_plane_atoms) #calls morfeus
+        vbur = BuriedVolume(
+            self.elements,
+            self.coordinates,
+            metal_center,
+            radius=self.quadrant_radius,
+            include_hs=True,
+            excluded_atoms=self.quadrant_excluded_atoms,
+            z_axis_atoms=z_axis_atoms,
+            xz_plane_atoms=xz_plane_atoms,
+        )
                 
         vbur.octant_analysis()
 
         octants = vbur.octants
 
         bv_octants = octants['percent_buried_volume']
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_octant_+,+,+'] = bv_octants[0]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_octant_–,+,+'] = bv_octants[1]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_octant_–,–,+'] = bv_octants[2]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_octant_+,–,+'] = bv_octants[3]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_octant_+,–,–'] = bv_octants[4]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_octant_–,–,–'] = bv_octants[5]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_octant_–,+,–'] = bv_octants[6]
-        self.results['%Vbur_' + str(self.elements[metal_center-1]) + str(metal_center) + '_octant_+,+,–'] = bv_octants[7]
+        self.results[f'%Vbur_{quadrant_label}_octant_+,+,+'] = bv_octants[0]
+        self.results[f'%Vbur_{quadrant_label}_octant_–,+,+'] = bv_octants[1]
+        self.results[f'%Vbur_{quadrant_label}_octant_–,–,+'] = bv_octants[2]
+        self.results[f'%Vbur_{quadrant_label}_octant_+,–,+'] = bv_octants[3]
+        self.results[f'%Vbur_{quadrant_label}_octant_+,–,–'] = bv_octants[4]
+        self.results[f'%Vbur_{quadrant_label}_octant_–,–,–'] = bv_octants[5]
+        self.results[f'%Vbur_{quadrant_label}_octant_–,+,–'] = bv_octants[6]
+        self.results[f'%Vbur_{quadrant_label}_octant_+,+,–'] = bv_octants[7]
     
 
 
