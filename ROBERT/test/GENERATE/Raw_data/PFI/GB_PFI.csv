@@ -1,0 +1,2 @@
+model,type,kfold,repeat_kfolds,seed,error_type,y,names,X_descriptors,params,combined_rmse,split
+GB,reg,5,10,0,rmse,ΔΔG,SMILES,"['x38', 'x150', 'x59', 'x145']","{'n_estimators': 69, 'learning_rate': 0.01, 'max_depth': 17, 'min_samples_split': 8, 'min_samples_leaf': 5, 'subsample': 0.7, 'max_features': 0.25, 'validation_fraction': 0.1, 'min_weight_fraction_leaf': 0.05, 'ccp_alpha': 0.0, 'random_state': 0}",0.487630659386425,even

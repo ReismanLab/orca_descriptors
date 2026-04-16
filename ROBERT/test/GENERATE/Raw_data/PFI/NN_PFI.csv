@@ -1,0 +1,2 @@
+model,type,kfold,repeat_kfolds,seed,error_type,y,names,X_descriptors,params,combined_rmse,split
+NN,reg,5,10,0,rmse,ΔΔG,SMILES,['x150'],"{'hidden_layer_1': 4, 'hidden_layer_2': 2, 'max_iter': 324, 'alpha': 0.07487989080485352, 'tol': 5.206293667752211e-05, 'random_state': 0, 'solver': 'lbfgs'}",0.4105587246492958,even

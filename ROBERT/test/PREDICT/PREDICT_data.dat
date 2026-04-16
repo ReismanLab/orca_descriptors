@@ -1,0 +1,235 @@
+ROBERT v 2.1.0 2026/03/23 14:00:00 
+How to cite: Dalmau, D.; Alegre Requena, J. V. WIREs Comput Mol Sci. 2024, 14, e1733.
+
+
+o  Representation of predictions and analysis of ML models with the PREDICT module
+
+
+------- Starting model with all variables (No PFI) -------
+
+o  Database NN_db.csv loaded successfully, including:
+   - 25 datapoints
+   - 56 accepted descriptors
+   - 2 ignored descriptors
+   - 0 discarded descriptors
+
+o  ML model No_PFI (with no PFI filter) and Xy database were loaded, including:
+   - Target value: ΔΔG
+   - Names: SMILES
+   - Model: NN
+   - k-fold CV: 5
+   - Repetitions CV: 10
+   - Descriptors: ['x101', 'x102', 'x105', 'x112', 'x114', 'x117', 'x123', 'x126', 'x127', 'x128', 'x129', 'x130', 'x131', 'x132', 'x135', 'x136', 'x138', 'x139', 'x144', 'x145', 'x147', 'x148', 'x149', 'x150', 'x17', 'x24', 'x25', 'x26', 'x27', 'x29', 'x30', 'x33', 'x34', 'x37', 'x38', 'x40', 'x42', 'x43', 'x45', 'x46', 'x47', 'x5', 'x51', 'x52', 'x59', 'x6', 'x60', 'x61', 'x65', 'x68', 'x70', 'x75', 'x77', 'x82', 'x93', 'x94']
+   - Training points: 20
+   - Test points: 5
+   o  Saving CSV databases with predictions and their SD in:
+      -  Predicted results of starting dataset: PREDICT/NN_No_PFI.csv
+
+   o  Saving graphs in:
+      -  Graph in: PREDICT/Results_NN_No_PFI.png
+      -  Graph in: PREDICT/CV_variability_NN_No_PFI.png
+
+   o  Summary of results NN_No_PFI:
+      -  Points CV (train+valid.):Test = 20:5
+      -  Proportion CV (train+valid.):Test = 80:20
+      -  Number of descriptors = 56
+      -  Proportion (train+valid.) points:descriptors = 20:56
+      -  10x 5-fold CV : R2 = 0.0066, MAE = 0.3, RMSE = 0.36
+      -  Test : R2 = 0.27, MAE = 0.28, RMSE = 0.31
+      -  Average SD in test set = 0.08
+      -  y range of dataset (train+valid.) = -0.22 to 1.0, total 1.2
+
+   o  SHAP plot saved in PREDICT/SHAP_NN_No_PFI.png
+      -  x52 = min: -0.069, max: 0.13
+      -  x61 = min: -0.038, max: 0.12
+      -  x150 = min: -0.046, max: 0.11
+      -  x29 = min: -0.037, max: 0.079
+      -  x138 = min: -0.07, max: 0.078
+      -  x59 = min: -0.047, max: 0.069
+      -  x24 = min: -0.032, max: 0.064
+      -  x51 = min: -0.072, max: 0.053
+      -  x117 = min: -0.068, max: 0.05
+      -  x40 = min: -0.095, max: 0.047
+      -  x144 = min: -0.092, max: 0.045
+      -  x132 = min: -0.067, max: 0.041
+      -  x38 = min: -0.042, max: 0.037
+      -  x129 = min: -0.092, max: 0.037
+      -  x5 = min: -0.033, max: 0.032
+      -  x65 = min: -0.028, max: 0.032
+      -  x34 = min: -0.028, max: 0.031
+      -  x149 = min: -0.022, max: 0.031
+      -  x127 = min: -0.03, max: 0.03
+      -  x126 = min: -0.052, max: 0.029
+      -  x17 = min: -0.06, max: 0.029
+      -  x47 = min: -0.022, max: 0.028
+      -  x60 = min: -0.028, max: 0.028
+      -  x148 = min: -0.021, max: 0.028
+      -  x43 = min: -0.05, max: 0.025
+      -  x25 = min: -0.081, max: 0.025
+      -  x114 = min: -0.087, max: 0.024
+      -  x93 = min: -0.046, max: 0.024
+      -  x139 = min: -0.06, max: 0.023
+      -  x82 = min: -0.014, max: 0.019
+      -  x33 = min: -0.012, max: 0.019
+      -  x77 = min: -0.031, max: 0.019
+      -  x147 = min: -0.048, max: 0.018
+      -  x42 = min: -0.028, max: 0.018
+      -  x37 = min: -0.022, max: 0.018
+      -  x70 = min: -0.036, max: 0.017
+      -  x27 = min: -0.021, max: 0.017
+      -  x75 = min: -0.011, max: 0.016
+      -  x102 = min: -0.088, max: 0.015
+      -  x46 = min: -0.031, max: 0.014
+      -  x45 = min: -0.017, max: 0.014
+      -  x131 = min: -0.025, max: 0.013
+      -  x26 = min: -0.023, max: 0.013
+      -  x135 = min: -0.009, max: 0.011
+      -  x123 = min: -0.013, max: 0.011
+      -  x105 = min: -0.024, max: 0.011
+      -  x112 = min: -0.021, max: 0.0096
+      -  x128 = min: -0.021, max: 0.0087
+      -  x130 = min: -0.0072, max: 0.0067
+      -  x101 = min: -0.0094, max: 0.0061
+      -  x30 = min: -0.0061, max: 0.0056
+      -  x136 = min: -0.0091, max: 0.0053
+      -  x68 = min: -0.0049, max: 0.0044
+      -  x94 = min: -0.0044, max: 0.0039
+      -  x6 = min: -0.0039, max: 0.0039
+      -  x145 = min: -0.0032, max: 0.0013
+
+   o  PFI plot saved in PREDICT/PFI_NN_No_PFI.png
+      Influence on RMSE
+      -  x150 = 0.082 +- 0.0068
+      -  x52 = 0.065 +- 0.0035
+      -  x61 = 0.056 +- 0.0086
+      -  x25 = 0.054 +- 0.0061
+      -  x138 = 0.05 +- 0.011
+      -  x59 = 0.048 +- 0.005
+      -  x147 = 0.043 +- 0.0051
+      -  x40 = 0.04 +- 0.0069
+      -  x51 = 0.039 +- 0.004
+      -  x144 = 0.038 +- 0.0069
+      -  x117 = 0.038 +- 0.0071
+      -  x102 = 0.038 +- 0.0063
+      -  x132 = 0.037 +- 0.0051
+      -  x29 = 0.035 +- 0.0077
+      -  x43 = 0.034 +- 0.0032
+      -  x126 = 0.034 +- 0.0024
+      -  x24 = 0.033 +- 0.0064
+      -  x38 = 0.032 +- 0.0072
+      -  x114 = 0.031 +- 0.0061
+      -  x129 = 0.03 +- 0.0052
+      -  x139 = 0.029 +- 0.0046
+      -  x60 = 0.028 +- 0.0064
+      -  x27 = 0.025 +- 0.0041
+      -  x93 = 0.024 +- 0.0033
+      -  x17 = 0.022 +- 0.0036
+      -  x34 = 0.02 +- 0.0029
+      -  x149 = 0.02 +- 0.0031
+      -  x46 = 0.02 +- 0.0024
+      -  x65 = 0.02 +- 0.0035
+      -  x5 = 0.019 +- 0.0033
+      -  x47 = 0.018 +- 0.0036
+      -  x70 = 0.018 +- 0.0035
+      -  x148 = 0.017 +- 0.0017
+      -  x127 = 0.016 +- 0.002
+      -  x42 = 0.015 +- 0.0013
+      -  x77 = 0.015 +- 0.0037
+      -  x33 = 0.014 +- 0.0017
+      -  x112 = 0.013 +- 0.0017
+      -  x105 = 0.013 +- 0.0021
+      -  x37 = 0.012 +- 0.0015
+      -  x135 = 0.012 +- 0.0027
+      -  x128 = 0.012 +- 0.0016
+      -  x26 = 0.011 +- 0.0012
+      -  x101 = 0.01 +- 0.00069
+      -  x82 = 0.01 +- 0.0011
+      -  x75 = 0.0088 +- 0.0014
+      -  x45 = 0.0086 +- 0.00081
+      -  x123 = 0.0074 +- 0.00043
+      -  x131 = 0.0068 +- 0.00063
+      -  x30 = 0.0067 +- 0.0022
+      -  x136 = 0.0057 +- 0.0011
+      -  x68 = 0.0051 +- 0.0017
+      -  x6 = 0.0034 +- 0.0014
+      -  x94 = 0.0023 +- 0.0011
+      -  x130 = 0.0016 +- 0.00011
+      -  x145 = 0.00042 +- 0.00025
+
+   x  The Pearson heatmap was not generated because the number of features and the y value (56) is higher than 30.
+      Ideally, variables should show low correlations.
+      x  WARNING! Noticeable correlations observed (up to r = -0.83 or R2 = 0.69, for x114 and x34)
+
+   o  Outliers plot saved in PREDICT/Outliers_NN_No_PFI.png
+      Train: 0 outliers out of 20 datapoints (0.0%)
+      Test: 0 outliers out of 5 datapoints (0.0%)
+
+   o  y-values distribution plot saved in PREDICT/y_distribution_NN_No_PFI.png
+      Ideally, the number of datapoints in the four quartiles of the y-range should be uniform (25% population in each quartile) to have similar confidence intervals in the predictions across the y-range
+      -  The number of points in each quartile is Q1: 8, Q2: 6, Q3: 8, Q4: 3
+      x  WARNING! Your data is slightly not uniform (Q4 has 3 points while Q1 has 8)
+
+
+------- Starting model with PFI filter (only important descriptors used) -------
+
+o  Database MVL_PFI_db.csv loaded successfully, including:
+   - 25 datapoints
+   - 56 accepted descriptors
+   - 2 ignored descriptors
+   - 0 discarded descriptors
+
+o  ML model PFI (with PFI filter) and Xy database were loaded, including:
+   - Target value: ΔΔG
+   - Names: SMILES
+   - Model: MVL
+   - k-fold CV: 5
+   - Repetitions CV: 10
+   - Descriptors: ['x25', 'x150', 'x138', 'x129']
+   - Training points: 20
+   - Test points: 5
+   o  Saving CSV databases with predictions and their SD in:
+      -  Predicted results of starting dataset: PREDICT/MVL_PFI.csv
+
+   o  Saving graphs in:
+      -  Graph in: PREDICT/Results_MVL_PFI.png
+      -  Graph in: PREDICT/CV_variability_MVL_PFI.png
+
+   o  Summary of results MVL_PFI:
+      -  Points CV (train+valid.):Test = 20:5
+      -  Proportion CV (train+valid.):Test = 80:20
+      -  Number of descriptors = 4
+      -  Proportion (train+valid.) points:descriptors = 20:4
+      -  10x 5-fold CV : R2 = 0.5, MAE = 0.21, RMSE = 0.25
+      -  Test : R2 = 0.006, MAE = 0.32, RMSE = 0.33
+      -  Average SD in test set = 0.052
+      -  y range of dataset (train+valid.) = -0.22 to 1.0, total 1.2
+
+   o  SHAP plot saved in PREDICT/SHAP_MVL_PFI.png
+      -  x150 = min: -0.18, max: 0.42
+      -  x138 = min: -0.26, max: 0.26
+      -  x129 = min: -0.39, max: 0.18
+      -  x25 = min: -0.17, max: 0.068
+
+   o  PFI plot saved in PREDICT/PFI_MVL_PFI.png
+      Influence on RMSE
+      -  x150 = 0.2 +- 0.03
+      -  x138 = 0.077 +- 0.045
+      -  x129 = 0.066 +- 0.032
+      -  x25 = 0.057 +- 0.016
+
+   o  The Pearson heatmap was stored in PREDICT/Pearson_heatmap_PFI.png.
+      Ideally, variables should show low correlations.
+      o  Correlations between variables are acceptable
+
+   o  Outliers plot saved in PREDICT/Outliers_MVL_PFI.png
+      Train: 1 outliers out of 20 datapoints (5.0%)
+      -  [H]C1=C([H])C(OC([H])([H])[H])=C([H])C(=C2N[C@@]([H])(C(C([H])([H])[H])(C([H])([H])[H])C([H])([H])[H])C([H])([H])O2)N1 (2.1 SDs)
+      Test: 0 outliers out of 5 datapoints (0.0%)
+
+   o  y-values distribution plot saved in PREDICT/y_distribution_MVL_PFI.png
+      Ideally, the number of datapoints in the four quartiles of the y-range should be uniform (25% population in each quartile) to have similar confidence intervals in the predictions across the y-range
+      -  The number of points in each quartile is Q1: 8, Q2: 6, Q3: 8, Q4: 3
+      x  WARNING! Your data is slightly not uniform (Q4 has 3 points while Q1 has 8)
+
+Time PREDICT: 3.91 seconds
+
