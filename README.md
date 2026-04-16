@@ -18,11 +18,10 @@ We provide a single environemment to run all the notebooks that can be installed
 
 ```
 git clone https://github.com/ReismanLab/orca_descriptors
-git clone https://github.com/edenspec2/DescriPyTor
-git clone https://github.com/jvalegre/robert
-conda create -n robert_fish python=3.12
-conda activate robert_fish
-python XXX (to be finished)
+conda create -n desc_mlr python=3.12
+conda activate desc_mlr
+pip install tqdm bokeh openbabel-wheel rdkit morfeus-ml dbstep pathlib ipykernel openpyxl robert igraph networkx plotly ipywidgets dash pyarrow
+conda install -y -c conda-forge glib gtk3 pango mscorefonts
 ```
 
 
