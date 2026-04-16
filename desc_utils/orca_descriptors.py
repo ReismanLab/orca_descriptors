@@ -237,6 +237,7 @@ class OrcaReader:
             print(f"No {self.basename}.property.json file found in the specified path. Results dictionary will be empty.")
 
     def parse_gbw_json(self):
+        print(f"Parsing GBW JSON for {self.basename} properties...")
         file_name = f'{self.basename}.json'
         if file_name in os.listdir(self.directory):
             try:
