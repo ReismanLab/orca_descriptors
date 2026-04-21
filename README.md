@@ -41,7 +41,90 @@ conda install -y -c conda-forge glib gtk3 pango mscorefonts
 
 ## Descriptors included
 
-- Numbering atoms: -> make it a python file
+### Orca descriptors:
+
+```X``` : atom label
+
+```Y``` : integer for the radius by default from 2.0 to 5.0 with a 0.5 increment.
+
+**Fragment specific geometric descriptors:**
+
+- %Vbur:                    ```%Vbur_atom_X_radius_Y``` :white_check_mark:
+- atomic SASA:              ```SASA_X``` :white_check_mark:
+- Pyramidalization:         ```Pyr_X``` :white_check_mark:
+- Pyramidalization angle:   ```Pyr_angle_X``` :white_check_mark:
+- Sterimol_B5:              ```Sterimol_X_X_Bmax``` :white_check_mark:
+- Sterimol_B1:              ```Sterimol_X_X_Bmax``` :white_check_mark:
+- Sterimol_L:               ```Sterimol_X_X_L``` :white_check_mark:
+- Bond length:                     ```Bond_X_X``` :white_check_mark:
+- Angles:                   ```Angle_X_X_X``` :white_check_mark:
+- Dihed:                    ```Dihed_X_X_X_X``` :white_check_mark:
+- Quadrants:
+- Octants:
+
+
+**Molecular geometric descriptors:**
+
+- SASA: ```SASA``` :white_check_mark:
+- SASA_Volume: ```SASA_Volume``` :white_check_mark:
+
+**Charges**
+
+- Mulliken: ```mulliken_X``` :white_check_mark:
+- Loewdin: ```loewdin_X``` :white_check_mark:
+- chelpG: ```chelpG_X``` :white_check_mark:
+- Hirshfeld: ```hirshfeld_X``` :white_check_mark:
+- cm5: ```cm5_X``` :white_check_mark:
+- NBO: ```npa_X_charge``` :white_check_mark:
+
+**Orbital Analysis**
+
+- NBO Core/Valence/Rydberg: ```npa_X_cor/valence/rydberg``` :white_check_mark:
+- NBO "Natural Occupancies": ```nao_X_Cor/Val/Ryd-ns/p/d/f_occupancy``` :white_check_mark:
+- Frontier orbital descriptors
+- 
+
+
+**Fukui coefficients (using Z charges)**
+Z can be mulliken, loewdin, chelpG, hirshfeld, cm5 or NBO.
+- fplus_Z_X: ```fplus_Z_X``` :white_check_mark:
+- fminus_Z_X: ```fminus_Z_X``` :white_check_mark:
+- fzero_Z_X: ```fzero_Z_X``` :white_check_mark:
+
+**NMR isotropic and anistropic**
+
+- isotropic shift: ```siso_X``` :white_check_mark:
+- anisotropic shift: ```saniso_X``` :white_check_mark:
+
+**Molecular descriptors:**
+
+- HOMO energy: ```HOMO_energy``` :white_check_mark:
+- LUMO energy: ```LUMO_energy``` :white_check_mark:
+- Enthalpy: ```Enthlapy``` :white_check_mark:
+- GibbsFreeEnergy: ```GibbsFreeEnergy``` :white_check_mark:
+- Vertical_Ionization_Potential: ```Vertical_Ionization_Potential``` :white_check_mark:
+- Vertical_Electron_Affinity: ```Vertical_Electron_Affinity``` :white_check_mark:
+- Hardness: ```Hardness``` :white_check_mark:
+- Electronegativity: ```Electronegativity``` :white_check_mark:
+- Electrophilicity: ```Electrophilicity``` :white_check_mark:
+
+### DescriPytor:
+
+- NBO charge: ```charge_NBO_X``` :white_check_mark:
+- Sterimol_B1: ```B1_X-X``` :white_check_mark:
+- Sterimol_B5: ```B5_X-X``` :white_check_mark:
+- Sterimol_BL: ```L_X-X``` :white_check_mark:
+- Sterimol_B5_loc: ```loc_C5_X-X``` :white_check_mark:
+- Sterimol_B1-B5_angle: ```B1-B5_angle_X-X``` :white_check_mark:
+- Bond length:```dist_X-X``` :white_check_mark:
+- Vibration frequency:```vib_freq_X-X``` :white_check_mark:
+- Vibration amplitude:```vib_amp_X-X``` :white_check_mark:
+- Dipole norm:```dipole``` :white_check_mark:
+- Dipole x projection (after basis transformation):```dipole_x_X-X-X``` :white_check_mark:
+- Dipole y projection (after basis transformation):```dipole_y_X-X-X``` :white_check_mark:
+- Dipole z projection (after basis transformation):```dipole_z_X-X-X``` :white_check_mark:
+- Angles:```angle_X-X-X``` :white_check_mark:
+
 
 - Orca descriptor extraction (single output): Elementary block that takes a set of orca outputs for one calculation and generates a json file with extensive set of descriptors.
 - Orca calculation
