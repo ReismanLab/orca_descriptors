@@ -53,9 +53,9 @@ conda install -y -c conda-forge glib gtk3 pango mscorefonts
 - atomic SASA:              ```SASA_X``` :white_check_mark:
 - Pyramidalization:         ```Pyr_X``` :white_check_mark:
 - Pyramidalization angle:   ```Pyr_angle_X``` :white_check_mark:
-- Sterimol_B5:              ```Sterimol_X_X_Bmax``` :white_check_mark: / do not match DescripyTor B5:```dist_X-X``` :x:
-- Sterimol_B1:              ```Sterimol_X_X_Bmin``` :white_check_mark: / do not match DescripyTor B1:```dist_X-X``` :x:
-- Sterimol_L:               ```Sterimol_X_X_L``` :white_check_mark:
+- Sterimol_B5 (morfeus):              ```Sterimol_X_X_Bmax``` :white_check_mark: / do not match DescripyTor B5:```dist_X-X``` :x:
+- Sterimol_B1 (morfeus):              ```Sterimol_X_X_Bmin``` :white_check_mark: / do not match DescripyTor B1:```dist_X-X``` :x:
+- Sterimol_L (morfeus):               ```Sterimol_X_X_L``` :white_check_mark:
 - Bond length:              ```Bond_X_X``` :white_check_mark: / matches DescripyTor Bond length:```dist_X-X``` :white_check_mark:
 - Angles:                   ```Angle_X_X_X``` :white_check_mark: / matches DescripyTor Angles:```angle_X-X-X``` :white_check_mark:
 - Dihed:                    ```Dihed_X_X_X_X``` :white_check_mark:
@@ -97,8 +97,8 @@ Z can be mulliken, loewdin, chelpG, hirshfeld, cm5 or NBO.
 
 - HOMO energy: ```HOMO_energy``` :white_check_mark:
 - LUMO energy: ```LUMO_energy``` :white_check_mark:
-- Enthalpy: ```Enthlapy``` :white_check_mark:
-- GibbsFreeEnergy: ```GibbsFreeEnergy``` :white_check_mark:
+- Enthalpy: ```Enthlapy``` :x:
+- GibbsFreeEnergy: ```GibbsFreeEnergy``` :x:
 - Vertical_Ionization_Potential: ```Vertical_Ionization_Potential``` :white_check_mark:
 - Vertical_Electron_Affinity: ```Vertical_Electron_Affinity``` :white_check_mark:
 - Hardness: ```Hardness``` :white_check_mark:
