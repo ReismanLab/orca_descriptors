@@ -489,23 +489,32 @@ class OrcaReader:
 class NBOProps:
     """Properties from out file from Orca NBO calculations"""
 
-    def __init__(self, path):
+    def __init__(self, path, block_index=0):
         self.path = Path(path)
         self.content = self.path.read_text()
+        self.nbo_block_index = int(block_index) if block_index is not None else 0
 
-        self.nbo_start = self.content.find("Now starting NBO")
-        if self.nbo_start != -1:
-            # Find the end of NBO section (marked by "returned from NBO program")
-            self.nbo_end = self.content.find("*** returned from  NBO  program ***", self.nbo_start)
-            if self.nbo_end != -1:
-                self.nbo_section = self.content[self.nbo_start:self.nbo_end + len("*** returned from  NBO  program ***")]
-                #print(f"Found NBO section: {len(self.nbo_section)} characters")
-            else:
-                print("Could not find end of NBO section")
-                self.nbo_section = None
-        else:
-            print("Could not find 'Now starting NBO' in the file")
+        nbo_start_marker = "Now starting NBO"
+        nbo_end_marker = "*** returned from  NBO  program ***"
+        self.nbo_blocks = []
+
+        for m in re.finditer(re.escape(nbo_start_marker), self.content):
+            start = m.start()
+            end = self.content.find(nbo_end_marker, start)
+            if end != -1:
+                self.nbo_blocks.append(self.content[start:end + len(nbo_end_marker)])
+
+        if not self.nbo_blocks:
+            print("Could not find any complete NBO section in the file")
             self.nbo_section = None
+        else:
+            if not (0 <= self.nbo_block_index < len(self.nbo_blocks)):
+                print(
+                    f"Requested NBO block index {self.nbo_block_index} out of range "
+                    f"(found {len(self.nbo_blocks)} blocks). Using block 0."
+                )
+                self.nbo_block_index = 0
+            self.nbo_section = self.nbo_blocks[self.nbo_block_index]
 
         self.results = {
             'source_file': str(self.path),
@@ -980,7 +989,7 @@ class PropertiesJOB:
                 self.results["svp_theory"] = svp_theory.lower()
 
 class RedoxSet:
-    def __init__(self, neutralReader=None, cationReader=None, anionReader=None, descriptorPrefixes=None):
+    def __init__(self, neutralReader=None, cationReader=None, anionReader=None, descriptorPrefixes=["cm5"]):
         self.neutralReader = neutralReader
         self.cationReader = cationReader
         self.anionReader = anionReader
@@ -1002,12 +1011,36 @@ class RedoxSet:
     def _pull_charge(self, reader, prefix, atom_index):
         if reader is None:
             return None
-        # Attempt labeled key first
-        labeled = self._atom_key(prefix, atom_index)
-        if labeled in reader.results:
-            return reader.results.get(labeled)
-        # Fallback to numeric key
-        return reader.results.get(f"{prefix}_{atom_index}")
+        label = self.atom_labels_map.get(atom_index, atom_index)
+        pref_raw = str(prefix)
+        pref_norm = pref_raw.strip().lower()
+
+        candidate_keys = [f"{pref_raw}_{label}", f"{pref_raw}_{atom_index}"]
+
+        # Normalize common spelling/casing variants.
+        if pref_norm == "nbo_charges":
+            candidate_keys.extend([f"nbo_charge_{label}", f"nbo_charge_{atom_index}"])
+        if pref_norm == "chelpg":
+            candidate_keys.extend([f"chelpG_{label}", f"chelpG_{atom_index}"])
+
+        # NBO natural charges are often stored as npa_<atom>_charge.
+        if pref_norm in {"nbo_charge", "nbo_charges", "npa"}:
+            candidate_keys.extend([
+                f"npa_{label}_charge",
+                f"npa_{atom_index}_charge",
+                f"nbo_charge_{label}",
+                f"nbo_charge_{atom_index}",
+            ])
+
+        seen = set()
+        for key in candidate_keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            if key in reader.results:
+                return reader.results.get(key)
+
+        return None
 
     def get_redox_properties(self):
         self.results['Vertical_Ionization_Potential'] = self.neutralReader.results.get('SCF_energy') - self.cationReader.results.get('SCF_energy') if (self.neutralReader and self.cationReader and self.neutralReader.results.get('SCF_energy') is not None and self.cationReader.results.get('SCF_energy') is not None) else None

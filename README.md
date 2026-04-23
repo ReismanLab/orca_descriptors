@@ -41,92 +41,119 @@ conda install -y -c conda-forge glib gtk3 pango mscorefonts
 
 ## Descriptors included
 
-- Numbering atoms: -> make it a python file
+### Orca descriptors:
 
-- Orca descriptor extraction (single output): Elementary block that takes a set of orca outputs for one calculation and generates a json file with extensive set of descriptors.
-- Orca calculation
+```X``` : atom label
 
-- Notebook:
-   input: specify a folder with conformers computed
-   - get the smiles
-   - check that the orca file converged
-   - get the atoms numbers for atomic descriptors
-   - extract descriptors from each conformer
-   - ensemble to get the overall descripotrs (_min, _max, _low_E, _Boltz)
+```Y``` : integer for the radius by default from 2.0 to 5.0 with a 0.5 increment.
 
-## Installation:
+**Fragment specific geometric descriptors:**
 
-conda create --name get_desc python==3.12
+- %Vbur:                    ```%Vbur_atom_X_radius_Y``` :white_check_mark:
+- atomic SASA:              ```SASA_X``` :white_check_mark:
+- Pyramidalization:         ```Pyr_X``` :white_check_mark:
+- Pyramidalization angle:   ```Pyr_angle_X``` :white_check_mark:
+- Sterimol_B5 (morfeus):              ```Sterimol_X_X_Bmax``` :white_check_mark: / do not match DescripyTor B5:```dist_X-X``` :x:
+- Sterimol_B1 (morfeus):              ```Sterimol_X_X_Bmin``` :white_check_mark: / do not match DescripyTor B1:```dist_X-X``` :x:
+- Sterimol_L (morfeus):               ```Sterimol_X_X_L``` :white_check_mark:
+- Bond length:              ```Bond_X_X``` :white_check_mark: / matches DescripyTor Bond length:```dist_X-X``` :white_check_mark:
+- Angles:                   ```Angle_X_X_X``` :white_check_mark: / matches DescripyTor Angles:```angle_X-X-X``` :white_check_mark:
+- Dihed:                    ```Dihed_X_X_X_X``` :white_check_mark:
+- Quadrants:
+- Octants:
 
-conda activate get_desc
+**Molecular geometric descriptors:**
 
-pip install pandas rdkit morfeus-ml dbstep ipykernel periodictable
+- SASA: ```SASA``` :white_check_mark:
+- SASA_Volume: ```SASA_Volume``` :white_check_mark:
+
+**Charges**
+
+- Mulliken: ```mulliken_X``` :white_check_mark:
+- Loewdin: ```loewdin_X``` :white_check_mark:
+- chelpG: ```chelpG_X``` :white_check_mark:
+- Hirshfeld: ```hirshfeld_X``` :white_check_mark:
+- cm5: ```cm5_X``` :white_check_mark:
+- NBO: ```npa_X_charge``` :white_check_mark: / matches Descripytor NBO charge: ```charge_NBO_X``` :white_check_mark:
+
+**Orbital Analysis**
+
+- NBO Core/Valence/Rydberg: ```npa_X_cor/valence/rydberg``` :white_check_mark:
+- NBO "Natural Occupancies": ```nao_X_Cor/Val/Ryd-ns/p/d/f_occupancy``` :white_check_mark:
+- Frontier orbital descriptors
+
+**Fukui coefficients (using Z charges)**
+Z can be mulliken, loewdin, chelpG, hirshfeld, cm5 or NBO.
+- fplus_Z_X: ```fplus_Z_X``` :white_check_mark:
+- fminus_Z_X: ```fminus_Z_X``` :white_check_mark:
+- fzero_Z_X: ```fzero_Z_X``` :white_check_mark:
+
+**NMR isotropic and anistropic**
+
+- isotropic shift: ```siso_X``` :white_check_mark:
+- anisotropic shift: ```saniso_X``` :white_check_mark:
+
+**Molecular descriptors:**
+
+- HOMO energy: ```HOMO_energy``` :white_check_mark:
+- LUMO energy: ```LUMO_energy``` :white_check_mark:
+- Enthalpy: ```Enthlapy``` :x:
+- GibbsFreeEnergy: ```GibbsFreeEnergy``` :x:
+- Vertical_Ionization_Potential: ```Vertical_Ionization_Potential``` :white_check_mark:
+- Vertical_Electron_Affinity: ```Vertical_Electron_Affinity``` :white_check_mark:
+- Hardness: ```Hardness``` :white_check_mark:
+- Electronegativity: ```Electronegativity``` :white_check_mark:
+- Electrophilicity: ```Electrophilicity``` :white_check_mark:
+
+### DescriPytor:
+
+**Fragment specific geometric descriptors:**
+
+- Sterimol_B1: ```B1_X-X``` :white_check_mark: / does not match Orca descriptors Sterimol_B1 ```Sterimol_X_X_Bmin```
+- Sterimol_B5: ```B5_X-X``` :white_check_mark: / does not match Orca descriptors Sterimol_B5 ```Sterimol_X_X_Bmax```
+- Sterimol_L: ```L_X-X``` :white_check_mark: / almost matches Orca descriptors Sterimol_L ```Sterimol_X_X_L```
+- Sterimol_B5_loc: ```loc_C5_X-X``` :white_check_mark:
+- Sterimol_B1-B5_angle: ```B1-B5_angle_X-X``` :white_check_mark:
+- Bond length:```dist_X-X``` :white_check_mark: / matches Orca descriptors Bond length:              ```Bond_X_X``` :white_check_mark:
+- Angles:```angle_X-X-X``` :white_check_mark: / matches Orca descriptors Angles:                   ```Angle_X_X_X``` :white_check_mark:
+
+**Charges**
+
+- NBO charge: ```charge_NBO_X``` :white_check_mark: / matches Orca descriptors NBO: ```npa_X_charge``` :white_check_mark: 
+
+**Vibrations**
+
+- Vibration frequency:```vib_freq_X-X``` :white_check_mark:
+- Vibration amplitude:```vib_amp_X-X``` :white_check_mark:
+
+**Dipoles**
+
+- Dipole norm:```dipole``` :white_check_mark:
+- Dipole x projection (after basis transformation):```dipole_x_X-X-X``` :white_check_mark:
+- Dipole y projection (after basis transformation):```dipole_y_X-X-X``` :white_check_mark:
+- Dipole z projection (after basis transformation):```dipole_z_X-X-X``` :white_check_mark:
 
 
-1. orca outputs:
-   - .out --> NBO
-   - optimization.xyz --> XYZ
-   - .json(s):
-   -     job2.json; --> SPE
-   -     job3.json; --> NBO
-   -     job4.json; --> NMR
-
-2. orca.out file:
-   task: extract NBO parameters:
-    - atomic descriptors
-    - bond descriptors
-
-3. job1.json:
-  task: get the xyz in a format that can be plugged into the Sigman property extratction 
+## Description of the ORCA jobs
 
 
-List of properties:
+## Remaining list of descriptors to be checked
+
+List of properties remaining:
 - [x] SCF Energy
 - [x] Enthalpy (need to check after rerunning to see if json parses right)
 - [x] Level of Theory
-- Polarizability    
--  [x] SASA
--  [x] Volume
-- [x] HOMO energy
-- [x] LUMO energy
-- [x] frontier orbitals
-
-  Atomic properties (1 Atom):
-  
-- NMR
-  - [x] aniso
-  - [x] iso
+- [x] Polarizability    
 
 - Charges
-  - [x] Mulliken
-  - [x] Loewdin
-  - [x] NPA
-  - [x] Hirshfeld
-  - [x] CM5 (NEEDS TO BE Checked)
-  - [x] ChelpG ESP
-- atomic dipole
-- visible volume
--  [x] accessible surface
+- [x] CM5 (NEEDS TO BE Checked)
+- [x] atomic dipole
+- [x] visible volume
   
   Bond properties (2 Atoms):
   
-- IR frequencies
-- [x] NBO bonds
--  [x] Sterimol L, B1, B5
--  [x] Bond distances
-- Bond occupancy?
-- Antibonding occupancy?
-- SASA metal? different for metals than other atoms?
-
-   Angles (3 Atoms):
-  
--  [x] angles
-- cone angles
-
-   4 Atoms:
-  
--  [x] pyramidalization
--  [x] dihedral angles
+- [x] Bond occupancy?
+- [x] Antibonding occupancy?
 
    5 Atoms:
 

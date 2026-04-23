@@ -25,11 +25,14 @@ def _truncate_to_orca_descriptors(path_value, repo_root):
     return s[idx:]
 
 
-def _find_nbo_out_file(calc_path, basename="singlepoint"):
+def _find_nbo_out_file(calc_path, basename="singlepoint", strict_basename=False):
     calc_path = Path(calc_path)
     preferred = calc_path / f"{basename}.out"
     if preferred.exists():
         return preferred
+
+    if strict_basename:
+        raise FileNotFoundError(f"Expected {preferred.name} in {calc_path}, but it was not found")
 
     # Fallbacks for folders where NBO output was written with a different basename.
     out_files = sorted(calc_path.glob("*.out"))
@@ -335,9 +338,50 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
             P.save_results_to_json() # save results to json file in same directory as xyz file for later use if needed
     return results_dict
 
-def get_redox_descriptors(df, atoms):
+def _extract_nbo_charges_for_reader(reader, calc_path, atom_map, basename="singlepoint", nbo_block_index=0):
+    """Extract NBO natural charges from the .out file and add them to reader.results."""
+    try:
+        out_file = _find_nbo_out_file(calc_path, basename=basename, strict_basename=False)
+        nbo_reader = od.NBOProps(out_file, block_index=nbo_block_index)
+        nbo_reader.get_NPA()
+        
+        npa_atoms = nbo_reader.results.get("natural_population_analysis", {}).get("atoms", {})
+        
+        for label, atom_idx in atom_map.items():
+            atom_props = _get_dict_value(npa_atoms, atom_idx)
+            if atom_props is not None:
+                charge = atom_props.get("charge")
+                reader.results[f"nbo_charge_{label}"] = charge
+                # Compatibility alias used elsewhere in the codebase.
+                reader.results[f"npa_{label}_charge"] = charge
+    except Exception:
+        # Silently skip if NBO extraction fails
+        pass
+
+
+def _normalize_nbo_block_map(nbo_block_map):
+    """Normalize NBO block map to 0-based indices.
+
+    If values look like 1-based user counting (all positive and none is 0),
+    convert by subtracting 1.
+    """
+    normalized = dict(nbo_block_map or {})
+    vals = [v for v in normalized.values() if v is not None]
+    if vals and all(int(v) >= 1 for v in vals) and all(int(v) != 0 for v in vals):
+        return {k: int(v) - 1 for k, v in normalized.items()}
+    return {k: int(v) for k, v in normalized.items()}
+
+
+def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=None):
     results_dict = {}
     repo_root = Path(__file__).resolve().parent.parent
+    if nbo_block_map is None:
+        # Default assumes one combined ORCA output with three NBO blocks ordered as:
+        # singlepoint (neutral), oxidation (cation), reduction (anion).
+        nbo_block_map = {"singlepoint": 0, "oxidation": 1, "reduction": 2}
+    else:
+        nbo_block_map = _normalize_nbo_block_map(nbo_block_map)
+
     for row in df.itertuples():
         calc_path = _resolve_calc_path(df.loc[row.Index, "path"], repo_root)
 
@@ -347,21 +391,42 @@ def get_redox_descriptors(df, atoms):
         neutral_reader.set_atoms(atom_map)
         neutral_reader.parse_property_json()
         neutral_reader.get_scfenergy()
-        neutral_reader.get_mulliken_charges()
+        neutral_reader.get_all_charges()
+        _extract_nbo_charges_for_reader(
+            neutral_reader,
+            calc_path,
+            atom_map,
+            "singlepoint",
+            nbo_block_index=int(nbo_block_map.get("singlepoint", 0)),
+        )
 
         cation_reader = od.OrcaReader(calc_path, basename="oxidation", out_file_path=None, nbo_block_index=0, nbo_job_number=None)
         cation_reader.set_atoms(atom_map)
         cation_reader.parse_property_json()
         cation_reader.get_scfenergy()
-        cation_reader.get_mulliken_charges()
+        cation_reader.get_all_charges()
+        _extract_nbo_charges_for_reader(
+            cation_reader,
+            calc_path,
+            atom_map,
+            "oxidation",
+            nbo_block_index=int(nbo_block_map.get("oxidation", 1)),
+        )
 
         anion_reader = od.OrcaReader(calc_path, basename="reduction", out_file_path=None, nbo_block_index=0, nbo_job_number=None)
         anion_reader.set_atoms(atom_map)
         anion_reader.parse_property_json()
         anion_reader.get_scfenergy()
-        anion_reader.get_mulliken_charges()
+        anion_reader.get_all_charges()
+        _extract_nbo_charges_for_reader(
+            anion_reader,
+            calc_path,
+            atom_map,
+            "reduction",
+            nbo_block_index=int(nbo_block_map.get("reduction", 2)),
+        )
 
-        P = od.RedoxSet(neutralReader=neutral_reader, cationReader=cation_reader, anionReader=anion_reader, descriptorPrefixes=["mulliken"])
+        P = od.RedoxSet(neutralReader=neutral_reader, cationReader=cation_reader, anionReader=anion_reader, descriptorPrefixes=descriptorPrefixes)
 
         results = P.aggregate()
         results['path'] = _truncate_to_orca_descriptors(calc_path, repo_root)
