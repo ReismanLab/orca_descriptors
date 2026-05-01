@@ -18,7 +18,7 @@ import desc_utils.orca_descriptors as od
 
 def get_sdf_from_xyz(path):
     for filename in os.listdir(path):
-        if filename.endswith(".xyz"):
+        if filename == "optimization.xyz":
             xyz_path = os.path.join(path, filename)
             base_name = os.path.splitext(filename)[0]
             sdf_path = os.path.join(path, f"{base_name}.sdf")
@@ -28,7 +28,7 @@ def get_sdf_from_xyz(path):
 def get_xyz_ids(path):
     with open(f"{path}/xyz_ids.txt", "w") as a:
         for filename in os.listdir(path):
-            if filename.endswith('.xyz'):
+            if filename == "optimization.xyz":
                 f = os.path.join(path, filename)
                 a.write(str(f) + os.linesep)
 
@@ -64,7 +64,7 @@ def get_ligand_core_type_xyz(path):
     return mols_5, mols_6, pd.DataFrame(results)
 
 def get_initial_atom_numbers(mol_dict5, mol_dict6, path):
-    substructure_5 = ['[H][Ni]1([H])[N]C=C[N]1', '[H][Ni]1([H])[N]CC[N]1', '[H][Ni]1([H])[#7]~[#6]~[#6]~[#7]1' ]
+    substructure_5 = ['[H][Ni]1([H])[N]C=C[N]1', '[H][Ni]1([H])[N]CC[N]1', '[H][Ni]1([H])~[#7]~[#6]~[#6]~[#7]~1' ]
     
     results5 = []
     results6 = []
@@ -93,7 +93,7 @@ def get_initial_atom_numbers(mol_dict5, mol_dict6, path):
                     results5.append({'xyz_name': ligID, 'ligand_type': 'core_5', 'H1': atoms_idx_in_substructure_rdkit[0], 'Ni': atoms_idx_in_substructure_rdkit[1], 'H2': atoms_idx_in_substructure_rdkit[2], 'N1': atoms_idx_in_substructure_rdkit[3], 'C1': atoms_idx_in_substructure_rdkit[4],'C3': atoms_idx_in_substructure_rdkit[5], 'C2': atoms_idx_in_substructure_rdkit[6], 'N2': atoms_idx_in_substructure_rdkit[7]}) #JULES: why is there C3 here?
                     break
 
-    substructure_6 = ['[H][Ni]1([H])[N]CCC[N]1', '[H][Ni]1([H])[N]CC=C[N]1', '[H][Ni]1([H])[#7]~[#6]~[#6]~[#6]~[#7]1']
+    substructure_6 = ['[H][Ni]1([H])[N]CCC[N]1', '[H][Ni]1([H])[N]CC=C[N]1', '[H][Ni]1([H])~[#7]~[#6]~[#6]~[#6]~[#7]~1']
     for key, value in mol_dict6.items():
         ligID = key
         mol = value
@@ -218,9 +218,11 @@ def find_pyox_ligands_and_renumber(df, path):
     pyox_ligands = []
     biox_ligands = []
     biim_ligands = []
-    bpy_ligands = []
-    phen_ligands = []
+    bpy_ligands  = []
     other_ligands = []
+    pyox_structure = Chem.MolFromSmarts('[#7]~1(~[#28]~2)~[#6](~[#6]3~[#7]2~[#6]~[#6]~[#8]~3)~[#6]~[#6]~[#6]~[#6]1')
+
+    # get ligand class attribution
     for i,row in df5.iterrows():
         xyz_name_base = row['xyz_name']
         N1_index = row['N1'] 
@@ -229,83 +231,86 @@ def find_pyox_ligands_and_renumber(df, path):
         C2_index = row['C2'] 
         
         sdf_name = xyz_name_base + '.sdf'
-        sdf_path = os.path.join(path,sdf_name)
+        sdf_path = os.path.join(path, sdf_name)
 
         try:
             suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
             mol = next((m for m in suppl if m is not None), None)
+            print(f" mol successfully read for {xyz_name_base}")
+            rw_mol = Chem.RWMol(mol)
+            # Remove the Ni-N bonds to avoid rdkit perceiving the metallacycle as 2 separate rings, which causes issues with the ring size detection. 
+            for atom in rw_mol.GetAtoms():
+                if atom.GetSymbol() == 'Ni':
+                    for neighbor in atom.GetNeighbors():
+                        if neighbor.GetAtomicNum() == 7:
+                            rw_mol.RemoveBond(atom.GetIdx(), neighbor.GetIdx())
+            mol = rw_mol.GetMol()
         except:
             print (f'bad input file for {sdf_path}')
+
+        # numbering logic: 
+        # If N1 and N2 are both in 5 membered rings but not 6 membered rings, it is biim/biox. 
+        # If N1 and N2 are both in 6 membered rings and also 5 membered rings, it is bpy/phen. 
+        # If N1 is in a 6 membered ring but N2 is not, it is pyox. 
+        # further classification:
+        # the carbon in the metallacycle can then be used to differentiate between biim/biox.    
         ringsize_N1_is_6 = mol.GetAtomWithIdx(N1_index).IsInRingSize(6)
         ringsize_N1_is_5 = mol.GetAtomWithIdx(N1_index).IsInRingSize(5)
-
         ringsize_N2_is_6 = mol.GetAtomWithIdx(N2_index).IsInRingSize(6)
         ringsize_N2_is_5 = mol.GetAtomWithIdx(N2_index).IsInRingSize(5)
 
-        if ringsize_N1_is_6 is False and ringsize_N2_is_6 is False and ringsize_N2_is_5 is True and ringsize_N1_is_5 is True: 
-            # if there are no 6 membered rings and core is 5 membered, it is biim/biox
-            for neighbor in mol.GetAtomWithIdx(C1_index).GetNeighbors(): #if carbon in mettalacycle is bonded to oxygen, it should be biox
-                if neighbor.GetAtomicNum() == 8: 
-                    biox_ligands.append(xyz_name_base)
-                    other_ligands.append(xyz_name_base)
-                    break
-            else: #if not bonded to oxygen, it should be biim
+        # bpy/phen:
+        if ringsize_N1_is_6 and ringsize_N2_is_6:
+            bpy_ligands.append(xyz_name_base)
+        # biox/biim:
+        elif ringsize_N1_is_5 and ringsize_N2_is_5:
+            if 8 in [neighbor.GetAtomicNum() for neighbor in mol.GetAtomWithIdx(C1_index).GetNeighbors()] or 8 in [neighbor.GetAtomicNum() for neighbor in mol.GetAtomWithIdx(C2_index).GetNeighbors()]: #if carbon in mettalacycle is bonded to oxygen, it should be biox
+                biox_ligands.append(xyz_name_base)
+            elif [neighbor.GetAtomicNum() for neighbor in mol.GetAtomWithIdx(C1_index).GetNeighbors()].count(7) == 2 or [neighbor.GetAtomicNum() for neighbor in mol.GetAtomWithIdx(C2_index).GetNeighbors()].count(7) == 2: #if carbon in mettalacycle is bonded to 2 nitrogens, it should be biim
                 biim_ligands.append(xyz_name_base)
-                other_ligands.append(xyz_name_base) 
-        elif ringsize_N1_is_6 is True and ringsize_N2_is_6 is True and ringsize_N2_is_5 is True and ringsize_N1_is_5 is True: 
-            # if N1 and N2 are each in a 6 membered ring and also a 5 membered core, it is a bpy or phen
-            ring_info = mol.GetRingInfo()
-            if ring_info.NumAtomRings(C1_index) > 2: # if carbon in mettalacycle is in more than 2 rings, it should be phen
-                phen_ligands.append(xyz_name_base)
+            else:
+                print(f"error in classification of {xyz_name_base}, needs manual review -- 2 5 membered rings but no oxygens or 2 nitrogens bonded to C1 or C2")
                 other_ligands.append(xyz_name_base)
-            else: # if not, it should be bpy
-                bpy_ligands.append(xyz_name_base)
-                other_ligands.append(xyz_name_base)
-        else:
-            # should be a pyox ligand
+        # pyox:
+        elif (ringsize_N1_is_6 and ringsize_N2_is_5) or (ringsize_N2_is_6 and ringsize_N1_is_5):
             pyox_ligands.append(xyz_name_base)
-    
-    #JULES: not sure if this is the best (or even a good way) to edit the dataframe, but it allowed for minimal change to the rest of the code
+        else:
+            print(f"error in classification of {xyz_name_base}, needs manual review -- does not fit any of the expected patterns for 5 membered rings")
+            print(f"ringsize_N1_is_6: {ringsize_N1_is_6}, ringsize_N1_is_5: {ringsize_N1_is_5}, ringsize_N2_is_6: {ringsize_N2_is_6}, ringsize_N2_is_5: {ringsize_N2_is_5}")
+            print(f"smiles: {Chem.MolToSmiles(mol)}")
+
+    # treat non-pyox ligands first, because they are C2-symmetric and don't require N1, N2 swapping.
     if len(other_ligands) > 0:
         other_lig_df = df5.loc[df5['xyz_name'].isin(other_ligands)].copy()
         other_lig_df.loc[other_lig_df['xyz_name'].isin(biox_ligands), 'ligand_class'] = 'biox'
         other_lig_df.loc[other_lig_df['xyz_name'].isin(biim_ligands), 'ligand_class'] = 'biim'
-        other_lig_df.loc[other_lig_df['xyz_name'].isin(bpy_ligands), 'ligand_class'] = 'bpy'
-        other_lig_df.loc[other_lig_df['xyz_name'].isin(phen_ligands), 'ligand_class'] = 'phen'
+        other_lig_df.loc[other_lig_df['xyz_name'].isin(bpy_ligands), 'ligand_class']  = 'bpy'
+
+    # pyox ligands
     if len(pyox_ligands) > 0:
         pyox_lig_df = df5.loc[df5['xyz_name'].isin(pyox_ligands)].copy()
         pyox_lig_df.loc[:, 'ligand_class'] = 'pyox'
-        for i,row in pyox_lig_df.iterrows():
-                xyz_name_base = row['xyz_name']
-                N1_index = row['N1'] 
-                N2_index = row['N2'] 
-                C1_index = row['C1']              
-                C2_index = row['C2'] 
+        pyox_lig_df.reset_index(inplace=True, drop=True)
+        for i, row in pyox_lig_df.iterrows():
+            xyz_name_base = row['xyz_name']
+            sdf_name = xyz_name_base + '.sdf'
+            sdf_path = os.path.join(path,sdf_name)
 
-                sdf_name = xyz_name_base + '.sdf'
-                sdf_path = os.path.join(path,sdf_name)
+            try:
+                suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
+                mol = next((m for m in suppl if m is not None), None)
+            except:
+                print (f'bad input file for {sdf_path}')
+            
+            sub_structure = mol.GetSubstructMatch(pyox_structure)
 
-                try:
-                    suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
-                    mol = next((m for m in suppl if m is not None), None)
-                except:
-                    print (f'bad input file for {sdf_path}')
-                
-                ringsize_N1_is_6 = mol.GetAtomWithIdx(N1_index).IsInRingSize(6)
-                ringsize_N1_is_5 = mol.GetAtomWithIdx(N1_index).IsInRingSize(5)
-
-                ringsize_N2_is_6 = mol.GetAtomWithIdx(N2_index).IsInRingSize(6)
-                ringsize_N2_is_5 = mol.GetAtomWithIdx(N2_index).IsInRingSize(5)
-                
-                if ringsize_N1_is_6 is True and ringsize_N2_is_5 is True and ringsize_N2_is_6 is False: # is N1 is already pyridine, df is correct as is 
-                    # write back corrected values (+1 because dataframe is 1-based) AVC: don't think this is needed anymore since we are in 0-based indexing now
-                    #pyox_lig_df.loc[i, 'N1'], pyox_lig_df.loc[i, 'N2']  = N1_index + 1, N2_index + 1
-                    #pyox_lig_df.loc[i, 'C1'], pyox_lig_df.loc[i, 'C2'] = C1_index + 1, C2_index + 1
-                    break
-
-                elif ringsize_N2_is_6 is True and ringsize_N1_is_5 is True and ringsize_N1_is_6 is False: #Need to swap N1 and N2 indexes
-                    pyox_lig_df.loc[i, 'N1'], pyox_lig_df.loc[i, 'N2'] = N2_index, N1_index 
-                    pyox_lig_df.loc[i, 'C1'], pyox_lig_df.loc[i, 'C2'] = C2_index, C1_index
+            if len(sub_structure) > 0:
+                pyox_lig_df.loc[i, 'N1'] = sub_structure[0]
+                pyox_lig_df.loc[i, 'N2'] = sub_structure[4]
+                pyox_lig_df.loc[i, 'C1'] = sub_structure[2]
+                pyox_lig_df.loc[i, 'C2'] = sub_structure[3]
+            else:
+                print("No match found for either PyOx structure. Atom numbers will not be adjusted.")
     
     if len(other_ligands) > 0 and len(pyox_ligands) > 0:
         df5_pyox_corrected = pd.concat([pyox_lig_df, other_lig_df], ignore_index=True)
@@ -396,7 +401,60 @@ def find_pyox_ligands_and_renumber(df, path):
     
     df_pyox_corrected = pd.concat([df5_pyox_corrected, df6_pyox_corrected], ignore_index=True)
     
+    print(f"shape of df after pyox correction is {df_pyox_corrected.shape}")
     return df_pyox_corrected
+
+def number_H1_and_H2(df, path):
+    """
+    numbers H1 and H2 for pyox ligands based on their position relative to the N atoms in the ligand. 
+    H1 is the hydrogen that is closer to N1
+    H2 is the hydrogen that is closer to N2
+    """
+    for i, row in df.iterrows():
+        xyz_name_base = row['xyz_name']
+        N1_index = row['N1'] 
+        N2_index = row['N2'] 
+        sdf_name = xyz_name_base + '.sdf'
+        sdf_path = os.path.join(path, sdf_name)
+
+        try:
+            suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
+            mol = next((m for m in suppl if m is not None), None)
+            print(f" mol successfully read for {xyz_name_base}")
+        except:
+            print (f'bad input file for {sdf_path}')
+
+        # Convert N indices from 1-based to 0-based for RDKit
+        N1_index_rdkit = N1_index - 1
+        N2_index_rdkit = N2_index - 1
+
+        # Find hydrogens bonded to Ni
+        Ni_index_rdkit = row['Ni'] - 1
+        Ni_atom = mol.GetAtomWithIdx(Ni_index_rdkit)
+        H_indices = [neighbor.GetIdx() for neighbor in Ni_atom.GetNeighbors() if neighbor.GetAtomicNum() == 1]
+
+        if len(H_indices) == 2:
+            # Calculate distances from each H to N1 and N2
+            conf = mol.GetConformer()
+            H1_pos = conf.GetAtomPosition(H_indices[0])
+            H2_pos = conf.GetAtomPosition(H_indices[1])
+            N1_pos = conf.GetAtomPosition(N1_index_rdkit)
+            N2_pos = conf.GetAtomPosition(N2_index_rdkit)
+            
+            dist_H1_N1 = H1_pos.Distance(N1_pos)
+            dist_H2_N1 = H2_pos.Distance(N1_pos)
+            
+            # Assign H1 to the hydrogen closer to N1
+            if dist_H1_N1 < dist_H2_N1:
+                df.loc[i, 'H1'] = H_indices[0] + 1
+                df.loc[i, 'H2'] = H_indices[1] + 1
+            else:
+                df.loc[i, 'H1'] = H_indices[1] + 1
+                df.loc[i, 'H2'] = H_indices[0] + 1
+        else:
+            print(f"Warning: Expected 2 hydrogens bonded to Ni for {xyz_name_base}, but found {len(H_indices)}. H1 and H2 will not be assigned.")
+
+    return df
 
 def get_smiles(df, path):
     df.insert(2, 'smiles', '') # add empty column for smiles
@@ -442,7 +500,7 @@ def get_scf_energy(df):
         
     return df
 
-def compile_final(path, index=1, subdirectory=True):
+def compile_final(path, indexing=1, subdirectory=True):
     if not path[-1] == '/':
         path = path + '/'
         print (f'added slash to end of path, new path is {path}')
@@ -453,10 +511,12 @@ def compile_final(path, index=1, subdirectory=True):
         ligand_initial_atom_numbering = get_initial_atom_numbers(mols_5, mols_6, path)
         ligand_consistent_atom_numbering = make_ensemble_atom_numbering_consistent(ligand_initial_atom_numbering)
         verify_atom_numbering(ligand_consistent_atom_numbering, path)
+        print(f"shape of df after making ensemble atom numbering consistent is {ligand_consistent_atom_numbering.shape}")
         df_pyox_corrected = find_pyox_ligands_and_renumber(ligand_consistent_atom_numbering, path)
+        df_pyox_corrected = number_H1_and_H2(df_pyox_corrected, path)
         df_with_smiles = get_smiles(df_pyox_corrected, path)
         df_with_energy = get_scf_energy(df_with_smiles)
-        if index == 1: #change zero indexing to 1-indexing if desired
+        if indexing == 1: #change zero indexing to 1-indexing if desired
             df_with_smiles['H1'] = df_with_smiles['H1'] + 1
             df_with_smiles['Ni'] = df_with_smiles['Ni'] + 1
             df_with_smiles['H2'] = df_with_smiles['H2'] + 1
@@ -475,6 +535,7 @@ def compile_final(path, index=1, subdirectory=True):
                         sub_path = sub_path + '/'
                     get_sdf_from_xyz(sub_path)
                     get_xyz_ids(sub_path)
+                    print(f"currently in directory {os.getcwd()}, processing subdirectory {sub_path}")
                     mols_5, mols_6, ligand_core_class = get_ligand_core_type_xyz(sub_path)
                     ligand_initial_atom_numbering = get_initial_atom_numbers(mols_5, mols_6, sub_path)
                     ligand_consistent_atom_numbering = make_ensemble_atom_numbering_consistent(ligand_initial_atom_numbering)
@@ -482,7 +543,7 @@ def compile_final(path, index=1, subdirectory=True):
                     df_pyox_corrected = find_pyox_ligands_and_renumber(ligand_consistent_atom_numbering, sub_path)
                     df_with_smiles = get_smiles(df_pyox_corrected, sub_path)
                     df_with_energy = get_scf_energy(df_with_smiles)
-                    if index == 1: #change zero indexing to 1-indexing if desired
+                    if indexing == 1: #change zero indexing to 1-indexing if desired
                         df_with_energy['H1'] = df_with_energy['H1'] + 1
                         df_with_energy['Ni'] = df_with_energy['Ni'] + 1
                         df_with_energy['H2'] = df_with_energy['H2'] + 1
