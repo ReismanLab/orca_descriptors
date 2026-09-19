@@ -1077,8 +1077,9 @@ class RedoxSet:
         return None
 
     def get_redox_properties(self):
-        self.results['Vertical_Ionization_Potential'] = self.neutralReader.results.get('SCF_energy') - self.cationReader.results.get('SCF_energy') if (self.neutralReader and self.cationReader and self.neutralReader.results.get('SCF_energy') is not None and self.cationReader.results.get('SCF_energy') is not None) else None
-        self.results['Vertical_Electron_Affinity'] = self.anionReader.results.get('SCF_energy') - self.neutralReader.results.get('SCF_energy') if (self.neutralReader and self.anionReader and self.anionReader.results.get('SCF_energy') is not None and self.neutralReader.results.get('SCF_energy') is not None) else None
+        # IP = E(cation) - E(neutral), EA = E(neutral) - E(anion): positive for bound electrons (Hartree).
+        self.results['Vertical_Ionization_Potential'] = self.cationReader.results.get('SCF_energy') - self.neutralReader.results.get('SCF_energy') if (self.neutralReader and self.cationReader and self.neutralReader.results.get('SCF_energy') is not None and self.cationReader.results.get('SCF_energy') is not None) else None
+        self.results['Vertical_Electron_Affinity'] = self.neutralReader.results.get('SCF_energy') - self.anionReader.results.get('SCF_energy') if (self.neutralReader and self.anionReader and self.anionReader.results.get('SCF_energy') is not None and self.neutralReader.results.get('SCF_energy') is not None) else None
         ip = self.results['Vertical_Ionization_Potential']
         ea = self.results['Vertical_Electron_Affinity']
         if ip is not None and ea is not None:
