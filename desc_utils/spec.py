@@ -55,6 +55,7 @@ ORCA_XYZ_TERM_ARITY: dict[str, int | None] = {
     "quadrants": None,  # >= 4 labels
 }
 ORCA_FAMILIES = ("xyz", "charges", "nbo", "redox")
+NBO_SPIN_CHOICES = ("alpha", "beta", "both")  # od.NBOProps.SPIN_CHOICES
 
 NUMBERING_BACKENDS = ("smarts", "manual", "first_n", "molalign")
 AGGREGATE_STATS = ("min", "max", "lowE", "boltz")
@@ -83,7 +84,9 @@ DEFAULTS: dict[str, Any] = {
         "dihedrals": [],
     },
     "orca_charges": {"basename": "singlepoint"},
-    "orca_nbo": {"basename": "singlepoint", "homo_lumo_rank_range": [1, 2, 3, 4, 5], "drop_analysis_info": True},
+    # `spin`: which NBO spin set to read from open-shell blocks (alpha | beta | both); see od.NBOProps.
+    "orca_nbo": {"basename": "singlepoint", "homo_lumo_rank_range": [1, 2, 3, 4, 5], "drop_analysis_info": True,
+                 "nbo_block_index": 0, "spin": "alpha"},
     "orca_redox": {"prefixes": ["cm5"], "nbo_block_map": {"singlepoint": 1, "oxidation": 2, "reduction": 3}},
     "aggregate": {
         "group_by": "inchi",
@@ -328,6 +331,8 @@ def _validate_orca(orca: dict | None, labels: set[str], problems: list[str]) -> 
         if not atoms:
             problems.append(f"descriptors.orca.{fam}.atoms must list at least one label")
         cfg["atoms"] = [t[0] for t in atoms]
+        if fam == "nbo" and cfg.get("spin") not in NBO_SPIN_CHOICES:
+            problems.append(f"descriptors.orca.nbo.spin must be one of {list(NBO_SPIN_CHOICES)}, got {cfg.get('spin')!r}")
         out[fam] = cfg
     return out
 

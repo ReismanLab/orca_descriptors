@@ -75,7 +75,10 @@ def extract_charges(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path) -> pd.D
 
 
 def extract_nbo(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path) -> pd.DataFrame:
-    res = de.get_all_nbo_properties(_with_repo_paths(df_num, repo_root), cfg["atoms"], basename=cfg.get("basename", "singlepoint"))
+    res = de.get_all_nbo_properties(
+        _with_repo_paths(df_num, repo_root), cfg["atoms"], basename=cfg.get("basename", "singlepoint"),
+        nbo_block_index=int(cfg.get("nbo_block_index", 0)), spin=cfg.get("spin", "alpha"),
+    )
     df = _to_frame(res, repo_root)
     return filter_nbo_rank_columns(df, cfg.get("homo_lumo_rank_range"), cfg.get("drop_analysis_info", True))
 

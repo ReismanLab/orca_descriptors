@@ -468,7 +468,7 @@ def get_all_charges(df, atoms, basename="singlepoint"):
         results_dict[row.Index] = results
     return results_dict
 
-def get_all_nbo_properties(df, atoms, basename="singlepoint"):
+def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0, spin="alpha"):
     """Extract all properties available from ``od.NBOProps`` into a flat dataframe.
 
     Parameters
@@ -482,6 +482,11 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint"):
     basename : str, optional
         Preferred output filename stem, by default ``singlepoint`` (expects
         ``<basename>.out`` inside each calculation folder).
+    nbo_block_index : int, optional
+        Which NBO block of the output to read (0-based), by default the first one.
+    spin : {"alpha", "beta", "both"}, optional
+        Spin set returned for open-shell NBO blocks, by default ``"alpha"``. See
+        ``od.NBOProps`` for the rationale; closed-shell blocks ignore it.
 
     Returns
     -------
@@ -502,7 +507,7 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint"):
 
         try:
             out_file = _find_nbo_out_file(calc_path, basename=basename)
-            nbo_reader = od.NBOProps(out_file)
+            nbo_reader = od.NBOProps(out_file, block_index=nbo_block_index, spin=spin)
 
             # Collect every descriptor family implemented by NBOProps.
             nbo_reader.get_NPA()

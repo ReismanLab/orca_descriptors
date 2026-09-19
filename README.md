@@ -109,7 +109,7 @@ A spec has these sections (defaults in `desc_utils/spec.py::DEFAULTS`):
 | `data` | `root` folder, `layout: molecule/conformer`, `conformer_glob`, `geometry_file`, `molecule_id_column`. |
 | `atoms` | Ordered map `label -> expected element` (`null` = any). Labels are the only way descriptors refer to atoms. |
 | `numbering` | `backend` (`smarts`, `manual`, `first_n`, `molalign`), `index_base`, per-backend block, optional `orient` rules, `annotators`, `smiles` mode, `energy` source. |
-| `descriptors.orca` | Four families with label lists: `xyz` (atoms, bonds, angles, dihedrals, quadrants, `vbur_radii`), `charges`, `nbo` (`homo_lumo_rank_range`), `redox` (Fukui `prefixes`, `nbo_block_map`). |
+| `descriptors.orca` | Four families with label lists: `xyz` (atoms, bonds, angles, dihedrals, quadrants, `vbur_radii`), `charges`, `nbo` (`homo_lumo_rank_range`, `nbo_block_index`, `spin`), `redox` (Fukui `prefixes`, `nbo_block_map`). |
 | `descriptors.descripytor` | DescriPyTor "Schema B" keys with label tuples: `charges`, `charge_diff`, `sterimol`, `bond_length`, `bond_angle`, `stretching_vibration`, `bending_vibration`, `dipole`, plus thresholds, `radii`, `drop_atoms`. |
 | `aggregate` | `group_by`, `energy_column`, `temperature_K`, `kB_hartree_per_K`, `stats`, `carry_first`. |
 | `filter` | Every option of `filter_numeric_descriptors`, plus `metal_label`. |
@@ -228,6 +228,8 @@ enabled in the shipped specs. :x: not implemented yet.
 - NBO / NPA charge: `npa_X_charge` :white_check_mark: / matches DescriPyTor `charge_NBO_X`
 
 **Orbital analysis** (NBO 7 block of `calcParam.out`, `descriptors.orca.nbo`)
+
+Open-shell (UHF/UKS) NBO blocks hold two complete analyses, one per spin, and NBO 7 only prints the closing `$CHOOSE` after the beta set. `NBOProps` reads a single spin set per block so every NBO number occurs once: `spin: alpha` (default, the set the parsers always returned), `spin: beta`, or `spin: both` (alpha rows then beta rows, each tagged with a `spin` key; duplicate NBO numbers then get `_2` column suffixes). Closed-shell blocks ignore the option. NPA charges and NAO occupancies always come from the spin-summed tables. `nbo_block_index` selects which NBO block of the output file is read (default 0, the first).
 
 - NPA populations: `npa_X_core`, `npa_X_valence`, `npa_X_rydberg`, `npa_X_total`, `npa_totals_*` :white_check_mark:
 - Natural atomic orbital occupancies: `nao_X_Cor-1s_occupancy`, `nao_X_Val-2p_occupancy`, `nao_X_Ryd-3d_occupancy`, ... (`_2`, `_3` suffixes for degenerate sets) :white_check_mark:

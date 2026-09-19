@@ -487,12 +487,50 @@ class OrcaReader:
         self.basename = original_basename
 
 class NBOProps:
-    """Properties from out file from Orca NBO calculations"""
+    """Properties from out file from Orca NBO calculations.
 
-    def __init__(self, path, block_index=0):
+    Parameters
+    ----------
+    path : str or Path
+        ORCA output holding one or more ``Now starting NBO`` ... ``returned from NBO`` blocks.
+    block_index : int
+        0-based index of the NBO block to read when the file has several (compound jobs).
+    spin : {"alpha", "beta", "both"}
+        Which spin set the orbital parsers return for an **open-shell** (UHF/UKS) block.
+
+        NBO 7 prints two complete NBO analyses for an open-shell block -- bond orbital
+        details, NHO directionality, second-order table and summary -- under
+        ``*** Alpha spin orbitals ***`` and ``*** Beta spin orbitals ***`` banners, and the
+        closing ``$CHOOSE`` / ``Checkpoint orbital`` lines only follow the beta set.
+        ``get_NBO_summary``, ``get_orbital_details``, ``get_NHO_directionality`` and
+        ``get_second_order_perturbation`` therefore work on the slice of the block that
+        belongs to the requested spin, so each ``nbo_num`` appears once (the column
+        flattener in ``desc_utils.data_extraction`` relies on that). Rows from an
+        open-shell block carry a ``'spin'`` key (``'alpha'`` / ``'beta'``); rows from a
+        closed-shell block do not.
+
+        * ``"alpha"`` (default): the alpha set only. This is what the detail, NHO and
+          second-order parsers have always returned for open-shell blocks, so existing
+          descriptor columns keep their meaning.
+        * ``"beta"``: the beta set only.
+        * ``"both"``: alpha rows followed by beta rows. Every ``nbo_num`` then occurs twice
+          and the flattener disambiguates the duplicates with ``_2`` column suffixes.
+
+        Closed-shell blocks have a single set and ignore this option. The natural
+        population analysis (``get_NPA`` / ``get_NAO``) always reads the spin-summed
+        tables that precede the spin banners, whatever ``spin`` is.
+    """
+
+    SPIN_CHOICES = ("alpha", "beta", "both")
+    _SPIN_BANNER_RE = re.compile(r"\*{5,}\s+(Alpha|Beta)\s+spin orbitals\s+\*{5,}")
+
+    def __init__(self, path, block_index=0, spin="alpha"):
         self.path = Path(path)
         self.content = self.path.read_text()
         self.nbo_block_index = int(block_index) if block_index is not None else 0
+        if spin not in self.SPIN_CHOICES:
+            raise ValueError(f"spin must be one of {self.SPIN_CHOICES}, got {spin!r}")
+        self.spin = spin
 
         nbo_start_marker = "Now starting NBO"
         nbo_end_marker = "*** returned from  NBO  program ***"
@@ -507,6 +545,7 @@ class NBOProps:
         if not self.nbo_blocks:
             print("Could not find any complete NBO section in the file")
             self.nbo_section = None
+            self.spin_sections = {}
         else:
             if not (0 <= self.nbo_block_index < len(self.nbo_blocks)):
                 print(
@@ -515,10 +554,13 @@ class NBOProps:
                 )
                 self.nbo_block_index = 0
             self.nbo_section = self.nbo_blocks[self.nbo_block_index]
+            self.spin_sections = self._split_spin_sections(self.nbo_section)
 
         self.results = {
             'source_file': str(self.path),
             'analysis_type': 'NBO 7.0',
+            # None for a closed-shell block, otherwise the `spin` option in force.
+            'spin': None if self.is_closed_shell else self.spin,
             'natural_population_analysis': {
                 'atoms': {},
                 'totals': {}
@@ -530,6 +572,52 @@ class NBOProps:
             'second_order_perturbation': {},
             'analysis_info': {}
         }
+
+    # ------------------------------------------------------------------ spin handling
+    @property
+    def is_closed_shell(self):
+        """True when the selected block has a single (spin-summed) NBO set."""
+        return None in self.spin_sections or not self.spin_sections
+
+    @classmethod
+    def _split_spin_sections(cls, section):
+        """Map spin label -> text of that spin's NBO analysis.
+
+        Closed-shell blocks give ``{None: section}``. Open-shell blocks give
+        ``{"alpha": ..., "beta": ...}``: the alpha slice runs from the alpha banner to the
+        beta banner, the beta slice from the beta banner to the end of the block.
+        """
+        banners = [(m.group(1).lower(), m.start()) for m in cls._SPIN_BANNER_RE.finditer(section)]
+        if not banners:
+            return {None: section}
+        out = {}
+        for i, (label, start) in enumerate(banners):
+            end = banners[i + 1][1] if i + 1 < len(banners) else len(section)
+            out[label] = section[start:end]
+        return out
+
+    def _orbital_sections(self):
+        """``(spin_label, text)`` pairs the orbital parsers read, honouring ``self.spin``."""
+        if None in self.spin_sections:
+            return [(None, self.spin_sections[None])]
+        wanted = ("alpha", "beta") if self.spin == "both" else (self.spin,)
+        missing = [s for s in wanted if s not in self.spin_sections]
+        if missing:
+            print(f"NBO block has no {', '.join(missing)} spin set")
+        return [(s, self.spin_sections[s]) for s in wanted if s in self.spin_sections]
+
+    @staticmethod
+    def _tag_spin(rows, spin_label):
+        if spin_label is not None:
+            for row in rows:
+                row['spin'] = spin_label
+        return rows
+
+    @staticmethod
+    def _find_end(text, start, markers):
+        """Offset of the earliest of ``markers`` at or after ``start`` (``len(text)`` if none)."""
+        positions = [pos for pos in (text.find(m, start) for m in markers) if pos != -1]
+        return min(positions) if positions else len(text)
 
     def get_NPA(self):
 
@@ -620,181 +708,199 @@ class NBOProps:
         else:
             print("Could not find NAO section")
 
+    # Anything that can follow one spin set's summary table. In an open-shell block the
+    # beta analysis (starting with its NPA / "(Occupancy)" header) follows the alpha
+    # summary directly and "$CHOOSE" only appears after the beta summary, so the slice
+    # must also stop at the next NBO header.
+    _SUMMARY_END_MARKERS = (
+        "$CHOOSE", "Checkpoint orbital", "NATURAL BOND ORBITALS (Summary):",
+        "(Occupancy)   Bond orbital / Coefficients / Hybrids", "spin orbitals",
+    )
+    # Occupancy is 0..2 (one leading digit) and energy is a signed decimal. Requiring both
+    # keeps NHO-directionality rows such as "45. BD ( 1) H  1-Ni  2   97.1   53.4 ..." out.
+    _SUMMARY_ROW_RE = re.compile(
+        r'\n\s+(\d+)\.\s+(BD\*?|LP|CR|RY)\s*\(\s*(\d+)\)\s+'
+        r'([A-Z][a-z]?\s+\d+(?:\s*-\s*[A-Z][a-z]?\s+\d+)*)\s+(\d\.\d+)\s+(-?\d+\.\d+)'
+    )
+
     def get_NBO_summary(self):
+        """Parse "NATURAL BOND ORBITALS (Summary):" into ``results['natural_bond_orbitals']``.
 
-        # Extract Natural Bond Orbital (NBO) summary
-        # Find the NBO summary subsection
-        nbo_summary_start   = self.nbo_section.find("NATURAL BOND ORBITALS (Summary):")
-        nbo_summary_end     = self.nbo_section.find("$CHOOSE", nbo_summary_start)
-        if nbo_summary_end  == -1:
-            nbo_summary_end = self.nbo_section.find("Checkpoint orbital", nbo_summary_start)
-
+        One dict per NBO row: ``nbo_num``, ``nbo_type``, ``bond_index``, ``atoms``,
+        ``occupancy``, ``energy`` (plus ``spin`` for open-shell blocks, see the class
+        docstring for which spin set(s) are returned).
+        """
+        header = "NATURAL BOND ORBITALS (Summary):"
         nbo_properties = []
+        found = False
+        for spin_label, section in self._orbital_sections():
+            start = section.find(header)
+            if start == -1:
+                continue
+            found = True
+            end = self._find_end(section, start + len(header), self._SUMMARY_END_MARKERS)
+            nbo_properties.extend(self._tag_spin(self._parse_summary_rows(section[start:end]), spin_label))
 
-        if nbo_summary_start != -1 and nbo_summary_end != -1:
-            nbo_summary_section = self.nbo_section[nbo_summary_start:nbo_summary_end]
-            
-            # Parse NBO summary lines
-            # Pattern: "    1. BD ( 1) H  1- H  2       2.00000    -0.43520"
-            # Use explicit atom pattern to avoid cutting off at last atom number
-            nbo_lines = re.findall(r'\n\s+(\d+)\.\s+(BD\*?|LP|CR|RY)\s*\(\s*(\d+)\)\s+([A-Z][a-z]?\s+\d+(?:\s*-\s*[A-Z][a-z]?\s+\d+)*)\s+([\d.]+)\s+([-\d.]+)', nbo_summary_section)
-            
-            for line_data in nbo_lines:
-                atoms_string = line_data[3].strip()
-                
-                # Parse atom numbers from atoms_string (e.g., "H  1- H  2" -> [1, 2] or "H  1" -> [1])
-                atom_numbers = []
-                atom_num_matches = re.findall(r'([A-Z][a-z]?)\s+(\d+)', atoms_string)
-                for atom_match in atom_num_matches:
-                    atom_numbers.append(int(atom_match[1]))
-                
-                nbo_properties.append({
-                    'nbo_num': int(line_data[0]),
-                    'nbo_type': line_data[1],
-                    'bond_index': int(line_data[2]),
-                    'atoms': atom_numbers,
-                    'occupancy': float(line_data[4]),
-                    'energy': float(line_data[5])
-                })
-
+        if found:
             self.results['natural_bond_orbitals'] = nbo_properties
-            
         else:
             print("Could not find NBO summary section")
 
-        
+    @classmethod
+    def _parse_summary_rows(cls, summary_section):
+        # Pattern: "    1. BD ( 1) H  1- H  2       2.00000    -0.43520"
+        rows = []
+        for line_data in cls._SUMMARY_ROW_RE.findall(summary_section):
+            # Parse atom numbers from atoms_string (e.g., "H  1- H  2" -> [1, 2] or "H  1" -> [1])
+            atom_numbers = [int(num) for _, num in re.findall(r'([A-Z][a-z]?)\s+(\d+)', line_data[3].strip())]
+            rows.append({
+                'nbo_num': int(line_data[0]),
+                'nbo_type': line_data[1],
+                'bond_index': int(line_data[2]),
+                'atoms': atom_numbers,
+                'occupancy': float(line_data[4]),
+                'energy': float(line_data[5])
+            })
+        return rows
+
+    _DETAIL_END_MARKERS = (
+        "NHO DIRECTIONALITY", "SECOND ORDER", "\n\n NATURAL BOND ORBITALS (Summary)",
+        "$CHOOSE", "Checkpoint orbital", "spin orbitals",
+    )
+
     def get_orbital_details(self):
-        # Extract detailed bond orbital properties with hybridization
-        # Find the detailed bond orbital subsection
-        bond_detail_start = self.nbo_section.find("(Occupancy)   Bond orbital / Coefficients / Hybrids")
-        lewis_start = self.nbo_section.find("---------------- Lewis", bond_detail_start)
-        non_lewis_start = self.nbo_section.find("---------------- non-Lewis", lewis_start)
-
+        """Parse the "(Occupancy)   Bond orbital / Coefficients / Hybrids" table
+        (Lewis and non-Lewis) into ``results['bond_orbital_details']``.
+        """
         bond_orbital_details = []
+        found = False
+        for spin_label, section in self._orbital_sections():
+            rows = self._parse_orbital_details(section)
+            if rows is None:
+                continue
+            found = True
+            bond_orbital_details.extend(self._tag_spin(rows, spin_label))
 
-        if bond_detail_start != -1 and lewis_start != -1:
-            # Determine the end of the section we want to parse (Lewis section only, or both)
-            # For now, let's get both Lewis and non-Lewis
-            if non_lewis_start != -1:
-                # Get up to NHO DIRECTIONALITY or SECOND ORDER
-                end_markers = ["NHO DIRECTIONALITY", "SECOND ORDER", "\n\n NATURAL BOND ORBITALS (Summary)"]
-                detail_end = -1
-                for marker in end_markers:
-                    pos = self.nbo_section.find(marker, non_lewis_start)
-                    if pos != -1:
-                        detail_end = pos
-                        break
-            else:
-                detail_end = -1
-                end_markers = ["NHO DIRECTIONALITY", "SECOND ORDER", "\n\n NATURAL BOND ORBITALS (Summary)"]
-                for marker in end_markers:
-                    pos = self.nbo_section.find(marker, lewis_start)
-                    if pos != -1:
-                        detail_end = pos
-                        break
-            
-            if detail_end != -1:
-                bond_detail_section = self.nbo_section[lewis_start:detail_end]
-                
-                # Split into individual bond entries
-                # Each bond starts with a pattern like "   1. (2.00000) BD ( 1) H  1- H  2"
-                bond_entries = re.finditer(r'\n\s+(\d+)\.\s+\(([\d.]+)\)\s+(BD\*?|LP|CR|RY)\s*\(\s*(\d+)\)\s+(.*?)(?=\n\s+\d+\.\s+\(|\Z)', bond_detail_section, re.DOTALL)
-                
-                for bond_entry in bond_entries:
-                    bond_num = int(bond_entry.group(1))
-                    occupancy = float(bond_entry.group(2))
-                    bond_type = bond_entry.group(3)
-                    bond_index = int(bond_entry.group(4))
-                    atoms_and_contrib = bond_entry.group(5)
-                    
-                    # Extract atom information from first line
-                    atoms_line_match = re.match(r'(.*?)(?=\n|\()', atoms_and_contrib)
-                    atoms_line = atoms_line_match.group(1).strip() if atoms_line_match else ""
-                    
-                    # Parse atom numbers from atoms_line (e.g., "H  1- H  2" -> [1, 2])
-                    atom_numbers = []
-                    atom_num_matches = re.findall(r'([A-Z][a-z]?)\s+(\d+)', atoms_line)
-                    for atom_match in atom_num_matches:
-                        atom_numbers.append(int(atom_match[1]))
-                    
-                    bond_info = {
-                        'bond_num': bond_num,
-                        'occupancy': occupancy,
-                        'bond_type': bond_type,
-                        'bond_index': bond_index,
-                        'atoms': atom_numbers,
-                        'contributions': []
-                    }
-                    
-                    # Look for atomic contributions
-                    # Pattern: "               ( 50.00%)   0.7071* H  1 s( 99.91%)p 0.00(  0.09%)"
-                    contrib_pattern = r'\(\s*([\d.]+)%\)\s+([-\d.]+)\*\s+([A-Z][a-z]?)\s+(\d+)\s+s\(\s*([\d.]+)%\)p\s*([\d.]+)\(\s*([\d.]+)%\)'
-                    contributions = re.finditer(contrib_pattern, atoms_and_contrib)
-                    
-                    for contrib in contributions:
-                        bond_info['contributions'].append({
-                            'percentage': float(contrib.group(1)),
-                            'coefficient': float(contrib.group(2)),
-                            'atom': contrib.group(3),
-                            'atom_num': int(contrib.group(4)),
-                            's_percent': float(contrib.group(5)),
-                            'p_power': float(contrib.group(6)),
-                            'p_percent': float(contrib.group(7))
-                        })
-                    
-                    bond_orbital_details.append(bond_info)
-                self.results['bond_orbital_details'] = bond_orbital_details
-            else:
-                print("Could not determine end of bond detail section")
+        if found:
+            self.results['bond_orbital_details'] = bond_orbital_details
         else:
             print("Could not find bond orbital detail section")
 
+    @classmethod
+    def _parse_orbital_details(cls, section):
+        bond_detail_start = section.find("(Occupancy)   Bond orbital / Coefficients / Hybrids")
+        lewis_start = section.find("---------------- Lewis", bond_detail_start)
+        if bond_detail_start == -1 or lewis_start == -1:
+            return None
+        detail_end = cls._find_end(section, lewis_start, cls._DETAIL_END_MARKERS)
+        bond_detail_section = section[lewis_start:detail_end]
+
+        bond_orbital_details = []
+        # Split into individual bond entries
+        # Each bond starts with a pattern like "   1. (2.00000) BD ( 1) H  1- H  2"
+        bond_entries = re.finditer(r'\n\s+(\d+)\.\s+\(([\d.]+)\)\s+(BD\*?|LP|CR|RY)\s*\(\s*(\d+)\)\s+(.*?)(?=\n\s+\d+\.\s+\(|\Z)', bond_detail_section, re.DOTALL)
+
+        for bond_entry in bond_entries:
+            bond_num = int(bond_entry.group(1))
+            occupancy = float(bond_entry.group(2))
+            bond_type = bond_entry.group(3)
+            bond_index = int(bond_entry.group(4))
+            atoms_and_contrib = bond_entry.group(5)
+
+            # Extract atom information from first line
+            atoms_line_match = re.match(r'(.*?)(?=\n|\()', atoms_and_contrib)
+            atoms_line = atoms_line_match.group(1).strip() if atoms_line_match else ""
+
+            # Parse atom numbers from atoms_line (e.g., "H  1- H  2" -> [1, 2])
+            atom_numbers = []
+            atom_num_matches = re.findall(r'([A-Z][a-z]?)\s+(\d+)', atoms_line)
+            for atom_match in atom_num_matches:
+                atom_numbers.append(int(atom_match[1]))
+
+            bond_info = {
+                'bond_num': bond_num,
+                'occupancy': occupancy,
+                'bond_type': bond_type,
+                'bond_index': bond_index,
+                'atoms': atom_numbers,
+                'contributions': []
+            }
+
+            # Look for atomic contributions
+            # Pattern: "               ( 50.00%)   0.7071* H  1 s( 99.91%)p 0.00(  0.09%)"
+            contrib_pattern = r'\(\s*([\d.]+)%\)\s+([-\d.]+)\*\s+([A-Z][a-z]?)\s+(\d+)\s+s\(\s*([\d.]+)%\)p\s*([\d.]+)\(\s*([\d.]+)%\)'
+            contributions = re.finditer(contrib_pattern, atoms_and_contrib)
+
+            for contrib in contributions:
+                bond_info['contributions'].append({
+                    'percentage': float(contrib.group(1)),
+                    'coefficient': float(contrib.group(2)),
+                    'atom': contrib.group(3),
+                    'atom_num': int(contrib.group(4)),
+                    's_percent': float(contrib.group(5)),
+                    'p_power': float(contrib.group(6)),
+                    'p_percent': float(contrib.group(7))
+                })
+
+            bond_orbital_details.append(bond_info)
+        return bond_orbital_details
+
+    _NHO_END_MARKERS = (
+        "\n SECOND ORDER PERTURBATION", "\n\n NATURAL BOND ORBITALS",
+        "$CHOOSE", "Checkpoint orbital", "spin orbitals",
+    )
+
     def get_NHO_directionality(self):
-        # Extract NHO Directionality and Bond Bending
-        # Find the directionality subsection
-        dir_start = self.nbo_section.find("NHO DIRECTIONALITY AND BOND BENDING")
-        dir_end = self.nbo_section.find("\n SECOND ORDER PERTURBATION", dir_start)
-        if dir_end == -1:
-            dir_end = self.nbo_section.find("\n\n NATURAL BOND ORBITALS", dir_start)
-
+        """Parse "NHO DIRECTIONALITY AND BOND BENDING" into ``results['nho_directionality']``."""
         nbo_directionality = []
+        found = False
+        for spin_label, section in self._orbital_sections():
+            dir_start = section.find("NHO DIRECTIONALITY AND BOND BENDING")
+            if dir_start == -1:
+                continue
+            found = True
+            dir_end = self._find_end(section, dir_start, self._NHO_END_MARKERS)
+            dir_section = section[dir_start:dir_end]
 
-        if dir_start != -1 and dir_end != -1:
-            dir_section = self.nbo_section[dir_start:dir_end]
-            
             # Check if there are entries exceeding thresholds
             if "None exceeding thresholds" in dir_section:
                 print("NHO Directionality: No entries exceeding thresholds (all bonds are linear)")
-            else:
-                # Parse directionality entries if they exist
-                # Match atoms as: one or more occurrences of (AtomSymbol  Number) with optional dash/space separator
-                # "  32. BD ( 1) N  4- C  5   78.9   53.4    79.7   50.0   3.5   102.2  234.7   1.6"
-                dir_lines = re.findall(r'\n\s+(\d+)\.\s+(BD|LP|CR)\s*\(\s*(\d+)\)\s+([A-Z][a-z]?\s+\d+(?:\s*-\s*[A-Z][a-z]?\s+\d+)*)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)', dir_section)
-                
-                for line_data in dir_lines:
-                    atoms_string = line_data[3].strip()
-                    
-                    # Parse atom numbers from atoms_string (e.g., "N  4- C  5" -> [4, 5] or "Ni  2" -> [2])
-                    atom_numbers = []
-                    atom_num_matches = re.findall(r'([A-Z][a-z]?)\s+(\d+)', atoms_string)
-                    for atom_match in atom_num_matches:
-                        atom_numbers.append(int(atom_match[1]))
-                    
-                    nbo_directionality.append({
-                        'nbo_num': int(line_data[0]),
-                        'nbo_type': line_data[1],
-                        'bond_index': int(line_data[2]),
-                        'atoms': atom_numbers,  # Now a list of atom numbers
-                        'line_theta': float(line_data[4]) if line_data[4] != '--' else None,
-                        'line_phi': float(line_data[5]) if line_data[5] != '--' else None,
-                        'hybrid_theta': float(line_data[6]) if line_data[6] != '--' else None,
-                        'hybrid_phi': float(line_data[7]) if line_data[7] != '--' else None,
-                        'deviation': float(line_data[8]) if line_data[8] != '--' else None
-                    })
-                
+                continue
+            nbo_directionality.extend(self._tag_spin(self._parse_NHO_rows(dir_section), spin_label))
+
+        if found:
             self.results['nho_directionality'] = nbo_directionality
         else:
             print("Could not find NHO Directionality section")
+
+    @staticmethod
+    def _parse_NHO_rows(dir_section):
+        # Match atoms as: one or more occurrences of (AtomSymbol  Number) with optional dash/space separator
+        # "  32. BD ( 1) N  4- C  5   78.9   53.4    79.7   50.0   3.5   102.2  234.7   1.6"
+        dir_lines = re.findall(r'\n\s+(\d+)\.\s+(BD|LP|CR)\s*\(\s*(\d+)\)\s+([A-Z][a-z]?\s+\d+(?:\s*-\s*[A-Z][a-z]?\s+\d+)*)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)', dir_section)
+
+        rows = []
+        for line_data in dir_lines:
+            atoms_string = line_data[3].strip()
+
+            # Parse atom numbers from atoms_string (e.g., "N  4- C  5" -> [4, 5] or "Ni  2" -> [2])
+            atom_numbers = []
+            atom_num_matches = re.findall(r'([A-Z][a-z]?)\s+(\d+)', atoms_string)
+            for atom_match in atom_num_matches:
+                atom_numbers.append(int(atom_match[1]))
+
+            rows.append({
+                'nbo_num': int(line_data[0]),
+                'nbo_type': line_data[1],
+                'bond_index': int(line_data[2]),
+                'atoms': atom_numbers,  # Now a list of atom numbers
+                'line_theta': float(line_data[4]) if line_data[4] != '--' else None,
+                'line_phi': float(line_data[5]) if line_data[5] != '--' else None,
+                'hybrid_theta': float(line_data[6]) if line_data[6] != '--' else None,
+                'hybrid_phi': float(line_data[7]) if line_data[7] != '--' else None,
+                'deviation': float(line_data[8]) if line_data[8] != '--' else None
+            })
+        return rows
 
     # One donor/acceptor row of the second-order perturbation table. Two layouts are
     # accepted:
@@ -810,6 +916,10 @@ class NBOProps:
         + r"\s+" + _SOP_NUM + r"\s+" + _SOP_NUM + r"\s+" + _SOP_NUM + r"\s*$"
     )
     _SOP_UNIT_RE = re.compile(r"^\s*(?:within unit\s+(\d+)|from unit\s+(\d+)\s+to unit\s+(\d+))\s*$")
+    _SOP_END_MARKERS = (
+        "\n NATURAL BOND ORBITALS (Summary)", "\n $CHOOSE", "Checkpoint orbital",
+        "(Occupancy)   Bond orbital / Coefficients / Hybrids", "spin orbitals",
+    )
 
     def get_second_order_perturbation(self):
         """Parse "SECOND ORDER PERTURBATION THEORY ANALYSIS OF FOCK MATRIX IN NBO BASIS".
@@ -820,25 +930,33 @@ class NBOProps:
         number in parentheses), ``*_atoms`` (e.g. ``"H  1-Ni  2"``), ``*_unit``
         (molecular unit, ``None`` if not printed), ``e2_energy`` (kcal/mol),
         ``energy_diff`` (E(j)-E(i), a.u.) and ``fock_element`` (F(i,j), a.u.).
+        Open-shell rows also carry ``spin`` (see the class docstring).
         """
-        second_start = self.nbo_section.find("SECOND ORDER PERTURBATION THEORY ANALYSIS")
-        if second_start == -1:
+        second_order_perturbation = []
+        found = False
+        for spin_label, section in self._orbital_sections():
+            second_start = section.find("SECOND ORDER PERTURBATION THEORY ANALYSIS")
+            if second_start == -1:
+                continue
+            found = True
+            second_end = self._find_end(section, second_start, self._SOP_END_MARKERS)
+            second_section = section[second_start:second_end]
+            rows = self._parse_second_order_rows(second_section)
+            if not rows and "None above threshold" not in second_section:
+                print("Second-Order Perturbation: section found but no donor/acceptor rows could be parsed")
+            second_order_perturbation.extend(self._tag_spin(rows, spin_label))
+
+        if not found:
             print("Could not find Second-Order Perturbation section")
             return
+        self.results['second_order_perturbation'] = second_order_perturbation
 
-        second_end = -1
-        for marker in ("\n NATURAL BOND ORBITALS (Summary)", "\n $CHOOSE", "Checkpoint orbital"):
-            second_end = self.nbo_section.find(marker, second_start)
-            if second_end != -1:
-                break
-        if second_end == -1:
-            second_end = len(self.nbo_section)
-        second_section = self.nbo_section[second_start:second_end]
-
-        second_order_perturbation = []
+    @classmethod
+    def _parse_second_order_rows(cls, second_section):
+        rows = []
         donor_unit = acceptor_unit = None
         for line in second_section.splitlines():
-            unit_match = self._SOP_UNIT_RE.match(line)
+            unit_match = cls._SOP_UNIT_RE.match(line)
             if unit_match:
                 if unit_match.group(1) is not None:
                     donor_unit = acceptor_unit = int(unit_match.group(1))
@@ -846,11 +964,11 @@ class NBOProps:
                     donor_unit, acceptor_unit = int(unit_match.group(2)), int(unit_match.group(3))
                 continue
 
-            m = self._SOP_LINE_RE.match(line)
+            m = cls._SOP_LINE_RE.match(line)
             if not m:
                 continue
             g = m.groups()
-            second_order_perturbation.append({
+            rows.append({
                 'donor_nbo_num': int(g[0]) if g[0] is not None else None,
                 'donor_type': g[1],
                 'donor_index': int(g[2]),
@@ -865,11 +983,7 @@ class NBOProps:
                 'energy_diff': float(g[9]),    # E(j) - E(i) in a.u.
                 'fock_element': float(g[10]),  # F(i,j) in a.u.
             })
-
-        if not second_order_perturbation and "None above threshold" not in second_section:
-            print("Second-Order Perturbation: section found but no donor/acceptor rows could be parsed")
-
-        self.results['second_order_perturbation'] = second_order_perturbation
+        return rows
 
     def get_cycle_info(self):
         # Extract NBO Analysis Cycle Information
