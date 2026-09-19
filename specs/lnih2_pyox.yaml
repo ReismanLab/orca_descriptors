@@ -1,0 +1,146 @@
+# LNiH2 / PyOx ligand library (bidentate N,N ligands on a Ni dihydride core).
+# Reproduces atom_numbering_results.csv and the 20260423 descriptor CSV.
+#
+# Conventions
+#   - Every SMARTS must be quoted: '#' starts a YAML comment, so [#7] would be cut off.
+#   - Atom terms are written with labels from `atoms`; order matters where the descriptor
+#     is directional (Sterimol axis, dipole frame, angles).
+#   - Indices in the numbering table are 1-based (DescriPyTor / Gaussian convention).
+name: LNiH2_library_001_to_download_2026_03_24
+spec_version: 1
+
+data:
+  root: DATA/LNiH2_library_001_to_download_2026_03_24
+  layout: molecule/conformer          # <root>/<molecule_id>/<conformer>/
+  conformer_glob: "conf_*"
+  geometry_file: optimization.xyz
+  molecule_id_column: inchi           # the molecule folder name is an InChIKey
+
+atoms:                                # order = column order in the numbering table
+  H1: H
+  Ni: Ni
+  H2: H
+  N1: N
+  C1: C
+  C2: C
+  N2: N
+
+numbering:
+  backend: smarts
+  index_base: 1
+  consistency: per_molecule           # flag molecules whose conformers disagree
+  smarts:
+    match_selection: first            # first RDKit match (legacy behaviour); or lowest_indices
+    stages:
+      # Stage 1: dihydride core. The three patterns are the legacy alternatives, tried in order;
+      # the first one that matches is used. Positions: 0 H, 1 Ni, 2 H, 3 N, 4 C, 5 C, 6 N.
+      - name: core_5
+        smarts:
+          - "[H][Ni]1([H])[N]C=C[N]1"
+          - "[H][Ni]1([H])[N]CC[N]1"
+          - "[H][Ni]1([H])~[#7]~[#6]~[#6]~[#7]~1"
+        roles: {H1: 0, Ni: 1, H2: 2, N1: 3, C1: 4, C2: 5, N2: 6}
+        required: true
+      # Stage 2: PyOx orientation. Overrides N1/C1/C2/N2 so that N1 is the pyridine nitrogen
+      # and N2 the oxazoline nitrogen. Not required: non-PyOx ligands keep stage-1 labels.
+      - name: pyox_orient
+        smarts: "[#7]~1(~[#28]~2)~[#6](~[#6]3~[#7]2~[#6]~[#6]~[#8]~3)~[#6]~[#6]~[#6]~[#6]1"
+        roles: {N1: 0, C1: 2, C2: 3, N2: 4}
+        required: false
+  orient: []                          # e.g. {rule: closest, move: [H1, H2], to: [N1, N2]}
+  annotators: [lnih2_ligand_class]    # adds ligand_type (core_5/core_6) and ligand_class (pyox, biox, ...)
+  smiles:
+    mode: strip_atoms                 # SMILES of the largest fragment after removing `strip`
+    strip: [Ni]
+  energy:
+    basename: singlepoint             # <basename>.property.json -> SCF energy
+    column: SCF_energy
+
+descriptors:
+  orca:                               # ORCA property JSON / NBO output / morfeus on optimization.xyz
+    xyz:
+      atoms: [H1, H2, C1, C2, N1, N2, Ni]
+      bonds: &bonds
+        - [C1, N1]
+        - [N1, C1]
+        - [C2, N2]
+        - [N2, C2]
+        - [Ni, N1]
+        - [Ni, N2]
+        - [Ni, H1]
+        - [Ni, H2]
+        - [C1, C2]
+        - [C2, C1]
+      angles: &angles
+        - [H2, Ni, H1]
+        - [Ni, N1, C1]
+        - [Ni, N2, C2]
+        - [N1, C1, C2]
+        - [N2, C2, C1]
+        - [N1, Ni, N2]
+        - [C1, Ni, C2]
+      dihedrals:
+        - [N1, C1, C2, N2]
+        - [C1, C2, N2, Ni]
+        - [C2, C1, N1, Ni]
+      quadrants: []
+      vbur_radii: [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+      use_cached_json: true           # reuse <conf>/xyz.json when present
+    charges:
+      atoms: [H1, H2, C1, C2, N1, N2, Ni]
+      basename: singlepoint
+    nbo:
+      atoms: [H1, H2, C1, C2, N1, N2, Ni]
+      basename: singlepoint
+      homo_lumo_rank_range: [1, 2, 3, 4, 5]   # keep _hmN_/_lpN_ columns only for these N
+      drop_analysis_info: true
+    redox:
+      atoms: [H1, H2, C1, C2, N1, N2, Ni]
+      prefixes: [nbo_charge, cm5]
+      nbo_block_map: {singlepoint: 1, oxidation: 2, reduction: 3}   # 1-based NBO block per job
+  descripytor:                        # DescriPyTor `Molecules` families (Schema B key names)
+    input: {kind: feather}
+    charges: [H1, H2, C1, C2, N1, N2, Ni]
+    sterimol: *bonds
+    bond_length: *bonds
+    stretching_vibration: *bonds
+    charge_diff: *bonds
+    stretch_threshold: 1400
+    upper_stretch_threshold: 3500
+    bending_vibration:
+      - [H1, H2]
+      - [N1, C2]
+      - [N2, C1]
+    bend_threshold: 1300
+    dipole:
+      - [Ni, N2, N1]                  # origin, y-axis atom, xy-plane atom
+    bond_angle: *angles
+    radii: CPK
+    drop_atoms: []
+
+aggregate:
+  group_by: inchi
+  energy_column: SCF_energy
+  temperature_K: 298.15
+  kB_hartree_per_K: 3.166811563e-6
+  stats: [min, max, lowE, boltz]
+  carry_first: [smiles, ligand_class]
+
+filter:
+  enabled: true
+  remove_low_occupancy_nbo: true
+  occupancy_boltz_threshold: 0.001
+  corr_threshold: 0.95
+  corr_pruning_mode: bridge_star_centers
+  ratio_threshold: 0.01
+  orbital_filter: remove rydbergs
+  cor_orbital_filter: remove cor
+  metal_label: Ni                     # keeps metal Rydberg columns; null disables the metal rules
+  ni_orbital_filter: remove 4f rydbergs
+  nmr_filter: remove aniso
+  bond_analysis_filter: remove phi theta
+
+output:
+  numbering_csv: atom_numbering_results.csv
+  per_conformer_csv: combined_descriptors.csv
+  aggregated_csv: "{date}_{name}_descriptors.csv"

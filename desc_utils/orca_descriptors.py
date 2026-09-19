@@ -796,46 +796,80 @@ class NBOProps:
         else:
             print("Could not find NHO Directionality section")
 
+    # One donor/acceptor row of the second-order perturbation table. Two layouts are
+    # accepted:
+    #   NBO 7 (ORCA 6.x):  "  46. BD ( 1) H  1-Ni  2      88. BD*( 1)Ni  2- H  3     29.34    0.38   0.095"
+    #   legacy / NBO 3-6:  "BD ( 1) H  1- H  2   ->  BD*( 1) H  3- H  4      12.34     0.56     0.078"
+    # i.e. an optional NBO number before each orbital, and an optional "->" between them.
+    _SOP_TYPE = r"(BD\*?|LP\*?|CR|RY\*?|LV|3C\*?|3Cn)"
+    _SOP_ATOMS = r"([A-Z][a-z]?\s*\d+(?:\s*-\s*[A-Z][a-z]?\s*\d+)*)"
+    _SOP_NUM = r"(-?\d+\.\d+)"
+    _SOP_LINE_RE = re.compile(
+        r"^\s*(?:(\d+)\.\s*)?" + _SOP_TYPE + r"\s*\(\s*(\d+)\)\s*" + _SOP_ATOMS
+        + r"\s+(?:->\s+)?(?:(\d+)\.\s*)?" + _SOP_TYPE + r"\s*\(\s*(\d+)\)\s*" + _SOP_ATOMS
+        + r"\s+" + _SOP_NUM + r"\s+" + _SOP_NUM + r"\s+" + _SOP_NUM + r"\s*$"
+    )
+    _SOP_UNIT_RE = re.compile(r"^\s*(?:within unit\s+(\d+)|from unit\s+(\d+)\s+to unit\s+(\d+))\s*$")
+
     def get_second_order_perturbation(self):
-        # Extract Second-Order Perturbation Theory Analysis
-        # Find the second-order perturbation subsection
+        """Parse "SECOND ORDER PERTURBATION THEORY ANALYSIS OF FOCK MATRIX IN NBO BASIS".
+
+        Fills ``self.results['second_order_perturbation']`` with one dict per donor ->
+        acceptor row: ``donor_nbo_num``/``acceptor_nbo_num`` (NBO index in the summary
+        table, ``None`` for legacy outputs without it), ``*_type``, ``*_index`` (the
+        number in parentheses), ``*_atoms`` (e.g. ``"H  1-Ni  2"``), ``*_unit``
+        (molecular unit, ``None`` if not printed), ``e2_energy`` (kcal/mol),
+        ``energy_diff`` (E(j)-E(i), a.u.) and ``fock_element`` (F(i,j), a.u.).
+        """
         second_start = self.nbo_section.find("SECOND ORDER PERTURBATION THEORY ANALYSIS")
-        second_end = self.nbo_section.find("\n\n NATURAL BOND ORBITALS (Summary):", second_start)
+        if second_start == -1:
+            print("Could not find Second-Order Perturbation section")
+            return
+
+        second_end = -1
+        for marker in ("\n NATURAL BOND ORBITALS (Summary)", "\n $CHOOSE", "Checkpoint orbital"):
+            second_end = self.nbo_section.find(marker, second_start)
+            if second_end != -1:
+                break
         if second_end == -1:
-            second_end = self.nbo_section.find("\n $CHOOSE", second_start)
+            second_end = len(self.nbo_section)
+        second_section = self.nbo_section[second_start:second_end]
 
         second_order_perturbation = []
+        donor_unit = acceptor_unit = None
+        for line in second_section.splitlines():
+            unit_match = self._SOP_UNIT_RE.match(line)
+            if unit_match:
+                if unit_match.group(1) is not None:
+                    donor_unit = acceptor_unit = int(unit_match.group(1))
+                else:
+                    donor_unit, acceptor_unit = int(unit_match.group(2)), int(unit_match.group(3))
+                continue
 
-        if second_start != -1 and second_end != -1:
-            second_section = self.nbo_section[second_start:second_end]
-            
-            # Check if there are any interactions above threshold
-            if "None above threshold" in second_section or "within unit" not in second_section:
-                print("Second-Order Perturbation: No interactions above threshold")
-            else:
-                # Parse donor-acceptor interactions
-                # Pattern: "   1. BD ( 1) H  1- H  2   ->  BD*( 1) H  3- H  4      12.34     0.56     0.078"
-                # Format: donor -> acceptor E(2) E(j)-E(i) F(i,j)
-                interaction_pattern = r'\n\s+(BD\*?|LP|CR|RY)\s*\(\s*(\d+)\)\s+(.*?)\s+->\s+(BD\*?|LP\*?|CR\*?|RY)\s*\(\s*(\d+)\)\s+(.*?)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)'
-                interactions = re.finditer(interaction_pattern, second_section)
-                
-                for inter in interactions:
-                    second_order_perturbation.append({
-                        'donor_type': inter.group(1),
-                        'donor_index': int(inter.group(2)),
-                        'donor_atoms': inter.group(3).strip(),
-                        'acceptor_type': inter.group(4),
-                        'acceptor_index': int(inter.group(5)),
-                        'acceptor_atoms': inter.group(6).strip(),
-                        'e2_energy': float(inter.group(7)),  # E(2) stabilization energy in kcal/mol
-                        'energy_diff': float(inter.group(8)),  # E(j) - E(i) in a.u.
-                        'fock_element': float(inter.group(9))  # F(i,j) in a.u.
-                    })
+            m = self._SOP_LINE_RE.match(line)
+            if not m:
+                continue
+            g = m.groups()
+            second_order_perturbation.append({
+                'donor_nbo_num': int(g[0]) if g[0] is not None else None,
+                'donor_type': g[1],
+                'donor_index': int(g[2]),
+                'donor_atoms': g[3].strip(),
+                'donor_unit': donor_unit,
+                'acceptor_nbo_num': int(g[4]) if g[4] is not None else None,
+                'acceptor_type': g[5],
+                'acceptor_index': int(g[6]),
+                'acceptor_atoms': g[7].strip(),
+                'acceptor_unit': acceptor_unit,
+                'e2_energy': float(g[8]),      # E(2) stabilization energy in kcal/mol
+                'energy_diff': float(g[9]),    # E(j) - E(i) in a.u.
+                'fock_element': float(g[10]),  # F(i,j) in a.u.
+            })
 
-            self.results['second_order_perturbation'] = second_order_perturbation
-                
-        else:
-            print("Could not find Second-Order Perturbation section")
+        if not second_order_perturbation and "None above threshold" not in second_section:
+            print("Second-Order Perturbation: section found but no donor/acceptor rows could be parsed")
+
+        self.results['second_order_perturbation'] = second_order_perturbation
 
     def get_cycle_info(self):
         # Extract NBO Analysis Cycle Information

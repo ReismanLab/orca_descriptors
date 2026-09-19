@@ -14,15 +14,22 @@ def _resolve_calc_path(raw_path, repo_root):
     return (repo_root / raw_path).resolve()
 
 
-def _truncate_to_orca_descriptors(path_value, repo_root):
-    s = str(path_value)
-    if not Path(s).is_absolute():
-        s = str((repo_root / s).resolve())
-    marker = "orca_descriptors"
-    idx = s.find(marker)
-    if idx == -1:
-        return s
-    return s[idx:]
+def conf_key(path_value, repo_root):
+    """Canonical conformer key: repository-relative POSIX path without a trailing slash.
+
+    ``/abs/repo/DATA/lib/X/conf_1/`` -> ``DATA/lib/X/conf_1``. Paths outside the repository
+    are returned absolute. This is the join key shared by every extraction engine.
+    """
+    s = str(path_value).replace("\\", "/").rstrip("/")
+    if s.endswith(".feather"):
+        s = s.rsplit("/", 1)[0]
+    p = Path(s)
+    if not p.is_absolute():
+        p = (Path(repo_root) / p)
+    try:
+        return p.resolve().relative_to(Path(repo_root).resolve()).as_posix()
+    except ValueError:
+        return p.resolve().as_posix()
 
 
 def _find_nbo_out_file(calc_path, basename="singlepoint", strict_basename=False):
@@ -202,12 +209,12 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
             flat[f"{cbase}_p_power"] = contrib.get("p_power")
             flat[f"{cbase}_p_percent"] = contrib.get("p_percent")
 
-    # Build lookup: (nbo_type, bond_index) -> nbo_num, for second_order donor/acceptor rank
-    _nbo_type_idx_to_num = {}
+    # Fallback lookup for legacy outputs whose second-order table has no NBO numbers:
+    # (nbo_type, bond_index, atoms) -> nbo_num
+    _nbo_key_to_num = {}
     for _e in nbo_results.get("natural_bond_orbitals", []):
-        _key = (_e.get("nbo_type"), _e.get("bond_index"))
-        if _key not in _nbo_type_idx_to_num:
-            _nbo_type_idx_to_num[_key] = _e.get("nbo_num", 0)
+        _key = (_e.get("nbo_type"), _e.get("bond_index"), tuple(_e.get("atoms", [])))
+        _nbo_key_to_num.setdefault(_key, _e.get("nbo_num", 0))
 
     dir_rank_counters = {}
     for entry in nbo_results.get("nho_directionality", []):
@@ -230,19 +237,21 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
 
     sop_rank_counters = {}
     for entry in nbo_results.get("second_order_perturbation", []):
-        donor_text = entry.get("donor_atoms", "")
-        acceptor_text = entry.get("acceptor_atoms", "")
-        donor_atoms = _extract_atom_numbers_from_text(donor_text)
-        acceptor_atoms = _extract_atom_numbers_from_text(acceptor_text)
+        donor_atoms = _extract_atom_numbers_from_text(entry.get("donor_atoms", ""))
+        acceptor_atoms = _extract_atom_numbers_from_text(entry.get("acceptor_atoms", ""))
         interaction_atoms = donor_atoms + acceptor_atoms
 
         if not interaction_atoms or not all(atom in selected_indices for atom in interaction_atoms):
             continue
 
-        donor_label = _replace_atom_numbers_with_labels(donor_text, atom_index_to_label).replace(" ", "")
-        acceptor_label = _replace_atom_numbers_with_labels(acceptor_text, atom_index_to_label).replace(" ", "")
-        donor_nbo_num = _nbo_type_idx_to_num.get((entry.get("donor_type"), entry.get("donor_index")), 0)
-        acceptor_nbo_num = _nbo_type_idx_to_num.get((entry.get("acceptor_type"), entry.get("acceptor_index")), 0)
+        donor_label = "_".join(atom_index_to_label[atom] for atom in donor_atoms)
+        acceptor_label = "_".join(atom_index_to_label[atom] for atom in acceptor_atoms)
+        donor_nbo_num = entry.get("donor_nbo_num")
+        if donor_nbo_num is None:
+            donor_nbo_num = _nbo_key_to_num.get((entry.get("donor_type"), entry.get("donor_index"), tuple(donor_atoms)), 0)
+        acceptor_nbo_num = entry.get("acceptor_nbo_num")
+        if acceptor_nbo_num is None:
+            acceptor_nbo_num = _nbo_key_to_num.get((entry.get("acceptor_type"), entry.get("acceptor_index"), tuple(acceptor_atoms)), 0)
         donor_rank = _homo_rank_token(donor_nbo_num, _homo_nbo_num)
         acceptor_rank = _homo_rank_token(acceptor_nbo_num, _homo_nbo_num)
         dup_key = (donor_label, donor_rank, acceptor_label, acceptor_rank)
@@ -263,15 +272,24 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
     return flat
 
 
-def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, overwrite_json=False):
+def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, overwrite_json=False, vbur_radii=None):
     results_dict = {}
     repo_root = Path(__file__).resolve().parent.parent
     for row in tqdm(df.itertuples(), total=len(df)):
         P = od.PropertiesXYZ(path=df.loc[row.Index, "path"], overwrite_results=overwrite_json)
+        if vbur_radii is not None:
+            P.radius_list = [float(r) for r in vbur_radii]
         
-        if len(P.results) > 1 and not overwrite_json:
+        # A cached xyz.json is only trusted when it holds every column the current spec asks for;
+        # otherwise the atom map changed since it was written and the geometry is recomputed.
+        expected_keys = [f"SASA_{a}" for a in atoms] + [f"Bond_{b[0]}_{b[1]}" for b in bonds] \
+            + [f"Angle_{x[0]}_{x[1]}_{x[2]}" for x in angles] + [f"Dihed_{'_'.join(d)}" for d in dihedrals]
+        cache_ok = P.results is not None and len(P.results) > 1 and set(expected_keys) <= set(P.results)
+        if len(P.results) > 1 and not overwrite_json and not cache_ok:
+            print(f"xyz.json in {df.loc[row.Index, 'path']} lacks columns for the current spec; recomputing.")
+        if cache_ok and not overwrite_json:
             if P.results is not None:
-                P.results["path"] = _truncate_to_orca_descriptors(df.loc[row.Index, "path"], repo_root)
+                P.results["path"] = conf_key(df.loc[row.Index, "path"], repo_root)
                 results_dict[row.Index] = P.results
             else:
                 print(f"No results found for {df.loc[row.Index, 'path']}.")
@@ -332,7 +350,7 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
                 P.get_vbur_octants()
 
             results = P.results
-            results["path"] = _truncate_to_orca_descriptors(df.loc[row.Index, "path"], repo_root)
+            results["path"] = conf_key(df.loc[row.Index, "path"], repo_root)
             results_dict[row.Index] = results
 
             P.save_results_to_json() # save results to json file in same directory as xyz file for later use if needed
@@ -429,11 +447,11 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
         P = od.RedoxSet(neutralReader=neutral_reader, cationReader=cation_reader, anionReader=anion_reader, descriptorPrefixes=descriptorPrefixes)
 
         results = P.aggregate()
-        results['path'] = _truncate_to_orca_descriptors(calc_path, repo_root)
+        results['path'] = conf_key(calc_path, repo_root)
         results_dict[row.Index] = results
     return results_dict
 
-def get_all_charges(df, atoms):
+def get_all_charges(df, atoms, basename="singlepoint"):
     results_dict = {}
     repo_root = Path(__file__).resolve().parent.parent
     for row in df.itertuples():
@@ -441,33 +459,14 @@ def get_all_charges(df, atoms):
 
         atom_map = {atom: int(df.loc[row.Index, atom]) for atom in atoms}
 
-        reader = od.OrcaReader(calc_path, basename="singlepoint", out_file_path=None, nbo_block_index=0, nbo_job_number=None)
+        reader = od.OrcaReader(calc_path, basename=basename, out_file_path=None, nbo_block_index=0, nbo_job_number=None)
         reader.set_atoms(atom_map)
         reader.parse_property_json()
         reader.aggregate_results()
         results = reader.results
-        results['path'] = _truncate_to_orca_descriptors(calc_path, repo_root)
+        results['path'] = conf_key(calc_path, repo_root)
         results_dict[row.Index] = results
     return results_dict
-
-def get_nbo_descriptors(df, atoms):
-    results_dict = {}
-    repo_root = Path(__file__).resolve().parent.parent
-    for row in df.itertuples():
-        calc_path = _resolve_calc_path(df.loc[row.Index, "path"], repo_root)
-
-        atom_map = {atom: int(df.loc[row.Index, atom]) for atom in atoms}
-
-        nbo_reader = od.OrcaReader(calc_path, basename="singlepoint", out_file_path=None, nbo_block_index=0, nbo_job_number=None)
-        nbo_reader.set_atoms(atom_map)
-        nbo_reader.parse_property_json()
-        nbo_reader.get_nbo_descriptors()
-
-        results = nbo_reader.results
-        results['path'] = _truncate_to_orca_descriptors(calc_path, repo_root)
-        results_dict[row.Index] = results
-    return results_dict
-
 
 def get_all_nbo_properties(df, atoms, basename="singlepoint"):
     """Extract all properties available from ``od.NBOProps`` into a flat dataframe.
@@ -498,7 +497,7 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint"):
         atom_map = {atom: int(df.loc[row.Index, atom]) for atom in atoms}
 
         row_results = {
-            "path": _truncate_to_orca_descriptors(calc_path, repo_root)
+            "path": conf_key(calc_path, repo_root)
         }
 
         try:
@@ -563,110 +562,6 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint"):
 
     return df_out
 
-def make_dict_atoms(df):
-    dict_atoms = {}
-    for row in df.itertuples():
-        dict_atoms[row.Index] = {}
-        for col in df.columns:
-            if col.startswith("H1"):
-                atom = col[:-1] 
-                number = df.at[row.Index, col]
-                dict_atoms[row.Index][col] = atom + str(number)
-            elif col.startswith("H2"):
-                atom = col[:-1] 
-                number = df.at[row.Index, col]
-                dict_atoms[row.Index][col] = atom + str(number)
-            elif col.startswith("C1"):
-                atom = col[:-1] 
-                number = df.at[row.Index, col]
-                dict_atoms[row.Index][col] = atom + str(number)
-            elif col.startswith("C2"):
-                atom = col[:-1] 
-                number = df.at[row.Index, col]
-                dict_atoms[row.Index][col] = atom + str(number)
-            elif col.startswith("N1"):
-                atom = col[:-1] 
-                number = df.at[row.Index, col]
-                dict_atoms[row.Index][col] = atom + str(number)
-            elif col.startswith("N2"):
-                atom = col[:-1] 
-                number = df.at[row.Index, col]
-                dict_atoms[row.Index][col] = atom + str(number)
-            elif col.startswith("Ni"):
-                atom = col  
-                number = df.at[row.Index, col]
-                dict_atoms[row.Index][col] = atom + str(number)
-    return dict_atoms
-
-
-#alter key in results dictionary to match format of user defined lists and add to dataframe
-#Have to add new descriptors to this code!!
-def alter_results_dict(results_dict, dict_atoms):
-    new_results = {}
-    for key in results_dict.keys():
-        new_results[key] = {}
-        for subkey in results_dict[key].keys():
-            if subkey.startswith("Bond_"):
-                for bond in bonds:
-                    bond_key = [dict_atoms[key][bond[0]], dict_atoms[key][bond[1]]]
-                    if all(bk in subkey for bk in bond_key):
-                        new_key = "Bond_" + bond[0] + "_" + bond[1]
-                        new_results[key][new_key] = results_dict[key][subkey]
-            elif subkey.startswith("Sterimol_") and subkey.endswith("_L"):
-                for bond in bonds:
-                    bond_key = [dict_atoms[key][bond[0]], dict_atoms[key][bond[1]]]
-                    if all(bk in subkey for bk in bond_key):
-                        new_key = "Sterimol_" + bond[0] + "_" + bond[1] +"_L"
-                        new_results[key][new_key] = results_dict[key][subkey]
-            elif subkey.startswith("Sterimol_") and subkey.endswith("_Bmin"):
-                for bond in bonds:
-                    bond_key = [dict_atoms[key][bond[0]], dict_atoms[key][bond[1]]]
-                    if all(bk in subkey for bk in bond_key):
-                        new_key = "Sterimol_" + bond[0] + "_" + bond[1] +"_Bmin"
-                        new_results[key][new_key] = results_dict[key][subkey]
-            elif subkey.startswith("Sterimol_") and subkey.endswith("_Bmax"):
-                for bond in bonds:
-                    bond_key = [dict_atoms[key][bond[0]], dict_atoms[key][bond[1]]]
-                    if all(bk in subkey for bk in bond_key):
-                        new_key = "Sterimol_" + bond[0] + "_" + bond[1] +"_Bmax"
-                        new_results[key][new_key] = results_dict[key][subkey]
-            elif subkey.startswith("Angle_"):
-                for angle in angles:
-                    angle_key = [dict_atoms[key][angle[0]], dict_atoms[key][angle[1]], dict_atoms[key][angle[2]]]
-                    if all(ak in subkey for ak in angle_key):
-                        new_key = "Angle_" + angle[0] + "_" + angle[1] + "_" + angle[2]
-                        new_results[key][new_key] = results_dict[key][subkey]
-            elif subkey.startswith("Dihed_"):
-                for dihedral in dihedrals:
-                    dihedral_key = [dict_atoms[key][dihedral[0]], dict_atoms[key][dihedral[1]], dict_atoms[key][dihedral[2]], dict_atoms[key][dihedral[3]]]
-                    if all(dk in subkey for dk in dihedral_key):
-                        new_key = "Dihed_" + dihedral[0] + "_" + dihedral[1] + "_" + dihedral[2] + "_" + dihedral[3]
-                        new_results[key][new_key] = results_dict[key][subkey]
-            elif subkey.startswith("%Vbur_atom_"):
-                for atom in atoms:
-                    atom_key = dict_atoms[key][atom]
-                    if atom_key in subkey:
-                        new_key = "%Vbur_" + atom
-                        new_results[key][new_key] = results_dict[key][subkey]
-            elif subkey.startswith("SASA_"):
-                for atom in atoms:
-                    atom_key = dict_atoms[key][atom]
-                    if atom_key in subkey:
-                        new_key = "SASA_" + atom
-                        new_results[key][new_key] = results_dict[key][subkey]
-            else:
-                new_results[key][subkey] = results_dict[key][subkey]
-    return new_results
-
-
-#add new results to dataframe
-def results_to_df(df, new_results):
-    for key in new_results.keys():
-        for subkey in new_results[key].keys():
-            df.at[key, subkey] = new_results[key][subkey]
-    return df
-
-
 def remove_atom_labeled_columns(df, atom_labels):
     """Remove columns whose names contain atom-label tokens.
 
@@ -711,6 +606,7 @@ def filter_numeric_descriptors(
     remove_low_occupancy_nbo=False,
     occupancy_boltz_threshold=0.001,
     corr_pruning_mode="component_ranked",
+    metal_label="Ni",
 ):
     """Filter noisy numeric descriptors using variance/ratio/correlation rules.
 
@@ -766,7 +662,12 @@ def filter_numeric_descriptors(
             ``*_occupancy_boltz`` is below ``occupancy_boltz_threshold`` for all compounds.
         occupancy_boltz_threshold : float, optional
             Threshold used with ``remove_low_occupancy_nbo``, by default 0.001.
-        corr_pruning_mode : str, optional
+        metal_label : str | None, optional
+        Atom label of the metal centre whose Rydberg descriptors are kept by
+        ``orbital_filter`` and targeted by ``ni_orbital_filter``. Matched as the
+        ``_<label>_`` token (case-insensitive). ``None`` disables both metal rules,
+        so ``"remove rydbergs"`` removes every Rydberg column.
+    corr_pruning_mode : str, optional
                 Correlation pruning strategy. Supported values:
                 - ``"component_ranked"`` (default): for each connected component in the
                     correlation graph, keep one best-ranked descriptor.
@@ -806,13 +707,15 @@ def filter_numeric_descriptors(
             if removed_low_occ_nbo_columns:
                 df_num = df_num.drop(columns=removed_low_occ_nbo_columns, errors="ignore")
 
+    metal_token = f"_{str(metal_label).strip().lower()}_" if metal_label else None
+
     removed_rydberg = []
     if isinstance(orbital_filter, str) and orbital_filter.strip().lower() == "remove rydbergs":
         cols_to_remove = []
         for col in df_num.columns:
             c = col.lower()
-            # Drop Rydberg-related descriptors, but keep Ni-related ones.
-            if "ryd" in c and "_ni_" not in c:
+            # Drop Rydberg-related descriptors, but keep the metal-centre ones.
+            if "ryd" in c and (metal_token is None or metal_token not in c):
                 cols_to_remove.append(col)
         removed_rydberg = sorted(cols_to_remove)
         if removed_rydberg:
@@ -823,8 +726,8 @@ def filter_numeric_descriptors(
         cols_to_remove = []
         for col in df_num.columns:
             c = col.lower()
-            # Remove only Ni-linked 4f Rydberg descriptors.
-            if "_ni_" in c and "ryd" in c and "4f" in c:
+            # Remove only metal-centre 4f Rydberg descriptors.
+            if metal_token is not None and metal_token in c and "ryd" in c and "4f" in c:
                 cols_to_remove.append(col)
         removed_ni_4f_rydberg = sorted(cols_to_remove)
         if removed_ni_4f_rydberg:
@@ -1112,42 +1015,3 @@ def filter_numeric_descriptors(
     }
 
     return df_filtered, report
-
-
-
-def descriptor_stats(df):
-    #Find min, max, and average of descriptors across dataset
-    descriptor_stats = {}
-
-    #boltzmann weighted average
-    #convert energy to relative energy
-    if 'Relative_energy' not in df.columns:
-        df.insert(5, 'Relative_energy', df['SCF_energy'] - df['SCF_energy'].min())
-    else:
-        df['Relative_energy'] = df['SCF_energy'] - df['SCF_energy'].min()
-
-
-    T = 298.15 #temperature in K
-    R = 3.1668105e-6 #Boltzmann constant in eH/K
-    weights = []
-
-    for row in df.itertuples():
-        energy = row.Relative_energy
-        weight = np.exp(-energy/(R*T))
-        weights.append(weight)
-
-    normalized_weights = weights / np.sum(weights)
-
-    for column in df.iloc[:, 15:]:
-        descriptor_stats[f'{column}_min'] = df[column].min()
-        descriptor_stats[f'{column}_max'] = df[column].max()
-        descriptor_stats[f'{column}_mean'] = np.average(df[column], weights=normalized_weights)
-
-    descriptor_stats_df = pd.DataFrame(descriptor_stats, index=[0])
-    if df["smiles"].nunique() == 1:
-        descriptor_stats_df.insert(0, "SMILES", df["smiles"].iloc[0])
-        descriptor_stats_df.insert(1, "INCHI", df["inchi"].iloc[0])
-    else:
-        print("Multiple SMILES strings found in dataset. Please seperate before calculating descriptor statistics.")    
-
-    return descriptor_stats_df
