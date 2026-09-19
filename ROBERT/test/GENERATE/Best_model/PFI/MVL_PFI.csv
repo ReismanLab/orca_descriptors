@@ -1,2 +1,0 @@
-model,type,kfold,repeat_kfolds,seed,error_type,y,names,X_descriptors,params,combined_rmse,split
-MVL,reg,5,10,0,rmse,ΔΔG,SMILES,"['x25', 'x150', 'x138', 'x129']",{},0.35684306790449816,even
