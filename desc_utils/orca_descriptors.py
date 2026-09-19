@@ -712,15 +712,25 @@ class NBOProps:
     # beta analysis (starting with its NPA / "(Occupancy)" header) follows the alpha
     # summary directly and "$CHOOSE" only appears after the beta summary, so the slice
     # must also stop at the next NBO header.
+    # Orbital types printed by NBO 3-7 in the summary / detail / directionality / second-order
+    # tables: 2-centre bonds (BD, BD*), lone pairs (LP, LP*), cores (CR), Rydbergs (RY, RY*),
+    # lone vacancies (LV; empty metal-centred orbitals such as "87. LV ( 1)Ni  2") and
+    # 3-centre orbitals (3C, 3Cn, 3C*). Kept identical to ``_SOP_TYPE`` below on purpose.
+    # Note: a two-letter element symbol abuts the closing parenthesis ("LP ( 1)Ni  2"), so the
+    # patterns below must allow zero whitespace between ")" and the atom list.
+    _NBO_TYPE = r"(BD\*?|LP\*?|CR|RY\*?|LV|3C\*?|3Cn)"
+    _NBO_ATOMS = r"([A-Z][a-z]?\s+\d+(?:\s*-\s*[A-Z][a-z]?\s+\d+)*)"
+
     _SUMMARY_END_MARKERS = (
         "$CHOOSE", "Checkpoint orbital", "NATURAL BOND ORBITALS (Summary):",
         "(Occupancy)   Bond orbital / Coefficients / Hybrids", "spin orbitals",
     )
     # Occupancy is 0..2 (one leading digit) and energy is a signed decimal. Requiring both
     # keeps NHO-directionality rows such as "45. BD ( 1) H  1-Ni  2   97.1   53.4 ..." out.
+    # "   87. LV ( 1)Ni  2             0.26397    -0.07374" (no space before "Ni")
     _SUMMARY_ROW_RE = re.compile(
-        r'\n\s+(\d+)\.\s+(BD\*?|LP|CR|RY)\s*\(\s*(\d+)\)\s+'
-        r'([A-Z][a-z]?\s+\d+(?:\s*-\s*[A-Z][a-z]?\s+\d+)*)\s+(\d\.\d+)\s+(-?\d+\.\d+)'
+        r'\n\s+(\d+)\.\s+' + _NBO_TYPE + r'\s*\(\s*(\d+)\)\s*' + _NBO_ATOMS
+        + r'\s+(\d\.\d+)\s+(-?\d+\.\d+)'
     )
 
     def get_NBO_summary(self):
@@ -798,7 +808,10 @@ class NBOProps:
         bond_orbital_details = []
         # Split into individual bond entries
         # Each bond starts with a pattern like "   1. (2.00000) BD ( 1) H  1- H  2"
-        bond_entries = re.finditer(r'\n\s+(\d+)\.\s+\(([\d.]+)\)\s+(BD\*?|LP|CR|RY)\s*\(\s*(\d+)\)\s+(.*?)(?=\n\s+\d+\.\s+\(|\Z)', bond_detail_section, re.DOTALL)
+        # or "  87. (0.26397) LV ( 1)Ni  2            s( 99.10%)p 0.00(  0.31%)d 0.01(  0.59%)"
+        bond_entries = re.finditer(
+            r'\n\s+(\d+)\.\s+\(([\d.]+)\)\s+' + cls._NBO_TYPE + r'\s*\(\s*(\d+)\)\s*(.*?)(?=\n\s+\d+\.\s+\(|\Z)',
+            bond_detail_section, re.DOTALL)
 
         for bond_entry in bond_entries:
             bond_num = int(bond_entry.group(1))
@@ -828,7 +841,9 @@ class NBOProps:
 
             # Look for atomic contributions
             # Pattern: "               ( 50.00%)   0.7071* H  1 s( 99.91%)p 0.00(  0.09%)"
-            contrib_pattern = r'\(\s*([\d.]+)%\)\s+([-\d.]+)\*\s+([A-Z][a-z]?)\s+(\d+)\s+s\(\s*([\d.]+)%\)p\s*([\d.]+)\(\s*([\d.]+)%\)'
+            #      or: "               ( 39.78%)   0.6307*Ni  2 s( 48.78%)p 0.01(  0.41%)d 1.04( 50.81%)"
+            # (two-letter elements abut the "*", so no whitespace may be required there)
+            contrib_pattern = r'\(\s*([\d.]+)%\)\s+([-\d.]+)\*\s*([A-Z][a-z]?)\s+(\d+)\s+s\(\s*([\d.]+)%\)p\s*([\d.]+)\(\s*([\d.]+)%\)'
             contributions = re.finditer(contrib_pattern, atoms_and_contrib)
 
             for contrib in contributions:
@@ -873,11 +888,14 @@ class NBOProps:
         else:
             print("Could not find NHO Directionality section")
 
-    @staticmethod
-    def _parse_NHO_rows(dir_section):
+    @classmethod
+    def _parse_NHO_rows(cls, dir_section):
         # Match atoms as: one or more occurrences of (AtomSymbol  Number) with optional dash/space separator
         # "  32. BD ( 1) N  4- C  5   78.9   53.4    79.7   50.0   3.5   102.2  234.7   1.6"
-        dir_lines = re.findall(r'\n\s+(\d+)\.\s+(BD|LP|CR)\s*\(\s*(\d+)\)\s+([A-Z][a-z]?\s+\d+(?:\s*-\s*[A-Z][a-z]?\s+\d+)*)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)', dir_section)
+        dir_lines = re.findall(
+            r'\n\s+(\d+)\.\s+' + cls._NBO_TYPE + r'\s*\(\s*(\d+)\)\s*' + cls._NBO_ATOMS
+            + r'\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)',
+            dir_section)
 
         rows = []
         for line_data in dir_lines:
@@ -907,7 +925,7 @@ class NBOProps:
     #   NBO 7 (ORCA 6.x):  "  46. BD ( 1) H  1-Ni  2      88. BD*( 1)Ni  2- H  3     29.34    0.38   0.095"
     #   legacy / NBO 3-6:  "BD ( 1) H  1- H  2   ->  BD*( 1) H  3- H  4      12.34     0.56     0.078"
     # i.e. an optional NBO number before each orbital, and an optional "->" between them.
-    _SOP_TYPE = r"(BD\*?|LP\*?|CR|RY\*?|LV|3C\*?|3Cn)"
+    _SOP_TYPE = _NBO_TYPE
     _SOP_ATOMS = r"([A-Z][a-z]?\s*\d+(?:\s*-\s*[A-Z][a-z]?\s*\d+)*)"
     _SOP_NUM = r"(-?\d+\.\d+)"
     _SOP_LINE_RE = re.compile(

@@ -255,14 +255,14 @@ def test_real_orca61_open_shell_block1():
     alpha = _parse(REAL_OUT, block_index=1).results
     nbo = alpha["natural_bond_orbitals"]
     nums = [e["nbo_num"] for e in nbo]
-    assert len(nums) == len(set(nums)) == 691                    # was ~1494 with the beta set swallowed
+    assert len(nums) == len(set(nums)) == 736                    # was ~1494 with the beta set swallowed (691 before Ni one-centre rows were parsed)
     assert max(e["occupancy"] for e in nbo) <= 1.0                # UKS: one electron per spin orbital
     assert {e["spin"] for e in nbo} == {"alpha"}
     by_num = _by_num(nbo)
     assert by_num[47]["atoms"] == [1, 3] and by_num[47]["occupancy"] == 0.78712   # alpha-only H1-H3 bond
 
     beta = _parse(REAL_OUT, block_index=1, spin="beta").results
-    assert len(beta["natural_bond_orbitals"]) == 691 and {e["spin"] for e in beta["natural_bond_orbitals"]} == {"beta"}
+    assert len(beta["natural_bond_orbitals"]) == 736 and {e["spin"] for e in beta["natural_bond_orbitals"]} == {"beta"}
     assert _by_num(beta["natural_bond_orbitals"])[45]["atoms"] == [1, 2]          # beta Lewis structure has Ni-H bonds
     assert len(beta["second_order_perturbation"]) != len(alpha["second_order_perturbation"])
 
@@ -270,4 +270,4 @@ def test_real_orca61_open_shell_block1():
     assert not any("_2_" in c for c in flat if c.startswith("nbo_"))
 
     closed = _parse(REAL_OUT, block_index=0).results
-    assert closed["spin"] is None and len(closed["natural_bond_orbitals"]) == 691
+    assert closed["spin"] is None and len(closed["natural_bond_orbitals"]) == 736
