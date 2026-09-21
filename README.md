@@ -11,6 +11,7 @@ Two engines compute the descriptors: the in-house ORCA readers (`desc_utils`) an
 ## Contents
 
 - [Installation](#installation)
+- [Quick start: from ORCA outputs to a descriptor spreadsheet](#quick-start-from-orca-outputs-to-a-descriptor-spreadsheet)
 - [Repository layout](#repository-layout)
 - [Pipeline: from ORCA files to the final descriptors](#pipeline-from-orca-files-to-the-final-descriptors)
   - [0. ORCA calculations](#0-orca-calculations)
@@ -42,6 +43,90 @@ tests were validated against (`f6bc24c`, 2026-08-31).
 
 The ORCA jobs themselves need ORCA 6.1 and NBO 7 on the cluster (see
 [scripts-for-orca-computations](scripts-for-orca-computations)).
+
+## Quick start: from ORCA outputs to a descriptor spreadsheet
+
+The walkthrough below goes from finished ORCA compound jobs on the cluster to one CSV with one row per
+molecule. Each step names the command, what it produces and what to check before moving on; the
+sections under [Pipeline](#pipeline-from-orca-files-to-the-final-descriptors) explain the details.
+Starting point: every conformer was computed with
+[calcParam.inp](scripts-for-orca-computations/calcParam.inp) into `<LIB>/<molecule>/conf_N/` folders
+(see [0. ORCA calculations](#0-orca-calculations)), and the repository is installed locally
+([Installation](#installation)).
+
+**Step 1. Condense each conformer folder on the cluster.** One small `orca_condensed.json` per conformer
+replaces the ~70 MB of raw outputs. It needs only a plain Python 3.8+ and a `git clone` of this
+repository (no environment). Skip this step if `slurm-calcParam.sh` already ran it at the end of the job.
+
+```bash
+ssh <cluster>
+git clone https://github.com/ReismanLab/orca_descriptors            # once
+PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/LIB --jobs 4
+PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/LIB --check
+```
+
+Check: the summary ends with `failed 0`. A `failed` folder is a broken calculation (for example an ORCA
+run that aborted before NBO returned); the message says why. Fix or drop those conformers.
+
+**Step 2. Transfer only the condensed files.** About 1 to 2 GB for 2500 conformers.
+
+```bash
+rsync -avz --prune-empty-dirs --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
+      --exclude='*' <user>@<cluster>:/path/to/LIB/  DATA/LIB/
+```
+
+Check: `ls DATA/LIB/*/conf_1/` shows exactly `optimization.xyz` and `orca_condensed.json`.
+
+**Step 3. Write the spec.** Copy [specs/lnih2_pyox.yaml](specs/lnih2_pyox.yaml) to `specs/LIB.yaml` and
+edit `name`, `data.root: DATA/LIB`, the `atoms` labels, the `numbering` block (SMARTS stages; or
+`backend: first_n` for small molecules; or `backend: manual` with your own CSV of atom indices), the
+label lists under `descriptors`, and `filter.metal_label` (`null` for organic molecules). Then
+
+```bash
+python -m desc_utils.run validate --spec specs/LIB.yaml
+```
+
+Check: it prints `OK` with the labels and descriptor families. Every problem (unknown label, wrong
+arity, SMARTS that does not parse) is listed at once. Quote every SMARTS: `#` starts a YAML comment.
+
+**Step 4. Number the atoms.**
+
+```bash
+python -m desc_utils.run number --spec specs/LIB.yaml          # -> atom_numbering_results.csv
+```
+
+Check: the `numbering_status` column is `ok` for every row (`--strict` makes the command fail otherwise).
+Rows that are not `ok` are skipped downstream; `numbering_notes` says which SMARTS stage failed.
+The table is plain CSV, so indices can be corrected by hand and reused with `--numbering`.
+
+**Step 5. Extract the per-conformer descriptors.**
+
+```bash
+python -m desc_utils.run extract --spec specs/LIB.yaml         # -> combined_descriptors.csv
+```
+
+Check: one row per numbered conformer; the `descripytor_notes` and `nbo_extraction_error` columns are
+empty. Morfeus results are cached in `<conf>/xyz.json`, so re-running is fast; a few seconds per
+conformer on the first run.
+
+**Step 6. Aggregate the conformers and filter the columns.**
+
+```bash
+python -m desc_utils.run aggregate --spec specs/LIB.yaml       # -> <date>_LIB_descriptors.csv
+```
+
+This is the spreadsheet: one row per molecule with `inchi`, `smiles`, `n_conformers` and, for every
+descriptor, `_min`, `_max`, `_lowE` and Boltzmann-averaged `_boltz` columns, after removing constant,
+near-constant, highly correlated and low-occupancy columns. `--no-filter` keeps every column.
+
+Steps 4 to 6 in one go, once the spec validates:
+
+```bash
+python -m desc_utils.run all --spec specs/LIB.yaml
+```
+
+The output file names come from the `output` block of the spec. Folders downloaded with their raw
+ORCA files (no `orca_condensed.json`) work the same way: the readers fall back to the raw files.
 
 ## Repository layout
 
