@@ -166,3 +166,34 @@ The numbering and extraction code was reorganised (see `README.md`, `specs/`, `d
 One DescriPyTor quirk found on the way: passing `drop_atoms=[]` to `get_sterimol_dict` changes B1 and
 the B1-B5 angle compared with the default `None` (their own `get_molecules_features_set` passes `[]`);
 the adapter only forwards the option when atoms are listed.
+
+## Update 2026-09-21: condensed per-conformer file replaces the feather path
+
+`desc_utils/condense.py` now writes one `orca_condensed.json` per conformer (standard-library Python,
+runs on the cluster) and DescriPyTor reads it through `json_file_handler`
+(`descriptors.descripytor.input.kind: json`, the new default). `orca2gaussian/` is deprecated and only
+used with `input.kind: feather`. The in-house readers take the same file, and
+`tests/test_condense.py` asserts that every in-house column is identical whether it is read from the
+raw ORCA files or from the condensed one.
+
+Full-library comparison, per conformer, 308 rows: `results/library_per_conformer_upstream_f6bc24c.csv`
+(feather path, upstream `f6bc24c`) versus `results/library_per_conformer_condensed_json.csv` (condensed
+JSON, same DescriPyTor). Per-column table: `results/library_per_conformer_condensed_json_vs_feather_columns.csv`.
+
+| Family | Columns | Values | max abs diff | median abs diff | Reading |
+|---|---|---|---|---|---|
+| `charge_NBO_*`, `charge_NBO_diff_*` | 17 | 5236 | 0 | 0 | identical: the feather parser's `arr[1::6]` happened to pick the NPA charge column of the NBO summary for the first N rows, so C7 never reached the labelled atoms |
+| `dist_*`, `angle_*` | 17 | 5236 | 1.3e-6 Å, 9e-5 deg | 3e-7, 1.5e-5 | geometry now from the 14-decimal `optimization.xyz` instead of the 6-decimal text block |
+| `B1_*`, `B5_*`, `L_*`, `loc_B5_*`, `B1-B5_angle_*` | 50 | 15400 | 1e-4 Å, 1e-3 deg | 0 | same cause |
+| `vib_amp_*`, `vib_amp_bend_*` | 13 | 4004 | 1.47 | 0.84 | every value was 0.0 through the transposed modes (C5); now non-zero everywhere |
+| `vib_freq_*`, `vib_freq_bend_*` | 13 | 4004 | 646 cm-1 | 300 cm-1 | the mode with the largest projection is selected among correct mode vectors, so a different frequency is picked for most bonds |
+| `dipole`, `dipole_x/y/z` | 4 | 1232 | 5.9 D | 0.24 to 3.9 | Debye instead of a.u. (C4) and the neutral single point instead of the reduction job (H9); the total is 2.28x the old value in the median |
+
+One conformer, `DVLYVQBEMHJQAQ-SFHVURJKSA-N/conf_95`, has no condensed file because its ORCA run aborted
+(NBO started three times and never returned); its DescriPyTor columns are NaN where the feather path had
+read the truncated log. Its in-house NBO columns were already NaN.
+
+The aggregated references were regenerated from the condensed files with `python -m desc_utils.run all`
+(`20260921_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`, `20260921_test_molecules_descriptors.csv`)
+and `tests/test_regression.py` points at them. For the test molecules only `dist_at1-at2` (1e-6),
+`vib_freq_at1-at2` and `vib_amp_at1-at2` changed per conformer, as expected.

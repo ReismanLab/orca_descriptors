@@ -21,7 +21,7 @@ Six findings were confirmed against the shipped data files or by running the con
 | C5 | Normal-mode matrix is transposed | `norm(MODES[:,0:6]) == 0` matches `FREQ[0:6] == 0` |
 | C6 | Hirshfeld and CM5 columns parse out 100% empty via the fake log | measured all-NaN, no exception raised |
 
-The highest-risk area is `orca2gaussian`: any descriptor that reached your models through the fake-Gaussian path (vibrations, dipole, NBO charge, polarizability, IR intensity) should be treated as suspect until re-extracted. The second-highest is `mlr_utils/feature_selection.py`, where the reported validation score is an upward-biased maximum over many candidates and the CV splitter is unseeded.
+The highest-risk area is `orca2gaussian`: any descriptor that reached your models through the fake-Gaussian path (vibrations, dipole, NBO charge, polarizability, IR intensity) should be treated as suspect until re-extracted. **Update 2026-09-21:** `orca2gaussian` is deprecated. DescriPyTor now reads `<conf>/orca_condensed.json` (`desc_utils/condense.py`, `descriptors.descripytor.input.kind: json`), which takes Å coordinates from `optimization.xyz`, the dipole of the neutral single point in Debye, per-mode unit-norm normal modes with the translations and rotations dropped, NPA charges from the NBO summary and Hirshfeld charges from the property JSON, so C3 to C7 and H9 to H14 no longer reach the descriptors. The feather path remains available through `input.kind: feather` with these bugs intact. The second-highest is `mlr_utils/feature_selection.py`, where the reported validation score is an upward-biased maximum over many candidates and the CV splitter is unseeded.
 
 ---
 

@@ -71,10 +71,16 @@ def smiles_for_mol(mol, mode: str = "whole_molecule", strip_indices: Iterable[in
     return Chem.MolToSmiles(rw)
 
 
-def scf_energy(conf_dir: str | Path, basename: str = "singlepoint") -> float:
-    """SCF energy (Hartree) from ``<conf_dir>/<basename>.property.json`` via ``OrcaReader``."""
+def scf_energy(conf_dir: str | Path, basename: str = "singlepoint",
+               condensed_file: str | None = od.CONDENSED_FILENAME) -> float:
+    """SCF energy (Hartree) of ``<basename>`` via ``OrcaReader``.
+
+    Read from ``<conf_dir>/<condensed_file>`` (``desc_utils.condense``) when present, otherwise
+    from ``<conf_dir>/<basename>.property.json``.
+    """
     conf_dir = Path(conf_dir)
-    reader = od.OrcaReader(directory=str(conf_dir), basename=basename, out_file_path=str(conf_dir / "calcParam.out"))
+    reader = od.OrcaReader(directory=str(conf_dir), basename=basename, out_file_path=str(conf_dir / "calcParam.out"),
+                           condensed_file=condensed_file)
     reader.parse_property_json()
     reader.get_scfenergy()
     return reader.results["SCF_energy"]

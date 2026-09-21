@@ -4,7 +4,7 @@ Two engines:
 
 * ``orca``        ORCA property JSON / NBO output / morfeus on the optimised geometry
                   (``desc_utils.extract.orca``, wrapping the functions in ``data_extraction``)
-* ``descripytor`` DescriPyTor ``Molecules`` families on the feather/JSON molecule file
+* ``descripytor`` DescriPyTor ``Molecules`` families on the condensed JSON (or legacy feather) file
                   (``desc_utils.extract.descripytor``)
 
 :func:`run_extraction` joins their outputs on the conformer key ``path``.
@@ -57,7 +57,8 @@ def run_extraction(spec: Spec, df_num: pd.DataFrame, repo_root: Path, families: 
     if spec.descripytor and "descripytor" in wanted:
         from desc_utils.extract.descripytor import extract_descripytor
 
-        dp_df = extract_descripytor(df_num, spec.descripytor, repo_root, progress=progress)
+        dp_df = extract_descripytor(df_num, spec.descripytor, repo_root, progress=progress,
+                                    condensed_file=spec.data.get("condensed_file"))
         out = out.merge(dp_df, on="path", how="left", suffixes=("", "_descripytor"))
 
     # a column produced by two engines under the same name is kept once (first wins)

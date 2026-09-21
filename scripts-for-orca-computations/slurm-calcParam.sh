@@ -17,3 +17,9 @@ export GENEXE=/resnick/groups/ReismanLab/nbo7/bin/gennbo.i8.exe
 export PATH="$PATH:$NBOBIN"
 
 $(which orca) calcParam.inp >> calcParam.out
+
+# Condense the outputs into <conf>/orca_condensed.json so only that file (plus optimization.xyz) has to
+# leave the cluster. Standard-library Python only: REPO is a plain `git clone` of orca_descriptors, no
+# conda environment. The step must never fail the job.
+REPO=/path/to/orca_descriptors        # <- edit: location of the clone on the cluster
+PYTHONPATH="$REPO" python -m desc_utils.condense --conf-dir "$PWD" --quiet || echo "condense failed in $PWD" >&2

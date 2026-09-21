@@ -15,6 +15,7 @@ import pandas as pd
 
 from desc_utils import data_extraction as de
 from desc_utils.data_extraction import conf_key  # noqa: F401  (re-exported join key)
+from desc_utils.orca_parse import CONDENSED_FILENAME
 from desc_utils.spec import Spec
 
 _HM = re.compile(r"_hm(\d+)_")
@@ -69,24 +70,30 @@ def extract_xyz(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path, overwrite_j
     return _to_frame(res, repo_root)
 
 
-def extract_charges(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path) -> pd.DataFrame:
-    res = de.get_all_charges(_with_repo_paths(df_num, repo_root), cfg["atoms"], basename=cfg.get("basename", "singlepoint"))
+def extract_charges(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path,
+                    condensed_file: str | None = CONDENSED_FILENAME) -> pd.DataFrame:
+    res = de.get_all_charges(_with_repo_paths(df_num, repo_root), cfg["atoms"], basename=cfg.get("basename", "singlepoint"),
+                             condensed_file=condensed_file)
     return _to_frame(res, repo_root)
 
 
-def extract_nbo(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path) -> pd.DataFrame:
+def extract_nbo(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path,
+                condensed_file: str | None = CONDENSED_FILENAME) -> pd.DataFrame:
     res = de.get_all_nbo_properties(
         _with_repo_paths(df_num, repo_root), cfg["atoms"], basename=cfg.get("basename", "singlepoint"),
         nbo_block_index=int(cfg.get("nbo_block_index", 0)), spin=cfg.get("spin", "alpha"),
+        condensed_file=condensed_file,
     )
     df = _to_frame(res, repo_root)
     return filter_nbo_rank_columns(df, cfg.get("homo_lumo_rank_range"), cfg.get("drop_analysis_info", True))
 
 
-def extract_redox(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path) -> pd.DataFrame:
+def extract_redox(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path,
+                  condensed_file: str | None = CONDENSED_FILENAME) -> pd.DataFrame:
     res = de.get_redox_descriptors(
         _with_repo_paths(df_num, repo_root), cfg["atoms"],
         descriptorPrefixes=list(cfg.get("prefixes", ["cm5"])), nbo_block_map=cfg.get("nbo_block_map"),
+        condensed_file=condensed_file,
     )
     return _to_frame(res, repo_root)
 
@@ -101,8 +108,10 @@ def run_orca(df_num: pd.DataFrame, spec: Spec, repo_root: Path, families: Iterab
     """Run the requested ORCA-side families and outer-join them on ``path``.
 
     Duplicate column names across families (e.g. ``SCF_energy``) keep the first occurrence,
-    exactly as the notebook did with ``loc[:, ~columns.duplicated()]``.
+    exactly as the notebook did with ``loc[:, ~columns.duplicated()]``. The charges, NBO and
+    redox families read ``<conf>/<data.condensed_file>`` when it exists (``null`` = raw files only).
     """
+    condensed_file = spec.data.get("condensed_file")
     assert spec.orca is not None, "spec has no descriptors.orca section"
     wanted = [f for f in ORCA_ORDER if f in spec.orca and (families is None or f in families)]
     frames = []
@@ -113,7 +122,7 @@ def run_orca(df_num: pd.DataFrame, spec: Spec, repo_root: Path, families: Iterab
         if fam == "xyz":
             frames.append(extract_xyz(df_num, cfg, repo_root, overwrite_json=overwrite_xyz_json))
         else:
-            frames.append(_RUNNERS[fam](df_num, cfg, repo_root))
+            frames.append(_RUNNERS[fam](df_num, cfg, repo_root, condensed_file=condensed_file))
     if not frames:
         return pd.DataFrame({"path": df_num["path"].map(lambda p: conf_key(p, repo_root))})
     out = frames[0]

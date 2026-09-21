@@ -6,6 +6,7 @@
     python -m desc_utils.run aggregate   --spec S --per-conformer CSV [--out CSV] [--no-filter]
     python -m desc_utils.run all         --spec S [--data ROOT] [--numbering CSV]
     python -m desc_utils.run to-schema-b --spec S --numbering CSV [--row N]
+    python -m desc_utils.run condense    --spec S [--data ROOT] [--overwrite] [--jobs N] [--nbo-full all]
 
 Every subcommand is a thin wrapper around a library function so notebooks can call the
 same functions directly. All paths are resolved relative to the repository root (the
@@ -156,6 +157,25 @@ def cmd_to_schema_b(args) -> int:
     return 0
 
 
+def cmd_condense(args) -> int:
+    """Write ``<conf>/<data.condensed_file>`` for every conformer under ``data.root``.
+
+    The same producer runs on the cluster without this environment:
+    ``PYTHONPATH=<repo> python -m desc_utils.condense --root <library>``.
+    """
+    from desc_utils.condense import CONDENSED_FILENAME, condense_tree, iter_conformer_dirs
+
+    spec = _load(args)
+    name = spec.data.get("condensed_file") or CONDENSED_FILENAME
+    dirs = iter_conformer_dirs(_resolve(spec.data["root"]), spec.data.get("conformer_glob", "conf_*"))
+    if not dirs:
+        print(f"no conformer folders under {spec.data['root']}", file=sys.stderr)
+        return 1
+    full = "all" if args.nbo_full.strip() == "all" else tuple(int(x) for x in args.nbo_full.split(",") if x.strip())
+    summary = condense_tree(dirs, name=name, overwrite=args.overwrite, jobs=args.jobs, nbo_full_blocks=full)
+    return 1 if summary["failed"] else 0
+
+
 # --------------------------------------------------------------------------- parser
 
 def build_parser() -> argparse.ArgumentParser:
@@ -200,6 +220,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--numbering", help="numbering CSV (default: output.numbering_csv)")
     sp.add_argument("--row", type=int, default=0)
     sp.set_defaults(func=cmd_to_schema_b)
+
+    sp = sub.add_parser("condense", help="write <conf>/orca_condensed.json from the raw ORCA files"); common(sp)
+    sp.add_argument("--data", help="override data.root")
+    sp.add_argument("--overwrite", action="store_true", help="rewrite existing condensed files")
+    sp.add_argument("--jobs", type=int, default=1, help="parallel workers")
+    sp.add_argument("--nbo-full", default="0", help="NBO block indices stored with every table, or 'all' (default 0)")
+    sp.set_defaults(func=cmd_condense)
     return p
 
 

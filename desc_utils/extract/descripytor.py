@@ -13,7 +13,9 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -21,6 +23,7 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from desc_utils.orca_parse import CONDENSED_FILENAME
 from desc_utils.spec import DESCRIPYTOR_TERM_ARITY, resolve_terms
 
 _DESCRIPYTOR_DIRNAME = "DescriPyTor"
@@ -207,22 +210,43 @@ def extract_one(mols, cfg: Mapping[str, Any], row: Mapping[str, Any]) -> tuple[d
     return out, notes
 
 
+@contextlib.contextmanager
+def _molecule_dir(files: list[Path], kind: str):
+    """Folder handed to ``Molecules``.
+
+    ``Molecules`` loads every molecule file it finds in a folder. For the condensed JSON a temporary
+    folder holding only a link to that file is used, so legacy ``conf_N.feather`` files or other
+    molecule-shaped JSON in the conformer folder can never be loaded as extra molecules.
+    """
+    if kind == "feather":
+        yield files[0].parent
+        return
+    with tempfile.TemporaryDirectory(prefix="descripytor_") as td:
+        link = Path(td) / files[0].name
+        try:
+            os.symlink(files[0].resolve(), link)
+        except OSError:  # file systems without symlinks
+            shutil.copy(files[0], link)
+        yield Path(td)
+
+
 def conformer_dir(row: Mapping[str, Any], repo_root: Path) -> Path:
     p = Path(str(row["path"]))
     return p if p.is_absolute() else (repo_root / p)
 
 
 def extract_descripytor(df_num: pd.DataFrame, cfg: Mapping[str, Any], repo_root: Path,
-                        progress: bool = True) -> pd.DataFrame:
+                        progress: bool = True, condensed_file: str | None = None) -> pd.DataFrame:
     """Per-conformer DescriPyTor descriptors for every row of the numbering table.
 
-    Each row's ``path`` must be a conformer folder holding exactly one molecule file
-    (``.feather`` or structured ``.json``). Missing files or failing families produce NaN
-    plus a note in ``descripytor_notes``; they never abort the run.
+    Each row's ``path`` is a conformer folder. With ``input.kind: json`` (default) the molecule
+    file is ``<folder>/<condensed_file>`` written by ``desc_utils.condense``; with ``feather`` it
+    is the legacy ``conf_N.feather`` of the orca2gaussian path. Missing files or failing
+    families produce NaN plus a note in ``descripytor_notes``; they never abort the run.
     """
     Molecules = _import_molecules(repo_root)
-    kind = (cfg.get("input") or {}).get("kind", "feather")
-    ext = ".feather" if kind == "feather" else ".json"
+    kind = (cfg.get("input") or {}).get("kind", "json")
+    condensed_name = condensed_file or CONDENSED_FILENAME
     rows: dict = {}
     iterator = df_num.iterrows()
     if progress:
@@ -232,26 +256,31 @@ def extract_descripytor(df_num: pd.DataFrame, cfg: Mapping[str, Any], repo_root:
     for i, row in iterator:
         folder = conformer_dir(row, repo_root)
         rec: dict[str, Any] = {"path": row["path"]}
-        files = sorted(folder.glob(f"*{ext}")) if folder.is_dir() else []
+        if kind == "feather":
+            files = sorted(folder.glob("*.feather")) if folder.is_dir() else []
+            missing = (f"no .feather file in {folder}. Run `python orca2gaussian/orca_2_gauss.py --orca-folder <root>` "
+                       f"and `logs_to_feather` first")
+        else:
+            candidate = folder / condensed_name
+            files = [candidate] if candidate.is_file() else []
+            missing = (f"no {condensed_name} in {folder}. Run `python -m desc_utils.run condense --spec <spec>` "
+                       f"(or on the cluster `python -m desc_utils.condense --conf-dir <folder>`) first")
         if not files:
-            rec["descripytor_notes"] = (
-                f"no {ext} file in {folder}. Run `python orca2gaussian/orca_2_gauss.py --orca-folder <root>` "
-                f"and `logs_to_feather` first" if kind == "feather" else f"no {ext} file in {folder}"
-            )
+            rec["descripytor_notes"] = missing
             for col in label_columns(cfg):
                 rec[col] = np.nan
             rows[i] = rec
             continue
-        with _quiet_cwd():
+        with _quiet_cwd(), _molecule_dir(files, kind) as mol_dir:
             try:
-                mols = Molecules(molecules_dir_name=str(folder))
+                mols = Molecules(molecules_dir_name=str(mol_dir))
             except Exception as exc:
                 mols = None
                 rec["descripytor_notes"] = f"Molecules failed: {type(exc).__name__}: {str(exc)[:120]}"
             if mols is not None:
                 n = len(getattr(mols, "molecules", []))
                 if n != 1:
-                    rec["descripytor_notes"] = f"expected 1 molecule file in {folder}, loaded {n}"
+                    rec["descripytor_notes"] = f"expected 1 molecule file in {mol_dir}, loaded {n}"
                 vals, notes = extract_one(mols, cfg, row) if n >= 1 else ({c: np.nan for c in label_columns(cfg)}, [])
                 rec.update(vals)
                 if notes:

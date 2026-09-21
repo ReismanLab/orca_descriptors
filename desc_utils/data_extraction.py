@@ -3,6 +3,7 @@ import numpy as np
 import re
 from pathlib import Path
 from desc_utils import orca_descriptors as od
+from desc_utils.orca_parse import CONDENSED_FILENAME
 from tqdm import tqdm
 
 def _resolve_calc_path(raw_path, repo_root):
@@ -356,15 +357,39 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
             P.save_results_to_json() # save results to json file in same directory as xyz file for later use if needed
     return results_dict
 
-def _extract_nbo_charges_for_reader(reader, calc_path, atom_map, basename="singlepoint", nbo_block_index=0):
-    """Extract NBO natural charges from the .out file and add them to reader.results."""
+def _load_nbo_results(calc_path, basename="singlepoint", nbo_block_index=0, spin="alpha",
+                      condensed_file=CONDENSED_FILENAME, full=True):
+    """``NBOProps.results`` for one NBO block of a conformer folder.
+
+    Read from ``<calc_path>/<condensed_file>`` (see ``desc_utils.condense``) when that file exists,
+    otherwise parsed from the ORCA output found by ``_find_nbo_out_file``. ``full=False`` fills only
+    the natural population analysis (all the redox family needs).
+    """
+    from desc_utils.condense import find_condensed, load_condensed, nbo_results
+
+    cond_path = find_condensed(calc_path, condensed_file)
+    if cond_path is not None:
+        return nbo_results(load_condensed(cond_path), nbo_block_index, spin=spin, require_full=full)
+    out_file = _find_nbo_out_file(calc_path, basename=basename, strict_basename=False)
+    nbo_reader = od.NBOProps(out_file, block_index=nbo_block_index, spin=spin)
+    nbo_reader.get_NPA()
+    if full:
+        nbo_reader.get_NAO()
+        nbo_reader.get_NBO_summary()
+        nbo_reader.get_orbital_details()
+        nbo_reader.get_NHO_directionality()
+        nbo_reader.get_second_order_perturbation()
+        nbo_reader.get_cycle_info()
+    return nbo_reader.results
+
+
+def _extract_nbo_charges_for_reader(reader, calc_path, atom_map, basename="singlepoint", nbo_block_index=0,
+                                    condensed_file=CONDENSED_FILENAME):
+    """Add the NBO natural charges of one NBO block to ``reader.results``."""
     try:
-        out_file = _find_nbo_out_file(calc_path, basename=basename, strict_basename=False)
-        nbo_reader = od.NBOProps(out_file, block_index=nbo_block_index)
-        nbo_reader.get_NPA()
-        
-        npa_atoms = nbo_reader.results.get("natural_population_analysis", {}).get("atoms", {})
-        
+        results = _load_nbo_results(calc_path, basename, nbo_block_index, condensed_file=condensed_file, full=False)
+        npa_atoms = results.get("natural_population_analysis", {}).get("atoms", {})
+
         for label, atom_idx in atom_map.items():
             atom_props = _get_dict_value(npa_atoms, atom_idx)
             if atom_props is not None:
@@ -390,7 +415,7 @@ def _normalize_nbo_block_map(nbo_block_map):
     return {k: int(v) for k, v in normalized.items()}
 
 
-def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=None):
+def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=None, condensed_file=CONDENSED_FILENAME):
     results_dict = {}
     repo_root = Path(__file__).resolve().parent.parent
     if nbo_block_map is None:
@@ -405,7 +430,8 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
 
         atom_map = {atom: int(df.loc[row.Index, atom]) for atom in atoms}
 
-        neutral_reader = od.OrcaReader(calc_path, basename="singlepoint", out_file_path=None, nbo_block_index=0, nbo_job_number=None)
+        neutral_reader = od.OrcaReader(calc_path, basename="singlepoint", out_file_path=None, nbo_block_index=0, nbo_job_number=None,
+                                        condensed_file=condensed_file)
         neutral_reader.set_atoms(atom_map)
         neutral_reader.parse_property_json()
         neutral_reader.get_scfenergy()
@@ -416,9 +442,11 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
             atom_map,
             "singlepoint",
             nbo_block_index=int(nbo_block_map.get("singlepoint", 0)),
+            condensed_file=condensed_file,
         )
 
-        cation_reader = od.OrcaReader(calc_path, basename="oxidation", out_file_path=None, nbo_block_index=0, nbo_job_number=None)
+        cation_reader = od.OrcaReader(calc_path, basename="oxidation", out_file_path=None, nbo_block_index=0, nbo_job_number=None,
+                                        condensed_file=condensed_file)
         cation_reader.set_atoms(atom_map)
         cation_reader.parse_property_json()
         cation_reader.get_scfenergy()
@@ -429,9 +457,11 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
             atom_map,
             "oxidation",
             nbo_block_index=int(nbo_block_map.get("oxidation", 1)),
+            condensed_file=condensed_file,
         )
 
-        anion_reader = od.OrcaReader(calc_path, basename="reduction", out_file_path=None, nbo_block_index=0, nbo_job_number=None)
+        anion_reader = od.OrcaReader(calc_path, basename="reduction", out_file_path=None, nbo_block_index=0, nbo_job_number=None,
+                                        condensed_file=condensed_file)
         anion_reader.set_atoms(atom_map)
         anion_reader.parse_property_json()
         anion_reader.get_scfenergy()
@@ -442,6 +472,7 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
             atom_map,
             "reduction",
             nbo_block_index=int(nbo_block_map.get("reduction", 2)),
+            condensed_file=condensed_file,
         )
 
         P = od.RedoxSet(neutralReader=neutral_reader, cationReader=cation_reader, anionReader=anion_reader, descriptorPrefixes=descriptorPrefixes)
@@ -451,7 +482,7 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
         results_dict[row.Index] = results
     return results_dict
 
-def get_all_charges(df, atoms, basename="singlepoint"):
+def get_all_charges(df, atoms, basename="singlepoint", condensed_file=CONDENSED_FILENAME):
     results_dict = {}
     repo_root = Path(__file__).resolve().parent.parent
     for row in df.itertuples():
@@ -459,7 +490,8 @@ def get_all_charges(df, atoms, basename="singlepoint"):
 
         atom_map = {atom: int(df.loc[row.Index, atom]) for atom in atoms}
 
-        reader = od.OrcaReader(calc_path, basename=basename, out_file_path=None, nbo_block_index=0, nbo_job_number=None)
+        reader = od.OrcaReader(calc_path, basename=basename, out_file_path=None, nbo_block_index=0, nbo_job_number=None,
+                               condensed_file=condensed_file)
         reader.set_atoms(atom_map)
         reader.parse_property_json()
         reader.aggregate_results()
@@ -468,7 +500,8 @@ def get_all_charges(df, atoms, basename="singlepoint"):
         results_dict[row.Index] = results
     return results_dict
 
-def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0, spin="alpha"):
+def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0, spin="alpha",
+                           condensed_file=CONDENSED_FILENAME):
     """Extract all properties available from ``od.NBOProps`` into a flat dataframe.
 
     Parameters
@@ -487,6 +520,9 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0,
     spin : {"alpha", "beta", "both"}, optional
         Spin set returned for open-shell NBO blocks, by default ``"alpha"``. See
         ``od.NBOProps`` for the rationale; closed-shell blocks ignore it.
+    condensed_file : str | None, optional
+        Name of the condensed per-conformer JSON (``desc_utils.condense``) read instead of the
+        ORCA output when it exists in the folder; ``None`` always parses the output.
 
     Returns
     -------
@@ -506,19 +542,11 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0,
         }
 
         try:
-            out_file = _find_nbo_out_file(calc_path, basename=basename)
-            nbo_reader = od.NBOProps(out_file, block_index=nbo_block_index, spin=spin)
+            # Every descriptor family implemented by NBOProps (from the condensed file when present).
+            results = _load_nbo_results(calc_path, basename, nbo_block_index, spin=spin,
+                                        condensed_file=condensed_file, full=True)
 
-            # Collect every descriptor family implemented by NBOProps.
-            nbo_reader.get_NPA()
-            nbo_reader.get_NAO()
-            nbo_reader.get_NBO_summary()
-            nbo_reader.get_orbital_details()
-            nbo_reader.get_NHO_directionality()
-            nbo_reader.get_second_order_perturbation()
-            nbo_reader.get_cycle_info()
-
-            filtered = _collect_selected_nbo_results(nbo_reader.results, atom_map)
+            filtered = _collect_selected_nbo_results(results, atom_map)
             row_results.update(filtered)
         except Exception as exc:
             row_results["nbo_extraction_error"] = str(exc)

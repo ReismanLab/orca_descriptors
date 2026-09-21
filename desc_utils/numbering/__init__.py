@@ -154,7 +154,7 @@ def build_numbering_table(spec: Spec, repo_root: Path, backend: NumberingBackend
         row, extra = _number_one(ctx, spec, backend, regenerate_sdf)
         rec = {"xyz_name": ctx.xyz_name, "path": ctx.rel_path, id_col: ctx.molecule_id}
         try:
-            rec[energy_cfg["column"]] = scf_energy(ctx.conf_dir, energy_cfg["basename"])
+            rec[energy_cfg["column"]] = scf_energy(ctx.conf_dir, energy_cfg["basename"], spec.data.get("condensed_file"))
         except Exception as exc:
             rec[energy_cfg["column"]] = np.nan
             row.notes.append(f"energy: {type(exc).__name__}: {str(exc)[:80]}")

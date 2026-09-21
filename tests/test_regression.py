@@ -2,12 +2,15 @@
 
 Reference data (committed):
 * ``atom_numbering_results.csv``                      numbering table of the LNiH2 library
-* ``review/results/library_per_conformer_upstream_f6bc24c.csv``  DescriPyTor block, per conformer
-* ``20260918_LNiH2_library_001_to_download_2026_03_24_descriptors.csv``  aggregated + filtered
-* ``20260918_test_molecules_descriptors.csv``         aggregated + filtered, test molecules
+* ``review/results/library_per_conformer_condensed_json.csv``  DescriPyTor block, per conformer
+* ``20260921_LNiH2_library_001_to_download_2026_03_24_descriptors.csv``  aggregated + filtered
+* ``20260921_test_molecules_descriptors.csv``         aggregated + filtered, test molecules
 
-Both aggregated references were regenerated on 2026-09-18 with the current DescriPyTor submodule
-and the corrected IP/EA sign convention, so every numeric column is compared.
+All three were regenerated on 2026-09-21 from the condensed per-conformer files (``orca_condensed.json``,
+``desc_utils.condense``): DescriPyTor reads them through its JSON reader instead of the orca2gaussian
+feathers, so the vibration, dipole and NBO-charge columns differ from the 2026-09-18 references on
+purpose (see ``review/DESCRIPYTOR_UPGRADE.md``). Every numeric column is compared. The condensed files
+themselves are rebuilt from the raw ORCA outputs by ``python -m desc_utils.run condense --spec ...``.
 
 Run with ``pytest -m slow`` (several minutes). Skipped automatically when DATA/ is absent.
 """
@@ -59,15 +62,22 @@ def test_smarts_numbering_reproduces_table(lnih2, numbering_ref, repo_root):
 
 
 def test_descripytor_block_reproduces_reference(lnih2, numbering_ref, repo_root):
-    ref = pd.read_csv(repo_root / "review/results/library_per_conformer_upstream_f6bc24c.csv").set_index("feather_dir")
-    out = extract_descripytor(numbering_ref, lnih2.descripytor, repo_root, progress=False).set_index("path").reindex(ref.index)
-    cols = [c for c in ref.columns if c != "n_loaded"]
-    assert not [c for c in cols if c not in out.columns]
+    from desc_utils.extract.descripytor import label_columns
+
+    ref = pd.read_csv(repo_root / "review/results/library_per_conformer_condensed_json.csv").set_index("path")
+    from desc_utils.data_extraction import conf_key
+
+    out = extract_descripytor(numbering_ref, lnih2.descripytor, repo_root, progress=False,
+                              condensed_file=lnih2.data.get("condensed_file"))
+    out["path"] = out["path"].map(lambda p: conf_key(p, repo_root))  # numbering paths carry a trailing slash
+    out = out.set_index("path").reindex(ref.index)
+    cols = [c for c in label_columns(lnih2.descripytor) if c in ref.columns]
+    assert cols and not [c for c in cols if c not in out.columns]
     _assert_close(ref, out, cols)
 
 
 def test_full_pipeline_reproduces_aggregated_csv(lnih2, repo_root):
-    ref = pd.read_csv(repo_root / "20260918_LNiH2_library_001_to_download_2026_03_24_descriptors.csv").set_index("inchi")
+    ref = pd.read_csv(repo_root / "20260921_LNiH2_library_001_to_download_2026_03_24_descriptors.csv").set_index("inchi")
     num = read_numbering_table(repo_root / "atom_numbering_results.csv", lnih2)
     per_conf = run_extraction(lnih2, num, repo_root, progress=False)
     agg = aggregate_conformers(per_conf, lnih2)
@@ -83,7 +93,7 @@ def test_full_pipeline_reproduces_aggregated_csv(lnih2, repo_root):
 
 def test_test_molecules_pipeline(repo_root):
     spec = load_spec(repo_root / "specs" / "test_molecules_at1_at2.yaml")
-    ref = pd.read_csv(repo_root / "20260918_test_molecules_descriptors.csv").set_index("inchi")
+    ref = pd.read_csv(repo_root / "20260921_test_molecules_descriptors.csv").set_index("inchi")
     num = build_numbering_table(spec, repo_root, progress=False)
     assert (num[["at1", "at2"]].astype(int).values == [1, 2]).all()
     per_conf = run_extraction(spec, num, repo_root, progress=False)

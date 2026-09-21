@@ -14,9 +14,9 @@ Two engines compute the descriptors: the in-house ORCA readers (`desc_utils`) an
 - [Repository layout](#repository-layout)
 - [Pipeline: from ORCA files to the final descriptors](#pipeline-from-orca-files-to-the-final-descriptors)
   - [0. ORCA calculations](#0-orca-calculations)
-  - [1. Spec](#1-spec)
-  - [2. Atom numbering](#2-atom-numbering)
-  - [3. Preprocessing for DescriPyTor](#3-preprocessing-for-descripytor)
+  - [1. Condensed file and transfer](#1-condensed-file-and-transfer)
+  - [2. Spec](#2-spec)
+  - [3. Atom numbering](#3-atom-numbering)
   - [4. Extraction](#4-extraction)
   - [5. Aggregation and filtering](#5-aggregation-and-filtering)
   - [Adding a new molecule family](#adding-a-new-molecule-family)
@@ -49,9 +49,9 @@ The ORCA jobs themselves need ORCA 6.1 and NBO 7 on the cluster (see
 |---|---|
 | [DATA](DATA) | Calculation outputs: one folder per molecule (InChIKey), one sub-folder per conformer (`conf_*`). |
 | [specs](specs) | One YAML spec per molecule family. `lnih2_pyox.yaml` (LNiH2 / PyOx ligand library) and `test_molecules_at1_at2.yaml` (small organic test set) are the shipped examples. |
-| [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_descriptors.py` and `data_extraction.py` (ORCA readers and morfeus geometry). |
+| [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
-| [orca2gaussian](orca2gaussian) | Converter writing a pseudo-Gaussian log per conformer so DescriPyTor can read ORCA results. To be replaced by a direct ORCA to DescriPyTor-JSON converter. |
+| [orca2gaussian](orca2gaussian) | Deprecated. Former converter writing a pseudo-Gaussian log per conformer for DescriPyTor (unit and layout bugs, see CODE_REVIEW C3 to C7). Replaced by the condensed JSON; only used with `descriptors.descripytor.input.kind: feather`. |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | ORCA compound input (`calcParam.inp`), SLURM script and launcher used on the cluster. |
 | [tests](tests) | Unit tests and regression tests against the committed descriptor CSVs. |
 | [review](review) | Notes and scripts from the DescriPyTor upgrade (old vs new Sterimol comparison, per-conformer reference CSVs). |
@@ -61,17 +61,21 @@ The ORCA jobs themselves need ORCA 6.1 and NBO 7 on the cluster (see
 ## Pipeline: from ORCA files to the final descriptors
 
 ```
-ORCA compound job per conformer            (cluster)
-        │  optimization.xyz, singlepoint/oxidation/reduction/nmr .property.json, calcParam.out (NBO)
+ORCA compound job per conformer                                                            (cluster)
+        │  optimization.xyz, *.property.json, singlepoint.json (GBW dump), calcParam.out (NBO, frequencies)
         ▼
-[1] spec  ──►  [2] number  ──►  [3] orca2gaussian + logs_to_feather  ──►  [4] extract  ──►  [5] aggregate + filter
-                atom_numbering_results.csv   conf_N.log, conf_N.feather        combined_descriptors.csv   <date>_<name>_descriptors.csv
+[1] condense  ──►  <conf>/orca_condensed.json      (standard-library Python, ~0.4 to 1.5 MB per conformer)
+        │  rsync optimization.xyz + orca_condensed.json                                    (workstation)
+        ▼
+[2] spec  ──►  [3] number  ──►  [4] extract  ──►  [5] aggregate + filter
+                atom_numbering_results.csv   combined_descriptors.csv   <date>_<name>_descriptors.csv
 ```
 
 All stages read the same spec. From the repository root, in `gp_env`:
 
 ```bash
 python -m desc_utils.run validate  --spec specs/lnih2_pyox.yaml
+python -m desc_utils.run condense  --spec specs/lnih2_pyox.yaml            # -> <conf>/orca_condensed.json (normally run on the cluster)
 python -m desc_utils.run number    --spec specs/lnih2_pyox.yaml            # -> atom_numbering_results.csv
 python -m desc_utils.run extract   --spec specs/lnih2_pyox.yaml            # -> combined_descriptors.csv (per conformer)
 python -m desc_utils.run aggregate --spec specs/lnih2_pyox.yaml            # -> <date>_<name>_descriptors.csv
@@ -98,9 +102,51 @@ Every conformer is computed with the compound job
 | `nmr` | M06-D4 / def2-TZVP, GIAO | shieldings | `nmr.property.json` |
 | `oxidation`, `reduction` | as `singlepoint`, vertical (N±1 electrons) on the optimized geometry | redox and Fukui descriptors | `oxidation.property.json`, `reduction.property.json`, `calcParam.out` (NBO blocks 2 and 3) |
 
-Solvent is empty by default; NBO requires the `NBOEXE`/`GENEXE` environment variables.
+Solvent is empty by default; NBO requires the `NBOEXE`/`GENEXE` environment variables. Every file in the
+last column is read through `orca_condensed.json` once that file exists (section 1); the raw files are
+then only needed on the cluster.
 
-### 1. Spec
+### 1. Condensed file and transfer
+
+A finished conformer folder holds about 70 MB, of which the pipeline reads about 37 MB: the 32 MB GBW
+dump `singlepoint.json` (for two HOMO/LUMO numbers), the 4 MB `calcParam.out` (NBO tables, frequencies)
+and the small `.property.json` files. `desc_utils/condense.py` extracts exactly what the readers consume
+into one versioned JSON per conformer, `orca_condensed.json` (about 0.4 MB for 37 atoms, 1.5 MB for
+90 atoms, most of it the normal modes). It needs only the Python standard library, so it runs on the
+cluster right after ORCA (last lines of `slurm-calcParam.sh`) or over a finished library:
+
+```bash
+# cluster: a plain git clone of this repository, no environment
+PYTHONPATH=/path/to/orca_descriptors python -m desc_utils.condense --root /path/to/LIB --jobs 4
+PYTHONPATH=/path/to/orca_descriptors python -m desc_utils.condense --root /path/to/LIB --check
+# workstation: the same producer driven by the spec
+python -m desc_utils.run condense --spec specs/lnih2_pyox.yaml
+```
+
+Then pull the condensed files together with the 3 KB geometry; everything else stays on the cluster:
+
+```bash
+rsync -avz --prune-empty-dirs --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
+      --exclude='*' user@cluster:/path/to/LIB/  DATA/LIB/
+```
+
+Content (schema version 1; units in the key names; `null` when ORCA did not print a quantity):
+
+| Section | Content | Source |
+|---|---|---|
+| `molecule` | atoms with Å coordinates, charge, multiplicity | `optimization.xyz` |
+| `states.<singlepoint / oxidation / reduction / nmr>` | SCF energy, electron counts, Mulliken / Loewdin / CHELPG / Hirshfeld charges, dipole (a.u.), polarizability, thermochemistry, NMR `siso` / `saniso`, MO energies and occupations (`singlepoint` only by default, `--mo-states`) | `<state>.property.json`, `<state>.json` |
+| `nbo.blocks[]` | `NBOProps.results` per NBO block: NPA, NAO occupancies, NBO summary, hybrids, NHO directionality, second-order perturbation, cycle info. Block 0 (neutral) in full; the cation and anion blocks keep NPA only unless `--nbo-full all` | `calcParam.out` |
+| `properties`, `vibrations`, `charges` | DescriPyTor's JSON schema: dipole in Debye (singlepoint), polarizability, frequencies with unit-norm displacements per mode (translations and rotations dropped, IR intensities where printed), NPA / Hirshfeld / CM5 charges | derived from the above |
+| `producer` | ORCA and NBO versions, host, time, git commit, size and mtime of every input file | |
+
+Every reader (`OrcaReader`, the NBO loader, `scf_energy` of the numbering stage, DescriPyTor's
+`Molecules`) uses the condensed file when `<conf>/<data.condensed_file>` exists and the raw files
+otherwise, so folders downloaded before this step keep working; `data.condensed_file: null` forces the
+raw files. `python -m desc_utils.condense --check` validates existing files, and `tests/test_condense.py`
+asserts that every in-house column is identical whichever source is read.
+
+### 2. Spec
 
 A spec has these sections (defaults in `desc_utils/spec.py::DEFAULTS`):
 
@@ -118,7 +164,7 @@ A spec has these sections (defaults in `desc_utils/spec.py::DEFAULTS`):
 `validate` reports every problem at once (unknown labels, wrong arity, SMARTS that do not parse, roles
 outside the SMARTS, labels never assigned). Quote every SMARTS string: `#` starts a YAML comment.
 
-### 2. Atom numbering
+### 3. Atom numbering
 
 `number` writes one row per conformer folder with the 1-based index of every label, plus `path`,
 `inchi`, `SCF_energy`, `smiles`, annotator columns (e.g. `ligand_class`), `numbering_backend`,
@@ -135,16 +181,6 @@ Backends:
 - `first_n`: label the first N atoms in file order (small test molecules).
 - `molalign`: reserved for alignment-based numbering, not implemented yet.
 
-### 3. Preprocessing for DescriPyTor
-
-DescriPyTor reads Gaussian logs. `orca2gaussian/orca_2_gauss.py --orca-folder DATA/<library>` writes a
-pseudo-Gaussian `conf_N.log` per conformer from the ORCA outputs, and DescriPyTor's `logs_to_feather`
-turns each log into the `conf_N.feather` file that `Molecules` loads. The notebook has a labelled
-preprocessing section for this; `extract` reports the exact command for any conformer whose feather is
-missing. This step will disappear once the direct ORCA to DescriPyTor-JSON converter lands
-(`descriptors.descripytor.input.kind: json` is reserved for it). cclib cannot read ORCA 6.1 compound
-outputs, so the converter parses the `.property.json` files and `calcParam.out` directly.
-
 ### 4. Extraction
 
 `extract` resolves every labelled term of the spec to atom indices per conformer and calls the two
@@ -154,8 +190,9 @@ engines. Column names embed the labels, never the indices (`%Vbur_atom_Ni_radius
 - ORCA side (`desc_utils/extract/orca.py`): `xyz` (morfeus on `optimization.xyz`, cached in
   `<conf>/xyz.json` and recomputed when the spec asks for columns the cache lacks), `charges`
   (`singlepoint.property.json`, `nmr.property.json`), `nbo` (NBO 7 block of `calcParam.out`),
-  `redox` (`singlepoint`/`oxidation`/`reduction`).
-- DescriPyTor side (`desc_utils/extract/descripytor.py`): one `Molecules` object per conformer feather,
+  `redox` (`singlepoint`/`oxidation`/`reduction`); all of them from `orca_condensed.json` when it exists.
+- DescriPyTor side (`desc_utils/extract/descripytor.py`): one `Molecules` object per conformer, loaded
+  from `orca_condensed.json` (`input.kind: json`; `feather` selects the deprecated orca2gaussian path),
   one call per family; the `FAMILIES` table maps DescriPyTor's index-based column names to label-based
   names. `python -m desc_utils.run to-schema-b --spec ... --row 0` prints the index-based JSON that
   DescriPyTor's own tools consume for one conformer.
@@ -183,7 +220,7 @@ the `numbering_status` column before `extract`.
 ### Tests
 
 ```bash
-pytest tests -m "not slow"     # unit tests, seconds
+pytest tests -m "not slow"     # unit tests, seconds (includes the condensed-file round trip on the tracked fixtures)
 pytest tests -m slow           # regression: reproduces atom_numbering_results.csv, the DescriPyTor
                                # per-conformer reference and the committed aggregated CSVs (minutes)
 ```
@@ -263,7 +300,7 @@ Open-shell (UHF/UKS) NBO blocks hold two complete analyses, one per spin, and NB
 
 ### DescriPyTor descriptors
 
-Computed by DescriPyTor `Molecules` from the per-conformer feather (`descriptors.descripytor`).
+Computed by DescriPyTor `Molecules` from the per-conformer `orca_condensed.json` (`descriptors.descripytor`).
 Each key takes a list of label tuples; the shipped LNiH2 spec uses the same bonds and angles as the
 ORCA families.
 
@@ -292,8 +329,9 @@ ORCA families.
 - Norm: `dipole` (one triple) or `dipole_X-X-X` (several) :white_check_mark:
 - Components in the transformed frame: `dipole_x_X-X-X`, `dipole_y_X-X-X`, `dipole_z_X-X-X` :white_check_mark:
 
-**Not available from DescriPyTor's feather path**: polarizability, IR intensities, Enthalpy and Gibbs
-free energy (:x: not implemented yet; planned with the JSON converter).
+Polarizability and IR intensities are stored in `orca_condensed.json` but no DescriPyTor family
+consumes them. Enthalpy and Gibbs free energy :x: not implemented yet (they live in
+`frequency.property.json`, which neither the readers nor the condenser open for thermochemistry).
 
 ## References
 

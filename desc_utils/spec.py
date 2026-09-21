@@ -43,7 +43,7 @@ DESCRIPYTOR_SCALAR_KEYS: dict[str, Any] = {
     "bend_threshold": 1300,
     "radii": "CPK",
     "drop_atoms": [],
-    "input": {"kind": "feather"},
+    "input": {"kind": "json"},  # json = <conf>/<data.condensed_file>; feather = legacy orca2gaussian path
 }
 
 #: ORCA-side (morfeus / OrcaReader) families and the arity of each term list.
@@ -66,6 +66,8 @@ DEFAULTS: dict[str, Any] = {
         "conformer_glob": "conf_*",
         "geometry_file": "optimization.xyz",
         "molecule_id_column": "inchi",
+        # desc_utils.condense output read instead of the raw ORCA files when present; null = raw files only
+        "condensed_file": "orca_condensed.json",
     },
     "numbering": {
         "index_base": 1,
