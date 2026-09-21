@@ -11,9 +11,15 @@ Two engines compute the descriptors: the in-house ORCA readers (`desc_utils`) an
 ## Contents
 
 - [Installation](#installation)
-- [Quick start: from ORCA outputs to a descriptor spreadsheet](#quick-start-from-orca-outputs-to-a-descriptor-spreadsheet)
+- [Descriptor extraction guidelines](#descriptor-extraction-guidelines)
+  - [Prerequisites](#prerequisites)
+  - [A. Reproduce the shipped LNiH2 descriptors](#a-reproduce-the-shipped-lnih2-descriptors)
+  - [B. Compute descriptors for a new library](#b-compute-descriptors-for-a-new-library)
+  - [C. Re-run after changing the spec or adding conformers](#c-re-run-after-changing-the-spec-or-adding-conformers)
+  - [What you get](#what-you-get)
+  - [If something goes wrong](#if-something-goes-wrong)
 - [Repository layout](#repository-layout)
-- [Pipeline: from ORCA files to the final descriptors](#pipeline-from-orca-files-to-the-final-descriptors)
+- [Pipeline in detail: from ORCA files to the final descriptors](#pipeline-in-detail-from-orca-files-to-the-final-descriptors)
   - [0. ORCA calculations](#0-orca-calculations)
   - [1. Condensed file and transfer](#1-condensed-file-and-transfer)
   - [2. Spec](#2-spec)
@@ -44,89 +50,140 @@ tests were validated against (`f6bc24c`, 2026-08-31).
 The ORCA jobs themselves need ORCA 6.1 and NBO 7 on the cluster (see
 [scripts-for-orca-computations](scripts-for-orca-computations)).
 
-## Quick start: from ORCA outputs to a descriptor spreadsheet
+## Descriptor extraction guidelines
 
-The walkthrough below goes from finished ORCA compound jobs on the cluster to one CSV with one row per
-molecule. Each step names the command, what it produces and what to check before moving on; the
-sections under [Pipeline](#pipeline-from-orca-files-to-the-final-descriptors) explain the details.
-Starting point: every conformer was computed with
-[calcParam.inp](scripts-for-orca-computations/calcParam.inp) into `<LIB>/<molecule>/conf_N/` folders
-(see [0. ORCA calculations](#0-orca-calculations)), and the repository is installed locally
-([Installation](#installation)).
+A copy-paste recipe for reproducing or computing descriptors from the command line. You do not need
+the rest of this document to run it; the [detailed pipeline](#pipeline-in-detail-from-orca-files-to-the-final-descriptors)
+explains what each command does. Placeholders: `<LIB>` is the library folder name, `<cluster>` the
+login node, `<user>` your account.
 
-**Step 1. Condense each conformer folder on the cluster.** One small `orca_condensed.json` per conformer
-replaces the ~70 MB of raw outputs. It needs only a plain Python 3.8+ and a `git clone` of this
-repository (no environment). Skip this step if `slurm-calcParam.sh` already ran it at the end of the job.
+### Prerequisites
+
+Once, on the workstation:
 
 ```bash
-ssh <cluster>
-git clone https://github.com/ReismanLab/orca_descriptors            # once
-PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/LIB --jobs 4
-PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/LIB --check
+git clone https://github.com/ReismanLab/orca_descriptors
+cd orca_descriptors
+git submodule update --init          # DescriPyTor, pinned commit
+conda env create -f gp_env.yml       # environment "gp_env"
+conda activate gp_env
+pytest tests -m "not slow"           # expected: all passed, a few seconds
 ```
 
-Check: the summary ends with `failed 0`. A `failed` folder is a broken calculation (for example an ORCA
-run that aborted before NBO returned); the message says why. Fix or drop those conformers.
+Run every command below from the repository root with `gp_env` active. The cluster side needs only
+Python 3.8 or newer and a `git clone` of this repository, no environment. ORCA jobs must have been run
+with [calcParam.inp](scripts-for-orca-computations/calcParam.inp) into `<LIB>/<molecule>/conf_N/`
+folders; anything else (other input files, other folder layout) needs a spec of its own, see
+[2. Spec](#2-spec).
 
-**Step 2. Transfer only the condensed files.** About 1 to 2 GB for 2500 conformers.
+### A. Reproduce the shipped LNiH2 descriptors
+
+The LNiH2 / PyOx library (308 conformers, 38 ligands) is not in the repository. Copy it into
+`DATA/LNiH2_library_001_to_download_2026_03_24/` either as the raw ORCA folders or, much smaller, as
+the condensed files with the rsync command of step B2 below. Then:
+
+```bash
+python -m desc_utils.run condense --spec specs/lnih2_pyox.yaml --jobs 4   # ~20 s; skipped for folders that already have orca_condensed.json
+python -m desc_utils.run all --spec specs/lnih2_pyox.yaml --numbering atom_numbering_results.csv   # ~6 min
+```
+
+Result: `<today>_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`, 38 rows, numerically equal
+to the committed `20260921_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`. To have the test
+suite confirm it column by column:
+
+```bash
+pytest tests -m slow                 # ~10 min; also re-derives the atom numbering and the DescriPyTor block
+```
+
+### B. Compute descriptors for a new library
+
+**B1. Condense on the cluster** (skip if `slurm-calcParam.sh` already did it at the end of each job):
+
+```bash
+ssh <user>@<cluster>
+git clone https://github.com/ReismanLab/orca_descriptors            # once, anywhere
+PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/<LIB> --jobs 4
+PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/<LIB> --check
+```
+
+Expected: `condensed N folder(s), skipped 0, failed 0` and `checked N file(s): N ok, 0 failed`. A
+`failed` line names a conformer whose ORCA run did not finish; see the troubleshooting table.
+
+**B2. Transfer** (about 0.5 MB per conformer):
 
 ```bash
 rsync -avz --prune-empty-dirs --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
-      --exclude='*' <user>@<cluster>:/path/to/LIB/  DATA/LIB/
+      --exclude='*' <user>@<cluster>:/path/to/<LIB>/  DATA/<LIB>/
 ```
 
-Check: `ls DATA/LIB/*/conf_1/` shows exactly `optimization.xyz` and `orca_condensed.json`.
-
-**Step 3. Write the spec.** Copy [specs/lnih2_pyox.yaml](specs/lnih2_pyox.yaml) to `specs/LIB.yaml` and
-edit `name`, `data.root: DATA/LIB`, the `atoms` labels, the `numbering` block (SMARTS stages; or
-`backend: first_n` for small molecules; or `backend: manual` with your own CSV of atom indices), the
-label lists under `descriptors`, and `filter.metal_label` (`null` for organic molecules). Then
+**B3. Spec.** Copy the closest example and edit the marked fields:
 
 ```bash
-python -m desc_utils.run validate --spec specs/LIB.yaml
+cp specs/lnih2_pyox.yaml specs/<LIB>.yaml        # Ni complexes with bidentate N,N ligands
+# or: cp specs/test_molecules_at1_at2.yaml specs/<LIB>.yaml   # small molecules, first atoms labelled
 ```
 
-Check: it prints `OK` with the labels and descriptor families. Every problem (unknown label, wrong
-arity, SMARTS that does not parse) is listed at once. Quote every SMARTS: `#` starts a YAML comment.
-
-**Step 4. Number the atoms.**
+| Field | Set to |
+|---|---|
+| `name` | `<LIB>` (used in the output file name) |
+| `data.root` | `DATA/<LIB>` |
+| `atoms` | one label per atom of interest, `label: element` (`null` = any element) |
+| `numbering` | how each label is found: `smarts` stages (see the LNiH2 spec), `first_n` (labels = atoms 1..N of the xyz), or `manual` with `csv:` pointing to your own table of 1-based indices |
+| `descriptors.orca.*`, `descriptors.descripytor` | label lists / label tuples; delete the terms you do not need |
+| `filter.metal_label` | the metal label, or `null` for organic molecules |
 
 ```bash
-python -m desc_utils.run number --spec specs/LIB.yaml          # -> atom_numbering_results.csv
+python -m desc_utils.run validate --spec specs/<LIB>.yaml   # expected: "OK  specs/<LIB>.yaml"
 ```
 
-Check: the `numbering_status` column is `ok` for every row (`--strict` makes the command fail otherwise).
-Rows that are not `ok` are skipped downstream; `numbering_notes` says which SMARTS stage failed.
-The table is plain CSV, so indices can be corrected by hand and reused with `--numbering`.
-
-**Step 5. Extract the per-conformer descriptors.**
+**B4. Number, extract, aggregate:**
 
 ```bash
-python -m desc_utils.run extract --spec specs/LIB.yaml         # -> combined_descriptors.csv
+python -m desc_utils.run number --spec specs/<LIB>.yaml --strict   # -> atom_numbering_results.csv (name from the spec)
+python -m desc_utils.run all    --spec specs/<LIB>.yaml            # -> combined_descriptors.csv, <today>_<LIB>_descriptors.csv
 ```
 
-Check: one row per numbered conformer; the `descripytor_notes` and `nbo_extraction_error` columns are
-empty. Morfeus results are cached in `<conf>/xyz.json`, so re-running is fast; a few seconds per
-conformer on the first run.
+`--strict` stops if any conformer could not be numbered; the table it wrote lists the offending rows
+with the reason. `all` re-runs the numbering, so use `all --numbering <csv>` to keep a hand-corrected table.
 
-**Step 6. Aggregate the conformers and filter the columns.**
+### C. Re-run after changing the spec or adding conformers
 
-```bash
-python -m desc_utils.run aggregate --spec specs/LIB.yaml       # -> <date>_LIB_descriptors.csv
-```
+| You changed | Run |
+|---|---|
+| Descriptor terms or filter settings only | `python -m desc_utils.run extract --spec S` then `aggregate --spec S` (morfeus geometry is cached in `<conf>/xyz.json`; add `--overwrite-xyz-json` if you changed `vbur_radii` or `quadrants`) |
+| Atom labels or numbering rules | `number --spec S --strict`, then `all --spec S --numbering <csv>` |
+| Added conformer folders on the cluster | B1 (existing files are skipped), B2, then `all --spec S` |
+| Only the aggregation temperature or filter | `aggregate --spec S` (`--no-filter` keeps every column) |
 
-This is the spreadsheet: one row per molecule with `inchi`, `smiles`, `n_conformers` and, for every
-descriptor, `_min`, `_max`, `_lowE` and Boltzmann-averaged `_boltz` columns, after removing constant,
-near-constant, highly correlated and low-occupancy columns. `--no-filter` keeps every column.
+### What you get
 
-Steps 4 to 6 in one go, once the spec validates:
+| File | One row per | Content |
+|---|---|---|
+| `atom_numbering_results.csv` | conformer | 1-based index of every label, SCF energy, SMILES, `numbering_status` |
+| `combined_descriptors.csv` | conformer | every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
+| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchi`, `smiles`, `n_conformers`, then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`), after the noise filter |
 
-```bash
-python -m desc_utils.run all --spec specs/LIB.yaml
-```
+Conventions worth knowing when reading the spreadsheet: energies are in Hartree, HOMO/LUMO in eV,
+IP and EA are positive for bound electrons (`IP = E(cation) - E(neutral)`), Fukui functions follow
+`f+ = q(N) - q(N+1)`, `cm5_*` equals `hirshfeld_*` (the CM5 correction is not implemented), and
+DescriPyTor Sterimol values (`B1_*`, `B5_*`, `L_*`) differ from the morfeus ones (`Sterimol_*`).
+The full list is under [Descriptors provided](#descriptors-provided).
 
-The output file names come from the `output` block of the spec. Folders downloaded with their raw
-ORCA files (no `orca_condensed.json`) work the same way: the readers fall back to the raw files.
+### If something goes wrong
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `condense` prints `failed ... no complete NBO block (NBO started but never returned)` | the ORCA job aborted; `tail calcParam.out` shows the error | rerun the ORCA job or drop the conformer folder |
+| `condense` prints `failed ... optimization.xyz missing` / `singlepoint.property.json missing` | the job did not reach that step, or a different input file was used | same as above; the pipeline needs the `calcParam.inp` steps |
+| `numbering_status` is `failed` or `incomplete` | no SMARTS stage matched this conformer | check the SMILES in the table, adjust the stage patterns, or switch to `backend: manual` with your own indices |
+| `numbering_status` is `element_mismatch` | the matched atom is not the element declared in `atoms` | fix the SMARTS role positions or the `atoms` element |
+| `numbering_status` is `inconsistent` | conformers of one molecule got different indices | usually a symmetric ligand; set `numbering.smarts.match_selection: lowest_indices` or add an `orient` rule |
+| `descripytor_notes` says `no orca_condensed.json in ...` | the folder holds raw files only or was not transferred | run step B1 / B2, or `python -m desc_utils.run condense --spec S` locally when the raw files are present |
+| `descripytor_notes` says `expected 1 molecule file ..., loaded 0` | the condensed file is unreadable | `python -m desc_utils.condense --root DATA/<LIB> --check` and rebuild with `--overwrite` |
+| `nbo_extraction_error` column is not empty | the NBO block of that conformer is missing or truncated | same as the first row |
+| `ImportError: DescriPyTor not found at ...` | submodule not checked out | `git submodule update --init` |
+| `numpy.dtype size changed` or similar import errors | a `pip install` of DescriPyTor downgraded numpy | never pip-install DescriPyTor; recreate `gp_env` from `gp_env.yml` |
+| `validate` lists `unknown label` | a descriptor term uses a label that is not in `atoms` | add the label or fix the typo; labels are case-sensitive |
 
 ## Repository layout
 
@@ -143,7 +200,7 @@ ORCA files (no `orca_condensed.json`) work the same way: the readers fall back t
 | `make_descriptor_descripytor.ipynb` | Notebook running the same pipeline interactively. |
 | `atom_numbering_results.csv`, `combined_descriptors.csv`, `<date>_<name>_descriptors.csv` | Outputs of the three stages for the LNiH2 library (regression references). |
 
-## Pipeline: from ORCA files to the final descriptors
+## Pipeline in detail: from ORCA files to the final descriptors
 
 ```
 ORCA compound job per conformer                                                            (cluster)
