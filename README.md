@@ -242,8 +242,8 @@ Open-shell (UHF/UKS) NBO blocks hold two complete analyses, one per spin, and NB
 
 **Redox and conceptual DFT** (vertical `oxidation` / `reduction` steps, `descriptors.orca.redox`)
 
-- Vertical ionization potential and electron affinity (Hartree): `Vertical_Ionization_Potential`, `Vertical_Electron_Affinity` :white_check_mark: (computed as `E(neutral) − E(cation)` and `E(anion) − E(neutral)`, i.e. with the opposite sign of the usual convention; see CODE_REVIEW C2)
-- Hardness, electronegativity, electrophilicity: `Hardness`, `Electronegativity`, `Electrophilicity` :white_check_mark: (same sign caveat)
+- Vertical ionization potential and electron affinity (Hartree): `Vertical_Ionization_Potential`, `Vertical_Electron_Affinity` :white_check_mark: (computed as `E(cation) − E(neutral)` and `E(neutral) − E(anion)`, positive for bound electrons)
+- Hardness, electronegativity, electrophilicity: `Hardness`, `Electronegativity`, `Electrophilicity` :white_check_mark:
 
 **Condensed Fukui functions** (`Z` = charge scheme listed in `redox.prefixes`: `nbo_charge`, `cm5`, `mulliken`, `loewdin`, `chelpG`, `hirshfeld`)
 
