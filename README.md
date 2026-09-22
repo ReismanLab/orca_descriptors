@@ -170,22 +170,36 @@ already ran it at the end of each job.
 
 **This is the one step that needs no environment**: `python -m desc_utils.condense` imports only the
 Python standard library, so any interpreter 3.8 or newer will do and `gp_env` is irrelevant here. Do
-not `conda activate` anything, just make `python` available:
+not `conda activate` anything.
+
+Condensing a library reads every raw ORCA output it has, which is not login-node work: submit
+[slurm-condense.sh](scripts-for-orca-computations/slurm-condense.sh) instead.
 
 ```bash
 ssh <user>@<cluster>
-module load python                                                    # any python >= 3.8
 git clone https://github.com/ReismanLab/orca_descriptors              # once, anywhere; no environment, no pip install
 git -C orca_descriptors checkout code-review
+vi orca_descriptors/scripts-for-orca-computations/slurm-condense.sh   # one line to edit: REPO=, the clone above
+sbatch orca_descriptors/scripts-for-orca-computations/slurm-condense.sh /path/to/<LIB>
+```
+
+One node, eight cores, two hours by default; raise the `#SBATCH` lines for a large library. The job
+writes `condense_<jobid>.out`, which ends with `condensed N folder(s), skipped 0, failed 0` and
+`checked N file(s): N ok, 0 failed`, and it comes back FAILED if any conformer could not be
+condensed or if a file it wrote does not check out. Folders that already have their
+`orca_condensed.json` are skipped, so submitting the same job again after a new batch of ORCA runs
+only does the new conformers. A `failed` line names a conformer whose ORCA run did not finish; see
+[If something goes wrong](#if-something-goes-wrong).
+
+These are the two commands the job runs, if you ever need them by hand (a couple of conformers, an
+interactive allocation, raw folders sitting on your laptop):
+
+```bash
 PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/<LIB> --jobs 4
 PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/<LIB> --check
 ```
 
-`PYTHONPATH` is the folder that *contains* `desc_utils/`, `--root` the library folder. Expected:
-`condensed N folder(s), skipped 0, failed 0` and `checked N file(s): N ok, 0 failed`. Folders that
-already have their `orca_condensed.json` are skipped, so the command can be re-run after new jobs
-finish. A `failed` line names a conformer whose ORCA run did not finish; see
-[If something goes wrong](#if-something-goes-wrong).
+`PYTHONPATH` is the folder that *contains* `desc_utils/`, `--root` the library folder.
 
 ### C. Copy the condensed files to your laptop
 
@@ -316,7 +330,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
 | [orca2gaussian](orca2gaussian) | Deprecated. Former converter writing a pseudo-Gaussian log per conformer for DescriPyTor (unit and layout bugs, see CODE_REVIEW C3 to C7). Replaced by the condensed JSON; only used with `descriptors.descripytor.input.kind: feather`. |
-| [scripts-for-orca-computations](scripts-for-orca-computations) | ORCA compound input (`calcParam.inp`), SLURM script and launcher used on the cluster. |
+| [scripts-for-orca-computations](scripts-for-orca-computations) | ORCA compound input (`calcParam.inp`), SLURM scripts and launcher used on the cluster: `slurm-calcParam.sh` (one ORCA job), `launch_orca_all.py`, `slurm-condense.sh` (condense a whole library on a compute node). |
 | [tests](tests) | Unit tests and regression tests against the committed descriptor CSVs. |
 | `setup_gp_env.sh` | One-shot installer for `gp_env` in the group folder rather than the home folder (`envs_dirs` and `pkgs_dirs`, environment, tests). |
 | [review](review) | Notes and scripts from the DescriPyTor upgrade (old vs new Sterimol comparison, per-conformer reference CSVs). |
