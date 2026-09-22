@@ -44,8 +44,13 @@ conda env create -f gp_env.yml       # environment "gp_env"
 conda activate gp_env
 ```
 
-An existing `gp_env` created before 2026-09-22 lacks Open Babel, which the SMARTS numbering needs to
-convert every xyz to sdf: `pip install openbabel-wheel==3.1.1.23` inside the environment.
+An existing `gp_env` created before 2026-09-22 lacks three packages that were added to `gp_env.yml`
+since (Open Babel for the xyz to sdf conversion of the numbering step, networkx and plotly imported by
+DescriPyTor). Inside the environment:
+
+```bash
+pip install openbabel-wheel==3.1.1.23 networkx==3.6.1 plotly==7.1.0
+```
 
 DescriPyTor is imported from the `DescriPyTor/` folder; do **not** `pip install` it into `gp_env`
 (its `numpy<2` pin would downgrade the environment). The submodule pin is the version the regression
@@ -188,6 +193,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | `nbo_extraction_error` column is not empty | the NBO block of that conformer is missing or truncated | same as the first row |
 | `No module named desc_utils.run` | the clone is on `main`, which predates the pipeline | `git checkout code-review` and run the commands from the repository root |
 | every row has `numbering_status` `failed` with `No module named 'openbabel'` | Open Babel missing from the environment (needed to convert xyz to sdf) | `pip install openbabel-wheel==3.1.1.23` in `gp_env`, then rerun `number` |
+| `extract` stops with `No module named 'networkx'` or `'plotly'` | environment created from an older `gp_env.yml` | `pip install networkx==3.6.1 plotly==7.1.0` in `gp_env` |
 | `ImportError: DescriPyTor not found at ...` | submodule not checked out | `git submodule update --init` |
 | `numpy.dtype size changed` or similar import errors | a `pip install` of DescriPyTor downgraded numpy | never pip-install DescriPyTor; recreate `gp_env` from `gp_env.yml` |
 | `validate` lists `unknown label` | a descriptor term uses a label that is not in `atoms` | add the label or fix the typo; labels are case-sensitive |

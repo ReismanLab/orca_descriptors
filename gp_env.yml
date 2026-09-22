@@ -26,3 +26,5 @@ dependencies:
       - cclib==1.8.1
       - matplotlib==3.10.0     # notebooks only
       - openbabel-wheel==3.1.1.23   # xyz -> sdf for the SMARTS numbering backend (desc_utils.numbering.io)
+      - networkx==3.6.1             # DescriPyTor connectivity graphs (imported by M2_data_extractor)
+      - plotly==7.1.0               # imported at module level by DescriPyTor/utils/help_functions.py
