@@ -1,33 +1,40 @@
 #!/usr/bin/env bash
-# Create the "gp_env" conda environment inside the group folder instead of the home folder.
-# Safe to re-run: an existing environment is left untouched.
+# Create the "gp_env" conda environment in the group folder, for the whole group to use,
+# instead of one private copy per member in the home folder.
+# Safe to re-run, by anybody: an existing environment is left untouched.
 #
-# The home quota on the cluster is small and a conda environment is not. This script points
-# both the environment folder and the package cache at the shared miniconda installation, so
-# that plain `conda env create -f gp_env.yml` and `conda activate gp_env` keep working and
-# land in the group folder from now on. Keeping the package cache there too matters: conda
-# can only hardlink a cached package into an environment on the same filesystem, otherwise it
-# copies every file.
+# The home quota on the cluster is small and a conda environment is not. This script points both
+# the environment folder and the package cache at the group folder, so that plain
+# `conda env create -f gp_env.yml` and `conda activate gp_env` keep working and land there from
+# now on. Keeping the package cache next to the environments matters: conda can only hardlink a
+# cached package into an environment on the same filesystem, otherwise it copies every file.
+#
+# The first member to run it builds the environment (~10 min). Everybody else runs the same
+# command and it only points their conda at the group folder, a few seconds.
 
 set -euo pipefail
+
+# Never stop on conda's "would you like to send this report to the maintainers? [y/N]" prompt.
+export CONDA_REPORT_ERRORS=false
+# Whatever we create has to stay readable for the rest of the group; a private umask (0077) would
+# produce a shared environment nobody else can use.
+umask 022
 
 usage() {
     cat <<'USAGE'
 Usage: bash setup_gp_env.sh [options]
 
-  --root PATH   shared miniconda installation
+  --root PATH   shared folder holding envs/ and pkgs/
                 (default: /groups/ReismanLab/miniconda3, or the /resnick path if that is the one)
-  --all-users   write the configuration into the shared installation ($ROOT/.condarc) so that
-                every group member inherits it, instead of into your own ~/.condarc
+  --all-users   write the configuration into the shared installation ($ROOT/.condarc) instead of
+                your own ~/.condarc; only useful when $ROOT is the conda installation the group
+                runs, otherwise no conda ever reads that file
   --no-test     skip the test suite at the end
 USAGE
 }
 
 die() { printf 'setup_gp_env: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n== %s\n' "$*"; }
-
-# Never stop on conda's "would you like to send this report to the maintainers? [y/N]" prompt.
-export CONDA_REPORT_ERRORS=false
 
 # `conda env create`, whatever the conda version. Up to conda 22.x, `conda env` is not a subcommand
 # but a separate conda-env executable, and that executable is missing from some installations
@@ -66,25 +73,37 @@ if [[ -z $ROOT ]]; then
             break
         fi
     done
-    [[ -n $ROOT ]] || die "no ReismanLab group folder found; pass --root /path/to/shared/miniconda3"
+    [[ -n $ROOT ]] || die "no ReismanLab group folder found; pass --root /path/to/shared/folder"
 fi
 
 ENVS_DIR=$ROOT/envs
 PKGS_DIR=$ROOT/pkgs
 PREFIX=$ENVS_DIR/gp_env
 
-command -v conda >/dev/null 2>&1 || die "conda is not on PATH; try: source $ROOT/etc/profile.d/conda.sh"
+command -v conda >/dev/null 2>&1 || die "conda is not on PATH; source the conda.sh of your installation first"
 [[ -f $REPO/gp_env.yml ]] || die "gp_env.yml not found next to this script ($REPO)"
 
 step "shared folders under $ROOT"
-mkdir -p "$ENVS_DIR" "$PKGS_DIR" || die "cannot create $ENVS_DIR and $PKGS_DIR"
-[[ -w $ENVS_DIR && -w $PKGS_DIR ]] || die "no write permission on $ENVS_DIR or $PKGS_DIR"
-# setgid, so that whatever lands there stays readable and writable for the group
-chmod g+ws "$ENVS_DIR" "$PKGS_DIR" 2>/dev/null || true
+if [[ ! -d $ENVS_DIR || ! -d $PKGS_DIR ]]; then
+    mkdir -p "$ENVS_DIR" "$PKGS_DIR" || die "cannot create $ENVS_DIR and $PKGS_DIR"
+fi
+# Group members create their environments and cache packages here too, and g+s keeps the group on
+# whatever lands in the folders. The environment itself stays read-only for the group (below), so
+# that a stray "pip install" cannot break it for everybody.
+# Two calls on purpose: chmod applies a mode in one go, and where the setgid bit is refused the
+# group permissions would be lost with it. Both fail harmlessly if someone else owns the folders.
+chmod g+rwx "$ENVS_DIR" "$PKGS_DIR" 2>/dev/null || true
+chmod g+s   "$ENVS_DIR" "$PKGS_DIR" 2>/dev/null || true
+chmod g+rx "$ROOT" 2>/dev/null || true
 printf 'environments: %s\npackage cache: %s\n' "$ENVS_DIR" "$PKGS_DIR"
 
 if ((ALL_USERS)); then
     CONDARC=$ROOT/.condarc
+    [[ -e $ROOT/etc/profile.d/conda.sh ]] || cat >&2 <<EOF
+warning: $ROOT is not a conda installation, so nobody's conda reads
+         $ROOT/.condarc. Either install miniconda there, or drop
+         --all-users and have every group member run this script once.
+EOF
 else
     CONDARC=$HOME/.condarc
 fi
@@ -124,15 +143,22 @@ if [[ -f $PREFIX/conda-meta/history ]]; then
     echo "(to refresh it: conda env update --file $REPO/gp_env.yml --prefix $PREFIX --prune)"
 elif [[ -d $PREFIX ]]; then
     die "$PREFIX exists but is not a conda environment (an interrupted run?); remove it and start again"
-elif ! env_create; then
-    # Recent conda versions refuse to touch repo.anaconda.com before its Terms of Service have
-    # been accepted once per account. Accepting them is your decision, not this script's.
-    cat >&2 <<'EOF'
+else
+    # Only the member who builds the environment needs write access to the group folder.
+    [[ -w $ENVS_DIR && -w $PKGS_DIR ]] || die "no write permission on $ENVS_DIR or $PKGS_DIR; ask whoever owns them to run this script, or to give the group write access"
+    if ! env_create; then
+        # Recent conda versions refuse to touch repo.anaconda.com before its Terms of Service have
+        # been accepted once per account. Accepting them is your decision, not this script's.
+        cat >&2 <<'EOF'
 
 If the error above is about Terms of Service, run the two "conda tos accept" commands conda
 printed, then run this script again; it continues where it stopped.
 EOF
-    exit 1
+        exit 1
+    fi
+    # Belt and braces next to the umask: conda keeps the mode of files that come from the package
+    # cache, and one unreadable file is enough to break the environment for the rest of the group.
+    chmod -R g+rX "$PREFIX" 2>/dev/null || true
 fi
 
 if ((RUN_TESTS)); then
@@ -146,4 +172,9 @@ Done. gp_env lives in $PREFIX; the only file changed outside it is $CONDARC.
 Activate it from anywhere, by name:
 
     conda activate gp_env
+
+Every other member of the group gets the same environment with the same command, which then
+only edits their own ~/.condarc and takes a few seconds:
+
+    bash setup_gp_env.sh --no-test
 EOF

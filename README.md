@@ -85,26 +85,46 @@ conda activate gp_env
 pytest tests -m "not slow"           # expected: all passed, a few seconds
 ```
 
-A conda environment does not fit in the home quota of the cluster, and on a shared machine everyone
-rebuilding their own copy is a waste. Replace the last three lines with
-[setup_gp_env.sh](setup_gp_env.sh), which builds `gp_env` in the group folder instead:
+A conda environment does not fit in the home quota of the cluster, and one private copy per group
+member is a waste. [setup_gp_env.sh](setup_gp_env.sh) builds a single `gp_env` in the group folder
+instead; replace the last three lines of the block above with it:
 
 ```bash
 bash setup_gp_env.sh                 # environment + package cache in /groups/ReismanLab/miniconda3, then the tests
 conda activate gp_env
 ```
 
-It prepends the group `envs` and `pkgs` folders to `envs_dirs` and `pkgs_dirs` in your `~/.condarc`,
-so `conda env create` and `conda activate <name>` keep being used exactly as above but write to
-`/groups/ReismanLab/miniconda3/envs` from now on, this environment and the next ones. The package
-cache moves along with them on purpose: conda can only hardlink a cached package into an environment
-on the same filesystem, and copies every file otherwise. Options: `--root PATH` for another shared
-installation, `--all-users` to write the setting into the shared installation itself so that the whole
-group inherits it instead of editing each `~/.condarc`, `--no-test` to skip the test suite. Re-running
+The first person to run it builds the environment, ten minutes or so. Everybody else in the group
+runs the same command, and it only points their conda at the shared folder, a few seconds:
+
+```bash
+bash setup_gp_env.sh --no-test
+conda activate gp_env
+```
+
+The script prepends the group `envs` and `pkgs` folders to `envs_dirs` and `pkgs_dirs` in your
+`~/.condarc`, so `conda env create` and `conda activate <name>` keep being used exactly as above but
+read and write `/groups/ReismanLab/miniconda3/envs` from now on, this environment and the next ones.
+It then reports whether conda really picked the setting up, rather than assuming it did. The package
+cache moves along with the environments on purpose: conda can only hardlink a cached package into an
+environment on the same filesystem, and copies every file otherwise.
+
+The two shared folders are left group-writable (setgid, so that new files keep the group) but the
+environment itself is left read-only for the group: everyone runs it, only its owner can change it,
+and a stray `pip install` cannot break it for the whole lab. Refreshing it after a change to
+`gp_env.yml` is therefore the owner's job:
+
+```bash
+conda env update --file gp_env.yml --prefix /groups/ReismanLab/miniconda3/envs/gp_env --prune
+```
+
+Options: `--root PATH` for another shared folder, `--no-test` to skip the test suite, `--all-users`
+to write the setting into `$ROOT/.condarc` rather than each `~/.condarc`, which only helps when
+`$ROOT` is the conda installation the whole group runs (the script says so if it is not). Re-running
 the script is harmless; it leaves an existing environment alone. If conda stops on an Anaconda Terms
-of Service error, run the two `conda tos accept` commands it prints and start the script again. It
-also reports, rather than assumes, whether conda picked the setting up, and works around conda 22.x
-installations whose `conda env` subcommand is missing its `conda-env` executable.
+of Service error, run the two `conda tos accept` commands it prints and start the script again. A
+conda 22.x installation whose `conda env` subcommand is missing its `conda-env` executable is worked
+around.
 
 Run every command below from the repository root with `gp_env` active. The cluster side needs only
 Python 3.8 or newer and a `git clone` of this repository, no environment. ORCA jobs must have been run
