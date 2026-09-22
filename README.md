@@ -45,6 +45,10 @@ conda env create -f gp_env.yml       # environment "gp_env"
 conda activate gp_env
 ```
 
+On the cluster the home folder is too small for the environment: use
+[setup_gp_env.sh](setup_gp_env.sh) instead of the last two lines, it puts `gp_env` in the group
+folder (see [Prerequisites](#prerequisites)).
+
 An existing `gp_env` created before 2026-09-22 lacks three packages that were added to `gp_env.yml`
 since (Open Babel for the xyz to sdf conversion of the numbering step, networkx and plotly imported by
 DescriPyTor). Inside the environment:
@@ -80,6 +84,25 @@ conda env create -f gp_env.yml       # environment "gp_env" (includes Open Babel
 conda activate gp_env
 pytest tests -m "not slow"           # expected: all passed, a few seconds
 ```
+
+A conda environment does not fit in the home quota of the cluster, and on a shared machine everyone
+rebuilding their own copy is a waste. Replace the last three lines with
+[setup_gp_env.sh](setup_gp_env.sh), which builds `gp_env` in the group folder instead:
+
+```bash
+bash setup_gp_env.sh                 # environment + package cache in /groups/ReismanLab/miniconda3, then the tests
+conda activate gp_env
+```
+
+It prepends the group `envs` and `pkgs` folders to `envs_dirs` and `pkgs_dirs` in your `~/.condarc`,
+so `conda env create` and `conda activate <name>` keep being used exactly as above but write to
+`/groups/ReismanLab/miniconda3/envs` from now on, this environment and the next ones. The package
+cache moves along with them on purpose: conda can only hardlink a cached package into an environment
+on the same filesystem, and copies every file otherwise. Options: `--root PATH` for another shared
+installation, `--all-users` to write the setting into the shared installation itself so that the whole
+group inherits it instead of editing each `~/.condarc`, `--no-test` to skip the test suite. Re-running
+the script is harmless; it leaves an existing environment alone. If conda stops on an Anaconda Terms
+of Service error, run the two `conda tos accept` commands it prints and start the script again.
 
 Run every command below from the repository root with `gp_env` active. The cluster side needs only
 Python 3.8 or newer and a `git clone` of this repository, no environment. ORCA jobs must have been run
@@ -211,6 +234,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | [orca2gaussian](orca2gaussian) | Deprecated. Former converter writing a pseudo-Gaussian log per conformer for DescriPyTor (unit and layout bugs, see CODE_REVIEW C3 to C7). Replaced by the condensed JSON; only used with `descriptors.descripytor.input.kind: feather`. |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | ORCA compound input (`calcParam.inp`), SLURM script and launcher used on the cluster. |
 | [tests](tests) | Unit tests and regression tests against the committed descriptor CSVs. |
+| `setup_gp_env.sh` | One-shot installer for `gp_env` in the group folder rather than the home folder (`envs_dirs` and `pkgs_dirs`, environment, tests). |
 | [review](review) | Notes and scripts from the DescriPyTor upgrade (old vs new Sterimol comparison, per-conformer reference CSVs). |
 | `make_descriptor_descripytor.ipynb` | Notebook running the same pipeline interactively. |
 | `atom_numbering_results.csv`, `combined_descriptors.csv`, `<date>_<name>_descriptors.csv` | Outputs of the three stages for the LNiH2 library (regression references). |
