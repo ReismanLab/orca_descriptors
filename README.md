@@ -38,10 +38,14 @@ Two engines compute the descriptors: the in-house ORCA readers (`desc_utils`) an
 ```bash
 git clone https://github.com/ReismanLab/orca_descriptors
 cd orca_descriptors
+git checkout code-review             # the spec-driven pipeline lives on this branch until it is merged into main
 git submodule update --init          # DescriPyTor, pinned commit
 conda env create -f gp_env.yml       # environment "gp_env"
 conda activate gp_env
 ```
+
+An existing `gp_env` created before 2026-09-22 lacks Open Babel, which the SMARTS numbering needs to
+convert every xyz to sdf: `pip install openbabel-wheel==3.1.1.23` inside the environment.
 
 DescriPyTor is imported from the `DescriPyTor/` folder; do **not** `pip install` it into `gp_env`
 (its `numpy<2` pin would downgrade the environment). The submodule pin is the version the regression
@@ -64,8 +68,9 @@ Once, on the workstation:
 ```bash
 git clone https://github.com/ReismanLab/orca_descriptors
 cd orca_descriptors
+git checkout code-review             # the pipeline is on this branch until it is merged into main
 git submodule update --init          # DescriPyTor, pinned commit
-conda env create -f gp_env.yml       # environment "gp_env"
+conda env create -f gp_env.yml       # environment "gp_env" (includes Open Babel for the numbering step)
 conda activate gp_env
 pytest tests -m "not slow"           # expected: all passed, a few seconds
 ```
@@ -181,6 +186,8 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | `descripytor_notes` says `no orca_condensed.json in ...` | the folder holds raw files only or was not transferred | run step B1 / B2, or `python -m desc_utils.run condense --spec S` locally when the raw files are present |
 | `descripytor_notes` says `expected 1 molecule file ..., loaded 0` | the condensed file is unreadable | `python -m desc_utils.condense --root DATA/<LIB> --check` and rebuild with `--overwrite` |
 | `nbo_extraction_error` column is not empty | the NBO block of that conformer is missing or truncated | same as the first row |
+| `No module named desc_utils.run` | the clone is on `main`, which predates the pipeline | `git checkout code-review` and run the commands from the repository root |
+| every row has `numbering_status` `failed` with `No module named 'openbabel'` | Open Babel missing from the environment (needed to convert xyz to sdf) | `pip install openbabel-wheel==3.1.1.23` in `gp_env`, then rerun `number` |
 | `ImportError: DescriPyTor not found at ...` | submodule not checked out | `git submodule update --init` |
 | `numpy.dtype size changed` or similar import errors | a `pip install` of DescriPyTor downgraded numpy | never pip-install DescriPyTor; recreate `gp_env` from `gp_env.yml` |
 | `validate` lists `unknown label` | a descriptor term uses a label that is not in `atoms` | add the label or fix the typo; labels are case-sensitive |
