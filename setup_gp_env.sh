@@ -26,6 +26,24 @@ USAGE
 die() { printf 'setup_gp_env: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n== %s\n' "$*"; }
 
+# Never stop on conda's "would you like to send this report to the maintainers? [y/N]" prompt.
+export CONDA_REPORT_ERRORS=false
+
+# `conda env create`, whatever the conda version. Up to conda 22.x, `conda env` is not a subcommand
+# but a separate conda-env executable, and that executable is missing from some installations
+# (FileNotFoundError: .../bin/conda-env); the same code is then still reachable as a python module.
+env_create() {
+    local python
+    if conda env list >/dev/null 2>&1 </dev/null; then
+        conda env create --file "$REPO/gp_env.yml" --prefix "$PREFIX"
+        return
+    fi
+    python=${CONDA_PYTHON_EXE:-$(dirname -- "$(command -v conda)")/python}
+    echo "this conda has no working 'conda env' subcommand, going through $python instead" >&2
+    [[ -x $python ]] || die "no python next to conda; the conda installation is incomplete"
+    "$python" -m conda_env.cli.main create --file "$REPO/gp_env.yml" --prefix "$PREFIX"
+}
+
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT=${CONDA_SHARED_ROOT:-}
 ALL_USERS=0
@@ -77,6 +95,23 @@ conda config --file "$CONDARC" --prepend envs_dirs "$ENVS_DIR"
 conda config --file "$CONDARC" --prepend pkgs_dirs "$PKGS_DIR"
 # "already in the list, moving to the top" on a second run is the expected no-op.
 
+# Check what conda really sees now, rather than what we asked for: the environment below is created
+# by path and works either way, but activating it by name does need this.
+if conda config --show envs_dirs 2>/dev/null | grep -qF -- "$ENVS_DIR"; then
+    echo "envs_dirs and pkgs_dirs now start with the group folders"
+else
+    cat >&2 <<EOF
+warning: conda does not see the new setting ("conda config --show envs_dirs" does not list
+         $ENVS_DIR). "conda activate gp_env" by name will not work
+         until it does; put this at the top of $CONDARC by hand:
+
+envs_dirs:
+  - $ENVS_DIR
+pkgs_dirs:
+  - $PKGS_DIR
+EOF
+fi
+
 # An empty DescriPyTor/ means the submodule was never checked out; the extraction step needs it.
 if [[ -z $(ls -A "$REPO/DescriPyTor" 2>/dev/null) ]] && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
     step "DescriPyTor submodule"
@@ -89,7 +124,7 @@ if [[ -f $PREFIX/conda-meta/history ]]; then
     echo "(to refresh it: conda env update --file $REPO/gp_env.yml --prefix $PREFIX --prune)"
 elif [[ -d $PREFIX ]]; then
     die "$PREFIX exists but is not a conda environment (an interrupted run?); remove it and start again"
-elif ! conda env create --file "$REPO/gp_env.yml" --prefix "$PREFIX"; then
+elif ! env_create; then
     # Recent conda versions refuse to touch repo.anaconda.com before its Terms of Service have
     # been accepted once per account. Accepting them is your decision, not this script's.
     cat >&2 <<'EOF'

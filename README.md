@@ -102,7 +102,9 @@ on the same filesystem, and copies every file otherwise. Options: `--root PATH` 
 installation, `--all-users` to write the setting into the shared installation itself so that the whole
 group inherits it instead of editing each `~/.condarc`, `--no-test` to skip the test suite. Re-running
 the script is harmless; it leaves an existing environment alone. If conda stops on an Anaconda Terms
-of Service error, run the two `conda tos accept` commands it prints and start the script again.
+of Service error, run the two `conda tos accept` commands it prints and start the script again. It
+also reports, rather than assumes, whether conda picked the setting up, and works around conda 22.x
+installations whose `conda env` subcommand is missing its `conda-env` executable.
 
 Run every command below from the repository root with `gp_env` active. The cluster side needs only
 Python 3.8 or newer and a `git clone` of this repository, no environment. ORCA jobs must have been run
