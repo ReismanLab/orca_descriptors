@@ -4,7 +4,8 @@ Compile a per-molecule descriptor table from ORCA calculations of conformer ense
 
 The chemistry is not hard-coded. A **spec** (one YAML file per molecule family) declares which atoms
 are labelled, how they are found in every conformer, which descriptors are computed on which labels,
-and how the conformers are aggregated and filtered. The same code then serves any molecule family.
+and how the conformers are aggregated. The same code then serves any molecule family. The output is the
+complete descriptor library; a noise filter for modelling sets exists but is off by default.
 Two engines compute the descriptors: the in-house ORCA readers (`desc_utils`) and
 [DescriPyTor](https://github.com/Milo-group/DescriPyTor) (git submodule).
 
@@ -97,8 +98,8 @@ python -m desc_utils.run condense --spec specs/lnih2_pyox.yaml --jobs 4   # ~20 
 python -m desc_utils.run all --spec specs/lnih2_pyox.yaml --numbering atom_numbering_results.csv   # ~6 min
 ```
 
-Result: `<today>_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`, 38 rows, numerically equal
-to the committed `20260921_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`. To have the test
+Result: `<today>_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`, 38 rows and about 2450
+columns, numerically equal to the committed `20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`. To have the test
 suite confirm it column by column:
 
 ```bash
@@ -160,10 +161,11 @@ with the reason. `all` re-runs the numbering, so use `all --numbering <csv>` to 
 
 | You changed | Run |
 |---|---|
-| Descriptor terms or filter settings only | `python -m desc_utils.run extract --spec S` then `aggregate --spec S` (morfeus geometry is cached in `<conf>/xyz.json`; add `--overwrite-xyz-json` if you changed `vbur_radii` or `quadrants`) |
+| Descriptor terms only | `python -m desc_utils.run extract --spec S` then `aggregate --spec S` (morfeus geometry is cached in `<conf>/xyz.json`; add `--overwrite-xyz-json` if you changed `vbur_radii` or `quadrants`) |
 | Atom labels or numbering rules | `number --spec S --strict`, then `all --spec S --numbering <csv>` |
 | Added conformer folders on the cluster | B1 (existing files are skipped), B2, then `all --spec S` |
-| Only the aggregation temperature or filter | `aggregate --spec S` (`--no-filter` keeps every column) |
+| Only the aggregation temperature | `aggregate --spec S` |
+| You want the noise filter (correlation / variance pruning) for a modelling set | `aggregate --spec S --filter`, or set `filter.enabled: true` in the spec; needs enough molecules for correlations to mean anything (with two molecules every column is perfectly correlated and one survives) |
 
 ### What you get
 
@@ -171,7 +173,7 @@ with the reason. `all` re-runs the numbering, so use `all --numbering <csv>` to 
 |---|---|---|
 | `atom_numbering_results.csv` | conformer | 1-based index of every label, SCF energy, SMILES, `numbering_status` |
 | `combined_descriptors.csv` | conformer | every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
-| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchi`, `smiles`, `n_conformers`, then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`), after the noise filter |
+| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchi`, `smiles`, `n_conformers`, then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
 
 Conventions worth knowing when reading the spreadsheet: energies are in Hartree, HOMO/LUMO in eV,
 IP and EA are positive for bound electrons (`IP = E(cation) - E(neutral)`), Fukui functions follow
@@ -222,7 +224,7 @@ ORCA compound job per conformer                                                 
 [1] condense  ──►  <conf>/orca_condensed.json      (standard-library Python, ~0.4 to 1.5 MB per conformer)
         │  rsync optimization.xyz + orca_condensed.json                                    (workstation)
         ▼
-[2] spec  ──►  [3] number  ──►  [4] extract  ──►  [5] aggregate + filter
+[2] spec  ──►  [3] number  ──►  [4] extract  ──►  [5] aggregate (+ optional filter)
                 atom_numbering_results.csv   combined_descriptors.csv   <date>_<name>_descriptors.csv
 ```
 
@@ -239,7 +241,7 @@ python -m desc_utils.run all       --spec specs/lnih2_pyox.yaml            # num
 
 `python -m desc_utils.run <command> --help` lists the options (`--numbering` to reuse an existing table,
 `--families` to run a subset of descriptor families, `--strict` to fail on any numbering problem,
-`--no-filter`, `--overwrite-xyz-json`).
+`--filter` to apply the spec's noise filter, `--overwrite-xyz-json`).
 
 ### 0. ORCA calculations
 
@@ -360,7 +362,8 @@ The result is `combined_descriptors.csv`, one row per conformer, merged on `path
 `<name>_min`, `<name>_max`, `<name>_lowE` (lowest-energy conformer) and `<name>_boltz`, the Boltzmann
 average at `temperature_K` with weights `exp(-ΔE / kB T)` computed from `energy_column` (the SCF energy
 of the `singlepoint` step, no thermal correction). `n_conformers` and the `carry_first` columns are
-kept. Then `filter_numeric_descriptors` removes: non-numeric and all-NaN columns, NBO orbitals whose
+kept. This complete table is the default output. Optionally, with `filter.enabled: true` in the spec or
+`aggregate --filter`, `filter_numeric_descriptors` then removes: non-numeric and all-NaN columns, NBO orbitals whose
 Boltzmann occupancy is below `occupancy_boltz_threshold`, Rydberg orbitals (except on `metal_label`),
 metal 4f Rydbergs, core orbitals, anisotropic NMR terms, NHO φ/θ angles, near-constant columns
 (`ratio_threshold`) and one member of every pair above `corr_threshold`. The output is
@@ -427,7 +430,7 @@ Open-shell (UHF/UKS) NBO blocks hold two complete analyses, one per spin, and NB
 - Natural atomic orbital occupancies: `nao_X_Cor-1s_occupancy`, `nao_X_Val-2p_occupancy`, `nao_X_Ryd-3d_occupancy`, ... (`_2`, `_3` suffixes for degenerate sets) :white_check_mark:
 - Natural bond orbitals on labelled atoms: `nbo_R_X_X_type`, `nbo_R_X_X_bond_index`, `nbo_R_X_X_occupancy`, `nbo_R_X_X_energy` (lone pairs: `nbo_R_X_*`) :white_check_mark:
 - Bond orbital composition: `bond_orbital_details_R_X_X_{bond_type,bond_index,occupancy}`, `bond_orbital_details_R_X_X_contrib_k_X_{percentage,coefficient,s_percent,p_power,p_percent}` :white_check_mark:
-- NHO directionality: `nho_directionality_R_X_X_{line_theta,line_phi,hybrid_theta,hybrid_phi,deviation}` :white_check_mark: (φ/θ dropped by the default filter)
+- NHO directionality: `nho_directionality_R_X_X_{line_theta,line_phi,hybrid_theta,hybrid_phi,deviation}` :white_check_mark: (φ/θ dropped by the optional filter)
 - Second-order perturbation E(2) between labelled orbitals: `second_order_R_<donor>_to_R_<acceptor>_{donor_type,donor_index,acceptor_type,acceptor_index,e2_energy,energy_diff,fock_element}` :white_check_mark: (NBO 7 numbered rows and the legacy `->` layout; only rows whose donor and acceptor atoms are all labelled are kept; both `R` tokens are subject to `homo_lumo_rank_range`, so widen or disable it to keep these columns)
 - HOMO and LUMO energies (eV, from the singlepoint MOs): `HOMO_energy`, `LUMO_energy` :white_check_mark:
 - Other frontier orbital descriptors (gap, orbital coefficients) :x: not implemented yet
@@ -444,7 +447,7 @@ Open-shell (UHF/UKS) NBO blocks hold two complete analyses, one per spin, and NB
 **NMR** (`nmr.property.json`, GIAO)
 
 - Isotropic shielding: `siso_X` :white_check_mark:
-- Anisotropic shielding: `saniso_X` :white_check_mark: (dropped by the default filter)
+- Anisotropic shielding: `saniso_X` :white_check_mark: (dropped by the optional filter)
 
 **Molecular descriptors**
 

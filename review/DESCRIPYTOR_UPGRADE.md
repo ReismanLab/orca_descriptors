@@ -197,3 +197,6 @@ The aggregated references were regenerated from the condensed files with `python
 (`20260921_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`, `20260921_test_molecules_descriptors.csv`)
 and `tests/test_regression.py` points at them. For the test molecules only `dist_at1-at2` (1e-6),
 `vib_freq_at1-at2` and `vib_amp_at1-at2` changed per conformer, as expected.
+
+Update 2026-09-22: the noise filter is now opt-in (`filter.enabled: false` by default, `aggregate --filter` to apply it), so the
+aggregated references were regenerated unfiltered as `20260922_*_descriptors.csv` (38 x 2449 and 6 x 1292). Same per-conformer values.

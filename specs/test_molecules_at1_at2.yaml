@@ -55,8 +55,8 @@ aggregate:
   stats: [min, max, lowE, boltz]
   carry_first: [smiles]
 
-filter:
-  enabled: true
+filter:                               # optional noise filter for modelling sets; the library itself stays complete
+  enabled: false                      # true, or `aggregate --filter`, applies the settings below
   remove_low_occupancy_nbo: true
   occupancy_boltz_threshold: 0.001
   corr_threshold: 0.95

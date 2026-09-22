@@ -3,10 +3,11 @@
 Reference data (committed):
 * ``atom_numbering_results.csv``                      numbering table of the LNiH2 library
 * ``review/results/library_per_conformer_condensed_json.csv``  DescriPyTor block, per conformer
-* ``20260921_LNiH2_library_001_to_download_2026_03_24_descriptors.csv``  aggregated + filtered
-* ``20260921_test_molecules_descriptors.csv``         aggregated + filtered, test molecules
+* ``20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv``  aggregated, unfiltered
+* ``20260922_test_molecules_descriptors.csv``         aggregated, unfiltered, test molecules
 
-All three were regenerated on 2026-09-21 from the condensed per-conformer files (``orca_condensed.json``,
+The aggregated tables are the complete libraries (the noise filter is opt-in since 2026-09-22; it is
+still exercised below). All three were regenerated from the condensed per-conformer files (``orca_condensed.json``,
 ``desc_utils.condense``): DescriPyTor reads them through its JSON reader instead of the orca2gaussian
 feathers, so the vibration, dipole and NBO-charge columns differ from the 2026-09-18 references on
 purpose (see ``review/DESCRIPYTOR_UPGRADE.md``). Every numeric column is compared. The condensed files
@@ -77,7 +78,7 @@ def test_descripytor_block_reproduces_reference(lnih2, numbering_ref, repo_root)
 
 
 def test_full_pipeline_reproduces_aggregated_csv(lnih2, repo_root):
-    ref = pd.read_csv(repo_root / "20260921_LNiH2_library_001_to_download_2026_03_24_descriptors.csv").set_index("inchi")
+    ref = pd.read_csv(repo_root / "20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv").set_index("inchi")
     num = read_numbering_table(repo_root / "atom_numbering_results.csv", lnih2)
     per_conf = run_extraction(lnih2, num, repo_root, progress=False)
     agg = aggregate_conformers(per_conf, lnih2)
@@ -93,7 +94,7 @@ def test_full_pipeline_reproduces_aggregated_csv(lnih2, repo_root):
 
 def test_test_molecules_pipeline(repo_root):
     spec = load_spec(repo_root / "specs" / "test_molecules_at1_at2.yaml")
-    ref = pd.read_csv(repo_root / "20260921_test_molecules_descriptors.csv").set_index("inchi")
+    ref = pd.read_csv(repo_root / "20260922_test_molecules_descriptors.csv").set_index("inchi")
     num = build_numbering_table(spec, repo_root, progress=False)
     assert (num[["at1", "at2"]].astype(int).values == [1, 2]).all()
     per_conf = run_extraction(spec, num, repo_root, progress=False)

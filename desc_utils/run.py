@@ -3,8 +3,8 @@
     python -m desc_utils.run validate    --spec specs/lnih2_pyox.yaml
     python -m desc_utils.run number      --spec S [--data ROOT] [--out CSV] [--backend manual --csv CSV] [--strict]
     python -m desc_utils.run extract     --spec S --numbering CSV [--families orca.xyz,descripytor,...] [--out CSV]
-    python -m desc_utils.run aggregate   --spec S --per-conformer CSV [--out CSV] [--no-filter]
-    python -m desc_utils.run all         --spec S [--data ROOT] [--numbering CSV]
+    python -m desc_utils.run aggregate   --spec S --per-conformer CSV [--out CSV] [--filter | --no-filter]
+    python -m desc_utils.run all         --spec S [--data ROOT] [--numbering CSV] [--filter | --no-filter]
     python -m desc_utils.run to-schema-b --spec S --numbering CSV [--row N]
     python -m desc_utils.run condense    --spec S [--data ROOT] [--overwrite] [--jobs N] [--nbo-full all]
 
@@ -45,6 +45,13 @@ def _load(args) -> Spec:
     if getattr(args, "data", None):
         spec = Spec(**{**spec.__dict__, "data": {**spec.data, "root": args.data}})
     return spec
+
+
+def _use_filter(spec: Spec, args) -> bool:
+    """The noise filter is off unless the spec enables it or --filter is given; --no-filter always wins."""
+    if getattr(args, "no_filter", False):
+        return False
+    return bool(getattr(args, "filter", False) or spec.filter.get("enabled", False))
 
 
 def _aggregated_name(spec: Spec) -> str:
@@ -115,7 +122,7 @@ def cmd_aggregate(args) -> int:
     spec = _load(args)
     df = pd.read_csv(_resolve(args.per_conformer, spec.output["per_conformer_csv"]))
     agg = aggregate_conformers(df, spec)
-    if spec.filter.get("enabled", True) and not args.no_filter:
+    if _use_filter(spec, args):
         agg, report = apply_filter(agg, spec)
         print("filter:", {k: (len(v) if isinstance(v, list) else v) for k, v in report.items()})
     out = _resolve(args.out, _aggregated_name(spec))
@@ -138,7 +145,7 @@ def cmd_all(args) -> int:
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT)
     df.to_csv(_resolve(spec.output["per_conformer_csv"]), index=False)
     agg = aggregate_conformers(df, spec)
-    if spec.filter.get("enabled", True):
+    if _use_filter(spec, args):
         agg, _ = apply_filter(agg, spec)
     out = _resolve(_aggregated_name(spec))
     agg.to_csv(out, index=False)
@@ -208,12 +215,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("aggregate", help="Boltzmann-aggregate conformers and filter"); common(sp)
     sp.add_argument("--per-conformer", help="per-conformer CSV (default: output.per_conformer_csv)")
     sp.add_argument("--out", help="output CSV (default: output.aggregated_csv)")
-    sp.add_argument("--no-filter", action="store_true")
+    sp.add_argument("--filter", action="store_true", help="apply the noise filter of the spec's `filter` block (off by default)")
+    sp.add_argument("--no-filter", action="store_true", help="never filter, even if the spec enables it")
     sp.set_defaults(func=cmd_aggregate)
 
     sp = sub.add_parser("all", help="number -> extract -> aggregate -> filter"); common(sp)
     sp.add_argument("--data", help="override data.root")
     sp.add_argument("--numbering", help="use an existing numbering CSV instead of rebuilding it")
+    sp.add_argument("--filter", action="store_true", help="apply the noise filter of the spec's `filter` block (off by default)")
+    sp.add_argument("--no-filter", action="store_true", help="never filter, even if the spec enables it")
     sp.set_defaults(func=cmd_all)
 
     sp = sub.add_parser("to-schema-b", help="print the DescriPyTor JSON for one conformer"); common(sp)

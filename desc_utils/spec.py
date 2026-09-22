@@ -99,7 +99,9 @@ DEFAULTS: dict[str, Any] = {
         "carry_first": ["smiles", "ligand_class"],
         "exclude_columns": [],
     },
-    "filter": {"enabled": True},
+    # The noise filter (correlation / variance pruning) is opt-in: the library should stay complete and
+    # reproducible; enable it in the spec or with `aggregate --filter` when preparing a modelling set.
+    "filter": {"enabled": False},
     "output": {
         "numbering_csv": "atom_numbering_results.csv",
         "per_conformer_csv": "combined_descriptors.csv",
