@@ -55,7 +55,10 @@ def aggregate_frame(
     if energy_column not in df.columns:
         raise KeyError(f"energy column {energy_column!r} not found; available: {list(df.columns)[:10]}...")
     exclude = set(exclude_columns) | {group_by}
-    numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c not in exclude]
+    # Numeric columns with at least one value. Descriptors that are empty for every conformer (e.g.
+    # Enthalpy without a thermochemistry step) are dropped here so the library is the same whether the
+    # per-conformer table comes from memory (object column of None) or from a CSV (float column of NaN).
+    numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c not in exclude and df[c].notna().any()]
     carry_first = [c for c in carry_first if c in df.columns]
 
     rows = []
