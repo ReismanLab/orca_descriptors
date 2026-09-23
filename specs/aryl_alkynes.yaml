@@ -12,7 +12,7 @@ name: aryl_alkynes
 spec_version: 1
 
 data:
-  root: DATA/aryl_alkynes               # <-- adapt to the computation folder
+  root: DATA/Alkynes               # <-- adapt to the computation folder
   layout: molecule/conformer            # <root>/<molecule_id>/<conformer>/
   conformer_glob: "conf_*"
   geometry_file: optimization.xyz
