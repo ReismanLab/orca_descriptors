@@ -179,9 +179,12 @@ Condensing a library reads every raw ORCA output it has, which is not login-node
 ssh <user>@<cluster>
 git clone https://github.com/ReismanLab/orca_descriptors              # once, anywhere; no environment, no pip install
 git -C orca_descriptors checkout code-review
-vi orca_descriptors/scripts-for-orca-computations/slurm-condense.sh   # one line to edit: REPO=, the clone above
 sbatch orca_descriptors/scripts-for-orca-computations/slurm-condense.sh /path/to/<LIB>
 ```
+
+Nothing to edit in the script: it finds the clone from the path it was submitted with. If you keep
+a copy of it outside the clone, name the clone yourself with
+`sbatch --export=ALL,REPO=$HOME/orca_descriptors ...`.
 
 One node, eight cores, two hours by default; raise the `#SBATCH` lines for a large library. The
 condensed files themselves are written in place, one `orca_condensed.json` per `conf_N/` folder of

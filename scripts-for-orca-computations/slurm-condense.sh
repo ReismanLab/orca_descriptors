@@ -26,19 +26,38 @@
 
 set -euo pipefail
 
-REPO=/path/to/orca_descriptors      # <- edit: the clone on the cluster, the folder holding desc_utils/
+# The clone of orca_descriptors on the cluster, the folder that holds desc_utils/. Nothing to edit
+# as long as this script sits in it, which is the normal case: it is worked out below from the path
+# the job was submitted with. Set it here, or with `sbatch --export=ALL,REPO=...`, if you moved the
+# script out of the clone.
+REPO=${REPO:-}
 LIB=${1:-}                          # <- or edit a default library path here instead of passing one
 
 if [[ -z $LIB ]]; then
-    echo "usage: sbatch $0 /path/to/<LIB>" >&2
+    echo "usage: sbatch slurm-condense.sh /path/to/<LIB>" >&2
     exit 2
 fi
 if [[ ! -d $LIB ]]; then
     echo "no such library folder: $LIB" >&2
     exit 2
 fi
+
+if [[ -z $REPO ]]; then
+    # sbatch runs a *copy* of this script out of /var/spool, so $BASH_SOURCE says nothing about
+    # where the clone is. Slurm remembers the path the job was submitted with; the clone is the
+    # folder above scripts-for-orca-computations/.
+    if [[ -n ${SLURM_JOB_ID:-} ]] && command -v scontrol >/dev/null 2>&1; then
+        submitted=$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | tr ' ' '\n' | sed -n 's/^Command=//p' | head -1)
+        [[ -n ${submitted:-} && -e $submitted ]] && REPO=$(cd -- "$(dirname -- "$submitted")/.." && pwd)
+    fi
+    # Not under slurm (running it by hand): the script itself is the original.
+    [[ -n $REPO ]] || REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+fi
+
 if [[ ! -d $REPO/desc_utils ]]; then
-    echo "REPO does not hold desc_utils/, edit it in $0: $REPO" >&2
+    echo "no desc_utils/ in $REPO, so that is not the orca_descriptors clone." >&2
+    echo "Submit the script from inside the clone, or name the clone yourself:" >&2
+    echo "  sbatch --export=ALL,REPO=\$HOME/orca_descriptors slurm-condense.sh /path/to/<LIB>" >&2
     exit 2
 fi
 
