@@ -273,10 +273,11 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
     return flat
 
 
-def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, overwrite_json=False, vbur_radii=None):
+def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, overwrite_json=False, vbur_radii=None,
+                        progress=True):
     results_dict = {}
     repo_root = Path(__file__).resolve().parent.parent
-    for row in tqdm(df.itertuples(), total=len(df)):
+    for row in tqdm(df.itertuples(), total=len(df), disable=not progress):
         P = od.PropertiesXYZ(path=df.loc[row.Index, "path"], overwrite_results=overwrite_json)
         if vbur_radii is not None:
             P.radius_list = [float(r) for r in vbur_radii]
@@ -501,7 +502,7 @@ def get_all_charges(df, atoms, basename="singlepoint", condensed_file=CONDENSED_
     return results_dict
 
 def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0, spin="alpha",
-                           condensed_file=CONDENSED_FILENAME):
+                           condensed_file=CONDENSED_FILENAME, consolidate_ranks=True):
     """Extract all properties available from ``od.NBOProps`` into a flat dataframe.
 
     Parameters
@@ -523,6 +524,10 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0,
     condensed_file : str | None, optional
         Name of the condensed per-conformer JSON (``desc_utils.condense``) read instead of the
         ORCA output when it exists in the folder; ``None`` always parses the output.
+    consolidate_ranks : bool, optional
+        Apply :func:`consolidate_nbo_rank_columns` to the result (default). The parallel extraction
+        passes ``False`` and consolidates once over the concatenated table: the decision to merge
+        ``_lpN_`` / ``_hmN_`` columns depends on every molecule of the library.
 
     Returns
     -------
@@ -554,7 +559,15 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0,
         nbo_results[row.Index] = row_results
 
     df_out = pd.DataFrame.from_dict(nbo_results, orient="index")
+    return consolidate_nbo_rank_columns(df_out) if consolidate_ranks else df_out
 
+
+def consolidate_nbo_rank_columns(df_out):
+    """Merge ``_lpN_`` / ``_hmN_`` columns whose rank index varies across molecules into one rank-agnostic column.
+
+    Library-wide operation: a group is merged only when no row of ``df_out`` holds more than one
+    value among its members, so it must see the whole table, not a slice of it.
+    """
     # --- Consolidate lp/hm columns whose rank index varies across molecules ---
     # e.g. nbo_lp3_H1_energy, nbo_lp4_H1_energy, nbo_lp5_H1_energy
     #   -> nbo_lp_H1_energy  (rank-agnostic merged column)

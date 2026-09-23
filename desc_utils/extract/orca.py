@@ -60,12 +60,13 @@ def filter_nbo_rank_columns(df: pd.DataFrame, rank_range: Iterable[int] | None, 
     return df.drop(columns=drop)
 
 
-def extract_xyz(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path, overwrite_json: bool = False) -> pd.DataFrame:
+def extract_xyz(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path, overwrite_json: bool = False,
+                progress: bool = True) -> pd.DataFrame:
     res = de.get_xyz_descriptors(
         _with_repo_paths(df_num, repo_root), cfg["atoms"], cfg["bonds"], cfg["angles"], cfg["dihedrals"],
         quadrants=cfg["quadrants"] or None,
         overwrite_json=overwrite_json or not cfg.get("use_cached_json", True),
-        vbur_radii=cfg.get("vbur_radii"),
+        vbur_radii=cfg.get("vbur_radii"), progress=progress,
     )
     return _to_frame(res, repo_root)
 
@@ -77,15 +78,26 @@ def extract_charges(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path,
     return _to_frame(res, repo_root)
 
 
+def postprocess_nbo(df: pd.DataFrame, cfg: Mapping) -> pd.DataFrame:
+    """The two library-wide steps of the NBO family: rank consolidation, then the rank filter of the spec.
+
+    Applied by :func:`extract_nbo` unless ``postprocess=False``, in which case the caller applies it
+    once to the concatenated per-conformer frames (see ``run_extraction(jobs=...)``). The order matters:
+    a column dropped by the filter could otherwise change which rank groups are merged.
+    """
+    df = de.consolidate_nbo_rank_columns(df)
+    return filter_nbo_rank_columns(df, cfg.get("homo_lumo_rank_range"), cfg.get("drop_analysis_info", True))
+
+
 def extract_nbo(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path,
-                condensed_file: str | None = CONDENSED_FILENAME) -> pd.DataFrame:
+                condensed_file: str | None = CONDENSED_FILENAME, postprocess: bool = True) -> pd.DataFrame:
     res = de.get_all_nbo_properties(
         _with_repo_paths(df_num, repo_root), cfg["atoms"], basename=cfg.get("basename", "singlepoint"),
         nbo_block_index=int(cfg.get("nbo_block_index", 0)), spin=cfg.get("spin", "alpha"),
-        condensed_file=condensed_file,
+        condensed_file=condensed_file, consolidate_ranks=False,
     )
     df = _to_frame(res, repo_root)
-    return filter_nbo_rank_columns(df, cfg.get("homo_lumo_rank_range"), cfg.get("drop_analysis_info", True))
+    return postprocess_nbo(df, cfg) if postprocess else df
 
 
 def extract_redox(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path,
@@ -103,6 +115,47 @@ _RUNNERS = {"xyz": extract_xyz, "charges": extract_charges, "nbo": extract_nbo, 
 ORCA_ORDER = ["xyz", "charges", "redox", "nbo"]
 
 
+def orca_families(spec: Spec, families: Iterable[str] | None = None) -> list[str]:
+    """The ORCA families to run, in :data:`ORCA_ORDER`, restricted to ``families`` when given."""
+    assert spec.orca is not None, "spec has no descriptors.orca section"
+    return [f for f in ORCA_ORDER if f in spec.orca and (families is None or f in families)]
+
+
+def orca_family_frames(df_num: pd.DataFrame, spec: Spec, repo_root: Path, families: Iterable[str] | None = None,
+                       overwrite_xyz_json: bool = False, progress: bool = True,
+                       postprocess: bool = True) -> dict[str, pd.DataFrame]:
+    """One frame per requested ORCA family, keyed by family name, for the rows of ``df_num``.
+
+    ``postprocess=False`` leaves the NBO frame raw (no rank consolidation, no rank filter) so that
+    frames computed on slices of the library can be concatenated and post-processed once.
+    """
+    condensed_file = spec.data.get("condensed_file")
+    frames: dict[str, pd.DataFrame] = {}
+    for fam in orca_families(spec, families):
+        cfg = spec.orca[fam]
+        if progress:
+            print(f"[orca] {fam}: {len(df_num)} conformers")
+        if fam == "xyz":
+            frames[fam] = extract_xyz(df_num, cfg, repo_root, overwrite_json=overwrite_xyz_json, progress=progress)
+        elif fam == "nbo":
+            frames[fam] = extract_nbo(df_num, cfg, repo_root, condensed_file=condensed_file, postprocess=postprocess)
+        else:
+            frames[fam] = _RUNNERS[fam](df_num, cfg, repo_root, condensed_file=condensed_file)
+    return frames
+
+
+def merge_orca_frames(frames: Mapping[str, pd.DataFrame], df_num: pd.DataFrame, repo_root: Path) -> pd.DataFrame:
+    """Outer-join the family frames on ``path`` in :data:`ORCA_ORDER`; first occurrence of a column wins."""
+    ordered = [frames[f] for f in ORCA_ORDER if f in frames]
+    if not ordered:
+        return pd.DataFrame({"path": df_num["path"].map(lambda p: conf_key(p, repo_root))})
+    out = ordered[0]
+    for f in ordered[1:]:
+        new_cols = ["path"] + [c for c in f.columns if c != "path" and c not in out.columns]
+        out = out.merge(f[new_cols], on="path", how="outer")
+    return out
+
+
 def run_orca(df_num: pd.DataFrame, spec: Spec, repo_root: Path, families: Iterable[str] | None = None,
              overwrite_xyz_json: bool = False, progress: bool = True) -> pd.DataFrame:
     """Run the requested ORCA-side families and outer-join them on ``path``.
@@ -111,22 +164,5 @@ def run_orca(df_num: pd.DataFrame, spec: Spec, repo_root: Path, families: Iterab
     exactly as the notebook did with ``loc[:, ~columns.duplicated()]``. The charges, NBO and
     redox families read ``<conf>/<data.condensed_file>`` when it exists (``null`` = raw files only).
     """
-    condensed_file = spec.data.get("condensed_file")
-    assert spec.orca is not None, "spec has no descriptors.orca section"
-    wanted = [f for f in ORCA_ORDER if f in spec.orca and (families is None or f in families)]
-    frames = []
-    for fam in wanted:
-        cfg = spec.orca[fam]
-        if progress:
-            print(f"[orca] {fam}: {len(df_num)} conformers")
-        if fam == "xyz":
-            frames.append(extract_xyz(df_num, cfg, repo_root, overwrite_json=overwrite_xyz_json))
-        else:
-            frames.append(_RUNNERS[fam](df_num, cfg, repo_root, condensed_file=condensed_file))
-    if not frames:
-        return pd.DataFrame({"path": df_num["path"].map(lambda p: conf_key(p, repo_root))})
-    out = frames[0]
-    for f in frames[1:]:
-        new_cols = ["path"] + [c for c in f.columns if c != "path" and c not in out.columns]
-        out = out.merge(f[new_cols], on="path", how="outer")
-    return out
+    frames = orca_family_frames(df_num, spec, repo_root, families, overwrite_xyz_json, progress)
+    return merge_orca_frames(frames, df_num, repo_root)

@@ -23,6 +23,7 @@ from desc_utils.numbering.base import (
 )
 from desc_utils.numbering.io import get_sdf_from_xyz, load_mol, scf_energy, smiles_for_mol
 from desc_utils.numbering.ligand_classes import ANNOTATORS
+from desc_utils.parallel import parallel_map
 from desc_utils.spec import Spec
 
 __all__ = [
@@ -134,38 +135,52 @@ def _number_one(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, re
     return row, extra
 
 
+def _record(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, regenerate_sdf: bool) -> dict:
+    """One row of the numbering table (0-based indices) for one conformer."""
+    energy_cfg = spec.numbering["energy"]
+    row, extra = _number_one(ctx, spec, backend, regenerate_sdf)
+    rec = {"xyz_name": ctx.xyz_name, "path": ctx.rel_path, spec.data["molecule_id_column"]: ctx.molecule_id}
+    try:
+        rec[energy_cfg["column"]] = scf_energy(ctx.conf_dir, energy_cfg["basename"], spec.data.get("condensed_file"))
+    except Exception as exc:
+        rec[energy_cfg["column"]] = np.nan
+        row.notes.append(f"energy: {type(exc).__name__}: {str(exc)[:80]}")
+    rec["smiles"] = extra.pop("smiles", None)
+    for label in spec.labels:
+        rec[label] = row.indices.get(label, np.nan)
+    rec.update(extra)
+    rec["numbering_backend"] = backend.name
+    rec["numbering_status"] = row.status
+    rec["numbering_notes"] = "; ".join(row.notes) if row.notes else ""
+    return rec
+
+
+# Worker-side state for the parallel path: set once per process by the pool initializer.
+_WORKER: dict = {}
+
+
+def _init_worker(spec: Spec, backend: NumberingBackend, regenerate_sdf: bool) -> None:
+    _WORKER.update(spec=spec, backend=backend, regenerate_sdf=regenerate_sdf)
+
+
+def _work(ctx: ConformerContext) -> dict:
+    return _record(ctx, _WORKER["spec"], _WORKER["backend"], _WORKER["regenerate_sdf"])
+
+
 def build_numbering_table(spec: Spec, repo_root: Path, backend: NumberingBackend | None = None,
                           strict: bool = False, regenerate_sdf: bool = False,
-                          data_root: Path | None = None, progress: bool = True) -> pd.DataFrame:
-    """Number every conformer under the data root and return the table (indices in ``index_base``)."""
+                          data_root: Path | None = None, progress: bool = True, jobs: int | None = 1) -> pd.DataFrame:
+    """Number every conformer under the data root and return the table (indices in ``index_base``).
+
+    ``jobs > 1`` numbers the conformers over that many processes (``0`` = every core); the table is
+    identical to the serial one, rows in the same order. The backend is sent to every worker, so a
+    custom backend must be picklable (the built-in ones are).
+    """
     backend = backend or make_backend(spec.numbering, spec.labels)
-    energy_cfg = spec.numbering["energy"]
     id_col = spec.data["molecule_id_column"]
     contexts = list(iter_conformers(spec, repo_root, data_root))
-    if progress:
-        from tqdm import tqdm
-
-        contexts_iter = tqdm(contexts, desc=f"numbering[{backend.name}]")
-    else:
-        contexts_iter = contexts
-
-    records = []
-    for ctx in contexts_iter:
-        row, extra = _number_one(ctx, spec, backend, regenerate_sdf)
-        rec = {"xyz_name": ctx.xyz_name, "path": ctx.rel_path, id_col: ctx.molecule_id}
-        try:
-            rec[energy_cfg["column"]] = scf_energy(ctx.conf_dir, energy_cfg["basename"], spec.data.get("condensed_file"))
-        except Exception as exc:
-            rec[energy_cfg["column"]] = np.nan
-            row.notes.append(f"energy: {type(exc).__name__}: {str(exc)[:80]}")
-        rec["smiles"] = extra.pop("smiles", None)
-        for label in spec.labels:
-            rec[label] = row.indices.get(label, np.nan)
-        rec.update(extra)
-        rec["numbering_backend"] = backend.name
-        rec["numbering_status"] = row.status
-        rec["numbering_notes"] = "; ".join(row.notes) if row.notes else ""
-        records.append(rec)
+    records = parallel_map(_work, contexts, jobs, initializer=_init_worker, initargs=(spec, backend, regenerate_sdf),
+                           progress=progress, desc=f"numbering[{backend.name}]")
 
     df = pd.DataFrame(records)
     if df.empty:

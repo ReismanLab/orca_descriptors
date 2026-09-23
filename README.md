@@ -147,11 +147,16 @@ rsync -avz --include='*/' --include='optimization.xyz' --include='orca_condensed
 ```bash
 cp specs/lnih2_pyox.yaml specs/<LIB>.yaml        # closest example; small organics: specs/test_molecules_at1_at2.yaml
 # edit specs/<LIB>.yaml, fields in the table below
-python -m desc_utils.run all --spec specs/<LIB>.yaml
+python -m desc_utils.run all --spec specs/<LIB>.yaml --jobs 4
 #   -> <today>_<LIB>_atom_numbering_results.csv (per conformer: atom indices), combined_descriptors.csv
 #      (per conformer: descriptors), <today>_<LIB>_descriptors.csv (per molecule: the spreadsheet)
 #   -> <today>_<LIB>_conformers_to_check.csv only if some conformer needs a look, with a WARNING on the terminal
 ```
+
+`--jobs N` spreads the per-conformer work (Open Babel and SMARTS numbering, morfeus geometry, ORCA and
+DescriPyTor extraction) over N processes; `--jobs 0` takes every core, the default is one. The tables
+are the same whatever N. The first run of a library is the one to parallelise: the morfeus results are
+cached in `<conf>/xyz.json` and read back on the next runs.
 
 | Spec field | Set to |
 |---|---|

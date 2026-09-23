@@ -289,7 +289,11 @@ def extract_descripytor(df_num: pd.DataFrame, cfg: Mapping[str, Any], repo_root:
                 for col in label_columns(cfg):
                     rec[col] = np.nan
         rows[i] = rec
-    out = pd.DataFrame.from_dict(rows, orient="index")
+    return order_columns(pd.DataFrame.from_dict(rows, orient="index"), cfg)
+
+
+def order_columns(out: pd.DataFrame, cfg: Mapping[str, Any]) -> pd.DataFrame:
+    """``path``, then the label columns of the spec in output order, then anything else (the notes)."""
     ordered = ["path"] + [c for c in label_columns(cfg) if c in out.columns]
     ordered += [c for c in out.columns if c not in ordered]
     return out[ordered]

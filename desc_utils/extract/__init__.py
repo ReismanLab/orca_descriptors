@@ -18,6 +18,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+from desc_utils.parallel import parallel_map, resolve_jobs
 from desc_utils.spec import Spec
 
 ALL_FAMILIES = ("orca.xyz", "orca.charges", "orca.nbo", "orca.redox", "descripytor")
@@ -93,14 +94,90 @@ def conformers_to_check(df: pd.DataFrame, df_num: pd.DataFrame | None = None) ->
     return out[cols].reset_index(drop=True)
 
 
+# Worker-side state for ``run_extraction(jobs > 1)``: set once per process by the pool initializer.
+_WORKER: dict = {}
+
+
+def _init_worker(spec: Spec, repo_root: Path, orca_fams: list[str], want_dp: bool, overwrite_xyz_json: bool) -> None:
+    _WORKER.update(spec=spec, repo_root=repo_root, orca_fams=orca_fams, want_dp=want_dp,
+                   overwrite_xyz_json=overwrite_xyz_json)
+    if want_dp:  # import DescriPyTor once per worker rather than on the first conformer
+        from desc_utils.extract.descripytor import _import_molecules
+
+        _import_molecules(repo_root)
+
+
+def _work(rows: pd.DataFrame) -> dict[str, list[dict]]:
+    """Every engine on a slice of the numbering table, as records per family.
+
+    NBO is left raw (post-processed library-wide by the caller). Records rather than frames: the raw
+    NBO rows of a library span tens of thousands of distinct columns, and turning them into row dicts
+    here, in parallel, is what lets the parent build the table as cheaply as the serial path does.
+    """
+    w = _WORKER
+    frames: dict[str, pd.DataFrame] = {}
+    if w["orca_fams"]:
+        from desc_utils.extract.orca import orca_family_frames
+
+        frames.update(orca_family_frames(rows, w["spec"], w["repo_root"], families=w["orca_fams"],
+                                         overwrite_xyz_json=w["overwrite_xyz_json"], progress=False, postprocess=False))
+    if w["want_dp"]:
+        from desc_utils.extract.descripytor import extract_descripytor
+
+        frames["descripytor"] = extract_descripytor(rows, w["spec"].descripytor, w["repo_root"], progress=False,
+                                                    condensed_file=w["spec"].data.get("condensed_file"))
+    return {k: f.to_dict("records") for k, f in frames.items()}
+
+
+def _gather(records: list[list[dict]]) -> pd.DataFrame:
+    """Stack per-conformer records the way the serial extractors build their frames: from a dict of row dicts.
+
+    ``pd.concat`` of one-row frames would keep e.g. a lone ``None`` as an object column where the
+    serial path infers a float NaN column; the same constructor gives the same dtypes and NaN pattern.
+    """
+    rows = [rec for recs in records for rec in recs]
+    return pd.DataFrame.from_dict(dict(enumerate(rows)), orient="index")
+
+
+def _run_parallel(spec: Spec, df_num: pd.DataFrame, out: pd.DataFrame, repo_root: Path, orca_fams: list[str],
+                  want_dp: bool, overwrite_xyz_json: bool, jobs: int, progress: bool) -> pd.DataFrame:
+    """One task per conformer over ``jobs`` processes, then the same joins as the serial path."""
+    from desc_utils.extract.orca import merge_orca_frames, postprocess_nbo
+
+    engines = orca_fams + (["descripytor"] if want_dp else [])
+    if progress:
+        print(f"[extract] {len(df_num)} conformers over {jobs} processes: {engines}")
+    tasks = [df_num.iloc[[i]] for i in range(len(df_num))]
+    parts = parallel_map(_work, tasks, jobs, initializer=_init_worker,
+                         initargs=(spec, repo_root, orca_fams, want_dp, overwrite_xyz_json),
+                         progress=progress, desc="extract")
+    keys = list(dict.fromkeys(k for part in parts for k in part))
+    frames = {k: _gather([part[k] for part in parts if k in part]) for k in keys}
+    if "nbo" in frames:
+        frames["nbo"] = postprocess_nbo(frames["nbo"], spec.orca["nbo"])
+    if orca_fams:
+        orca_df = merge_orca_frames({k: v for k, v in frames.items() if k != "descripytor"}, df_num, repo_root)
+        out = out.merge(orca_df, on="path", how="left", suffixes=("", "_orca"))
+    if want_dp:
+        from desc_utils.extract.descripytor import order_columns
+
+        out = out.merge(order_columns(frames["descripytor"], spec.descripytor), on="path", how="left",
+                        suffixes=("", "_descripytor"))
+    return out
+
+
 def run_extraction(spec: Spec, df_num: pd.DataFrame, repo_root: Path, families: Iterable[str] | None = None,
-                   overwrite_xyz_json: bool = False, progress: bool = True) -> pd.DataFrame:
+                   overwrite_xyz_json: bool = False, progress: bool = True, jobs: int | None = 1) -> pd.DataFrame:
     """Compute every requested family and return one wide row per conformer.
 
     ``families`` defaults to every family present in the spec. The numbering table's
     metadata columns (path, molecule id, energy, smiles, atom indices, ...) are carried
     into the output so the aggregation stage needs nothing else, together with the ORCA job
     status of every conformer (:func:`job_status_columns`).
+
+    ``jobs > 1`` (``0`` = every core) spreads the conformers over that many processes, each running
+    every engine on its conformer; the library-wide NBO rank consolidation is then applied once to the
+    gathered rows, so the table is identical to a serial run.
     """
     wanted = list(families) if families is not None else list(ALL_FAMILIES)
     unknown = [f for f in wanted if f not in ALL_FAMILIES]
@@ -127,14 +204,22 @@ def run_extraction(spec: Spec, df_num: pd.DataFrame, repo_root: Path, families: 
         return out
 
     orca_wanted = [f.split(".", 1)[1] for f in wanted if f.startswith("orca.")]
-    if spec.orca and orca_wanted:
+    orca_fams = [f for f in orca_wanted if f in spec.orca] if spec.orca else []
+    want_dp = bool(spec.descripytor) and "descripytor" in wanted
+
+    n_jobs = resolve_jobs(jobs)
+    if n_jobs > 1 and len(df_num) > 1 and (orca_fams or want_dp):
+        out = _run_parallel(spec, df_num, out, repo_root, orca_fams, want_dp, overwrite_xyz_json, n_jobs, progress)
+        return out.loc[:, ~out.columns.duplicated()]
+
+    if orca_fams:
         from desc_utils.extract.orca import run_orca
 
-        orca_df = run_orca(df_num, spec, repo_root, families=[f for f in orca_wanted if f in spec.orca],
+        orca_df = run_orca(df_num, spec, repo_root, families=orca_fams,
                            overwrite_xyz_json=overwrite_xyz_json, progress=progress)
         out = out.merge(orca_df, on="path", how="left", suffixes=("", "_orca"))
 
-    if spec.descripytor and "descripytor" in wanted:
+    if want_dp:
         from desc_utils.extract.descripytor import extract_descripytor
 
         dp_df = extract_descripytor(df_num, spec.descripytor, repo_root, progress=progress,

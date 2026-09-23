@@ -1,13 +1,16 @@
 """Command-line entry point for the spec-driven descriptor pipeline.
 
     python -m desc_utils.run validate    --spec specs/lnih2_pyox.yaml
-    python -m desc_utils.run number      --spec S [--data ROOT] [--out CSV] [--backend manual --csv CSV] [--strict]
-    python -m desc_utils.run extract     --spec S --numbering CSV [--families orca.xyz,descripytor,...] [--out CSV]
+    python -m desc_utils.run number      --spec S [--data ROOT] [--out CSV] [--backend manual --csv CSV] [--strict] [--jobs N]
+    python -m desc_utils.run extract     --spec S --numbering CSV [--families orca.xyz,descripytor,...] [--out CSV] [--jobs N]
     python -m desc_utils.run aggregate   --spec S --per-conformer CSV [--out CSV] [--filter | --no-filter]
-    python -m desc_utils.run all         --spec S [--data ROOT] [--numbering CSV] [--filter | --no-filter]
+    python -m desc_utils.run all         --spec S [--data ROOT] [--numbering CSV] [--filter | --no-filter] [--jobs N]
                                          (never stops for a bad conformer: it warns and lists them in output.check_csv)
     python -m desc_utils.run to-schema-b --spec S --numbering CSV [--row N]
     python -m desc_utils.run condense    --spec S [--data ROOT] [--overwrite] [--jobs N] [--nbo-full all]
+
+``--jobs N`` runs the per-conformer work of ``number`` and ``extract`` (and both inside ``all``) over N
+processes; ``--jobs 0`` uses every core. The tables are identical to a serial run.
 
 Every subcommand is a thin wrapper around a library function so notebooks can call the
 same functions directly. All paths are resolved relative to the repository root (the
@@ -140,7 +143,7 @@ def cmd_number(args) -> int:
         backend_override = make_backend(cfg, spec.labels)
     # always write the table (even when --strict fails) so the offending rows can be inspected
     df = build_numbering_table(spec, repo_root=REPO_ROOT, backend=backend_override,
-                               strict=False, regenerate_sdf=args.regenerate_sdf)
+                               strict=False, regenerate_sdf=args.regenerate_sdf, jobs=args.jobs)
     out = _resolve(args.out, _output_name(spec, "numbering_csv"))
     write_numbering_table(df, out)
     status = df["numbering_status"].value_counts().to_dict()
@@ -162,7 +165,7 @@ def cmd_extract(args) -> int:
     df_num = read_numbering_table(_resolve(args.numbering) if args.numbering else _existing_output(spec, "numbering_csv"), spec)
     families = args.families.split(",") if args.families else None
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, families=families,
-                        overwrite_xyz_json=args.overwrite_xyz_json)
+                        overwrite_xyz_json=args.overwrite_xyz_json, jobs=args.jobs)
     out = _resolve(args.out, spec.output["per_conformer_csv"])
     df.to_csv(out, index=False)
     print(f"wrote {out}  rows={len(df)}  columns={df.shape[1]}")
@@ -194,11 +197,11 @@ def cmd_all(args) -> int:
     if args.numbering:
         df_num = read_numbering_table(_resolve(args.numbering), spec)
     else:
-        df_num = build_numbering_table(spec, repo_root=REPO_ROOT)
+        df_num = build_numbering_table(spec, repo_root=REPO_ROOT, jobs=args.jobs)
         num_out = _resolve(_output_name(spec, "numbering_csv"))
         write_numbering_table(df_num, num_out)
         print(f"wrote {num_out}  rows={len(df_num)}  status={df_num['numbering_status'].value_counts().to_dict()}")
-    df = run_extraction(spec, df_num, repo_root=REPO_ROOT)
+    df = run_extraction(spec, df_num, repo_root=REPO_ROOT, jobs=args.jobs)
     per_conf = _resolve(spec.output["per_conformer_csv"])
     df.to_csv(per_conf, index=False)
     print(f"wrote {per_conf}  rows={len(df)}  columns={df.shape[1]}")
@@ -252,6 +255,10 @@ def build_parser() -> argparse.ArgumentParser:
     def common(sp):
         sp.add_argument("--spec", required=True, help="spec YAML/JSON file")
 
+    def jobs(sp):
+        sp.add_argument("-j", "--jobs", type=int, default=1,
+                        help="processes for the per-conformer work (default 1; 0 = every core)")
+
     sp = sub.add_parser("validate", help="check a spec file"); common(sp)
     sp.set_defaults(func=cmd_validate)
 
@@ -262,6 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--csv", help="numbering CSV for --backend manual")
     sp.add_argument("--strict", action="store_true", help="exit non-zero unless every row has status ok")
     sp.add_argument("--regenerate-sdf", action="store_true", help="rebuild .sdf files from the xyz even if present")
+    jobs(sp)
     sp.set_defaults(func=cmd_number)
 
     sp = sub.add_parser("extract", help="compute per-conformer descriptors"); common(sp)
@@ -269,6 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--families", help="comma list, e.g. orca.xyz,orca.charges,orca.nbo,orca.redox,descripytor")
     sp.add_argument("--out", help="output CSV (default: output.per_conformer_csv)")
     sp.add_argument("--overwrite-xyz-json", action="store_true", help="recompute morfeus descriptors instead of reading xyz.json")
+    jobs(sp)
     sp.set_defaults(func=cmd_extract)
 
     sp = sub.add_parser("aggregate", help="Boltzmann-aggregate conformers and filter"); common(sp)
@@ -283,6 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--numbering", help="use an existing numbering CSV instead of rebuilding it")
     sp.add_argument("--filter", action="store_true", help="apply the noise filter of the spec's `filter` block (off by default)")
     sp.add_argument("--no-filter", action="store_true", help="never filter, even if the spec enables it")
+    jobs(sp)
     sp.set_defaults(func=cmd_all)
 
     sp = sub.add_parser("to-schema-b", help="print the DescriPyTor JSON for one conformer"); common(sp)
