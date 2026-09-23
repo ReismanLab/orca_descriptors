@@ -70,5 +70,5 @@ filter:                               # optional noise filter for modelling sets
 
 output:
   numbering_csv: "{date}_{name}_atom_numbering_results.csv"
-  per_conformer_csv: combined_descriptors_test_molecules.csv
+  per_conformer_csv: "{date}_{name}_combined_descriptors.csv"
   aggregated_csv: "{date}_{name}_descriptors.csv"

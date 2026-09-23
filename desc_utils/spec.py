@@ -107,7 +107,7 @@ DEFAULTS: dict[str, Any] = {
     # and today's does not exist, it takes the most recent one matching the pattern.
     "output": {
         "numbering_csv": "{date}_{name}_atom_numbering_results.csv",
-        "per_conformer_csv": "combined_descriptors.csv",
+        "per_conformer_csv": "{date}_{name}_combined_descriptors.csv",
         "aggregated_csv": "{date}_{name}_descriptors.csv",
         # written by `extract` / `all` only when some conformer needs a human look (numbering not ok,
         # ORCA job not completed); today's copy is removed again when everything is fine

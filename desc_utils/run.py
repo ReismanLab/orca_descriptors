@@ -71,7 +71,8 @@ def _aggregated_name(spec: Spec) -> str:
 def _existing_output(spec: Spec, key: str) -> Path:
     """The file ``output.<key>`` names for today if it exists, else the most recent one matching the pattern.
 
-    Lets ``extract`` and ``to-schema-b`` find the numbering table of a previous day without ``--numbering``.
+    Lets ``extract`` and ``to-schema-b`` find the numbering table of a previous day without ``--numbering``,
+    and ``aggregate`` the per-conformer table without ``--per-conformer``.
     Falls back to today's name (which the caller will then report as missing) when nothing matches.
     """
     today = _resolve(_output_name(spec, key))
@@ -166,7 +167,7 @@ def cmd_extract(args) -> int:
     families = args.families.split(",") if args.families else None
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, families=families,
                         overwrite_xyz_json=args.overwrite_xyz_json, jobs=args.jobs)
-    out = _resolve(args.out, spec.output["per_conformer_csv"])
+    out = _resolve(args.out, _output_name(spec, "per_conformer_csv"))
     df.to_csv(out, index=False)
     print(f"wrote {out}  rows={len(df)}  columns={df.shape[1]}")
     _report_check(df, df_num, spec)
@@ -177,7 +178,7 @@ def cmd_aggregate(args) -> int:
     from desc_utils.aggregate import aggregate_conformers, apply_filter
 
     spec = _load(args)
-    df = pd.read_csv(_resolve(args.per_conformer, spec.output["per_conformer_csv"]))
+    df = pd.read_csv(_resolve(args.per_conformer) if args.per_conformer else _existing_output(spec, "per_conformer_csv"))
     agg = aggregate_conformers(df, spec)
     if _use_filter(spec, args):
         agg, report = apply_filter(agg, spec)
@@ -202,7 +203,7 @@ def cmd_all(args) -> int:
         write_numbering_table(df_num, num_out)
         print(f"wrote {num_out}  rows={len(df_num)}  status={df_num['numbering_status'].value_counts().to_dict()}")
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, jobs=args.jobs)
-    per_conf = _resolve(spec.output["per_conformer_csv"])
+    per_conf = _resolve(_output_name(spec, "per_conformer_csv"))
     df.to_csv(per_conf, index=False)
     print(f"wrote {per_conf}  rows={len(df)}  columns={df.shape[1]}")
     agg = aggregate_conformers(df, spec)
@@ -281,7 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_extract)
 
     sp = sub.add_parser("aggregate", help="Boltzmann-aggregate conformers and filter"); common(sp)
-    sp.add_argument("--per-conformer", help="per-conformer CSV (default: output.per_conformer_csv)")
+    sp.add_argument("--per-conformer", help="per-conformer CSV (default: output.per_conformer_csv of today, else the most recent one)")
     sp.add_argument("--out", help="output CSV (default: output.aggregated_csv)")
     sp.add_argument("--filter", action="store_true", help="apply the noise filter of the spec's `filter` block (off by default)")
     sp.add_argument("--no-filter", action="store_true", help="never filter, even if the spec enables it")

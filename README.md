@@ -148,7 +148,7 @@ rsync -avz --include='*/' --include='optimization.xyz' --include='orca_condensed
 cp specs/lnih2_pyox.yaml specs/<LIB>.yaml        # closest example; small organics: specs/test_molecules_at1_at2.yaml
 # edit specs/<LIB>.yaml, fields in the table below
 python -m desc_utils.run all --spec specs/<LIB>.yaml --jobs 4
-#   -> <today>_<LIB>_atom_numbering_results.csv (per conformer: atom indices), combined_descriptors.csv
+#   -> <today>_<LIB>_atom_numbering_results.csv (per conformer: atom indices), <today>_<LIB>_combined_descriptors.csv
 #      (per conformer: descriptors), <today>_<LIB>_descriptors.csv (per molecule: the spreadsheet)
 #   -> <today>_<LIB>_conformers_to_check.csv only if some conformer needs a look, with a WARNING on the terminal
 ```
@@ -179,7 +179,7 @@ python -m desc_utils.run all --spec specs/<LIB>.yaml --numbering <date>_<LIB>_at
 ```
 
 Output names carry the date of the run and the spec name so that nothing is overwritten from one run
-to the next (`output` section of the spec; `combined_descriptors.csv` is the exception, it is rewritten).
+to the next (`output` section of the spec).
 
 What the output files contain is in [What you get](#what-you-get).
 
@@ -289,7 +289,7 @@ pytest tests -m slow                 # ~10 min; also re-derives the atom numberi
 | File | One row per | Content |
 |---|---|---|
 | `<date>_<name>_atom_numbering_results.csv` | conformer | 1-based index of every label, SCF energy, SMILES, `numbering_status` |
-| `combined_descriptors.csv` | conformer | `orca_job_status` (`completed`, `running`, `failed`; `unknown` for files condensed before 2026-09-23, `missing` for a folder with no file), `n_conformer_folders` of its molecule, then every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
+| `<date>_<name>_combined_descriptors.csv` | conformer | `orca_job_status` (`completed`, `running`, `failed`; `unknown` for files condensed before 2026-09-23, `missing` for a folder with no file), `n_conformer_folders` of its molecule, then every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
 | `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchi`, `smiles`, `smiles_noH` (implicit hydrogens), `n_conformers` (rows aggregated), `n_conformers_completed`, `n_conformer_folders` (folders on disk), `all_conformers_completed` (`True` / `False`; empty when a status is `unknown`), then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
 | `<date>_<name>_conformers_to_check.csv` | conformer needing a look | only written when there is one (today's copy is removed otherwise): `path`, `reason`, `numbering_status`, `numbering_notes`, `orca_job_status` |
 
@@ -348,7 +348,7 @@ ORCA compound job per conformer                                                 
         │  rsync optimization.xyz + orca_condensed.json                                        (laptop)
         ▼
 [2] spec  ──►  [3] number  ──►  [4] extract  ──►  [5] aggregate (+ optional filter)
-     <date>_<name>_atom_numbering_results.csv   combined_descriptors.csv   <date>_<name>_descriptors.csv
+     <date>_<name>_atom_numbering_results.csv   <date>_<name>_combined_descriptors.csv   <date>_<name>_descriptors.csv
 ```
 
 All stages read the same spec. From the repository root, in `gp_env`:
@@ -357,7 +357,7 @@ All stages read the same spec. From the repository root, in `gp_env`:
 python -m desc_utils.run validate  --spec specs/lnih2_pyox.yaml
 python -m desc_utils.run condense  --spec specs/lnih2_pyox.yaml            # -> <conf>/orca_condensed.json (normally run on the cluster)
 python -m desc_utils.run number    --spec specs/lnih2_pyox.yaml            # -> <date>_<name>_atom_numbering_results.csv
-python -m desc_utils.run extract   --spec specs/lnih2_pyox.yaml            # -> combined_descriptors.csv (per conformer)
+python -m desc_utils.run extract   --spec specs/lnih2_pyox.yaml            # -> <date>_<name>_combined_descriptors.csv (per conformer)
 python -m desc_utils.run aggregate --spec specs/lnih2_pyox.yaml            # -> <date>_<name>_descriptors.csv
 python -m desc_utils.run all       --spec specs/lnih2_pyox.yaml            # number -> extract -> aggregate
 ```
@@ -488,7 +488,7 @@ engines. Column names embed the labels, never the indices (`%Vbur_atom_Ni_radius
   names. `python -m desc_utils.run to-schema-b --spec ... --row 0` prints the index-based JSON that
   DescriPyTor's own tools consume for one conformer.
 
-The result is `combined_descriptors.csv`, one row per conformer, merged on `path`.
+The result is `<date>_<name>_combined_descriptors.csv`, one row per conformer, merged on `path`.
 
 ### 5. Aggregation and filtering
 
