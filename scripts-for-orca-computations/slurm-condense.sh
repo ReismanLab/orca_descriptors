@@ -15,11 +15,12 @@
 # ~70 MB of raw ORCA output, then checks every file it wrote. The log of the run,
 # condense_<jobid>.out and .err, lands in the directory you submit from, which is not necessarily
 # the library: cd there first, or pass sbatch -o /somewhere/condense_%j.out -e ... . Only those files, plus the
-# optimization.xyz next to them, have to be copied to your laptop (step C of the README).
+# optimization.xyz next to them, have to be copied to your laptop (step 5 of the README).
 #
 # Standard-library Python only: no conda environment, no pip install, just a git clone of
-# orca_descriptors. Folders that already hold an orca_condensed.json are skipped, so re-running
-# this after a new batch of ORCA jobs only does the new ones.
+# orca_descriptors. Every file records the state of its ORCA job (job.status: completed, running,
+# failed) and the log ends with a count of them. Folders whose file says "completed" are skipped, the
+# others are rebuilt, so re-running this after a new batch or a resubmission only does what changed.
 #
 # The job fails (non-zero exit, FAILED in sacct) if any conformer could not be condensed or if a
 # written file does not check out; condense_<jobid>.out names the offending folders.

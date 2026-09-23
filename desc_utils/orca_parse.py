@@ -12,6 +12,9 @@ pipeline keeps calling ``od.OrcaReader`` / ``od.NBOProps`` / ``od.RedoxSet``.
 * ``RedoxSet``    IP / EA, hardness, electronegativity, electrophilicity, Fukui functions.
 * module functions (``read_xyz``, ``property_state``, ``mo_list``, ``frequencies_and_modes``,
   ``ir_intensities``, ``drop_zero_modes``, ``orca_version``, ``nbo_program``) used by the condenser.
+* ``job_status``  completed / failed / running / not_started of one conformer folder, from the
+  termination lines of ``calcParam.out`` and the SLURM ``error_<jobid>.txt``; recorded in the
+  condensed file and shared with ``scripts-for-orca-computations/check_jobs.py``.
 """
 from __future__ import annotations
 
@@ -1496,3 +1499,94 @@ def orca_version(text):
 def nbo_program(text):
     m = re.search(r"\*{3,}\s+NBO\s+([\d.]+)\s+\*{3,}", text)
     return f"NBO {m.group(1)}" if m else None
+
+
+# --------------------------------------------------------------------------- job status
+
+#: the four states of an ORCA job as seen from its folder
+JOB_COMPLETED, JOB_FAILED, JOB_RUNNING, JOB_NOT_STARTED = "completed", "failed", "running", "not_started"
+JOB_STATUSES = (JOB_COMPLETED, JOB_FAILED, JOB_RUNNING, JOB_NOT_STARTED)
+ORCA_NORMAL = "ORCA TERMINATED NORMALLY"
+ORCA_ERROR_RE = re.compile(r"ORCA finished by error termination.*|aborting the run", re.IGNORECASE)
+#: messages SLURM / Open MPI write to the job's error_<jobid>.txt when the job dies before ORCA can say so
+SLURM_ERRORS = {
+    "DUE TO TIME LIMIT": "killed by SLURM: time limit",
+    "oom-kill": "killed by SLURM: out of memory",
+    "Out Of Memory": "killed by SLURM: out of memory",
+    "CANCELLED AT": "cancelled (scancel or node failure)",
+    "not enough slots": "Open MPI: not enough slots for the requested processes",
+}
+_ERROR_FILE_RE = re.compile(r"error_(\d+)\.txt")
+
+
+def latest_slurm_error_file(conf_dir):
+    """``error_<jobid>.txt`` of the most recent submission, or None (earlier ones stay after a resubmit)."""
+    files = []
+    for p in Path(conf_dir).glob("error_*.txt"):
+        m = _ERROR_FILE_RE.fullmatch(p.name)
+        if m:
+            files.append((int(m.group(1)), p))
+    return max(files)[1] if files else None
+
+
+def slurm_kill_reason(conf_dir):
+    """Why SLURM killed the last job of this folder, or None when its error file says nothing of the kind."""
+    err = latest_slurm_error_file(conf_dir)
+    if err is None:
+        return None
+    text = err.read_text(errors="replace")
+    for marker, reason in SLURM_ERRORS.items():
+        if marker in text:
+            return reason
+    return None
+
+
+def job_status(conf_dir, text=None, output_name="calcParam.out"):
+    """State of the ORCA job of one conformer folder, judged from its files alone.
+
+    Returns ``{"status", "detail", "n_normal_terminations", "failed_after_success"}`` with ``status`` one of
+    ``completed`` (the last termination line is ``ORCA TERMINATED NORMALLY``), ``failed`` (an ORCA error
+    termination, or a SLURM kill recorded in ``error_<jobid>.txt``), ``running`` (``calcParam.out`` exists
+    but has no termination line yet: the job is still writing it, or it was killed without a message) and
+    ``not_started`` (no ``calcParam.out``). ``calcParam.out`` is appended to on every submission, so a file
+    can hold several runs: the verdict follows the last one, ``n_normal_terminations`` and
+    ``failed_after_success`` tell when there were several. ``text`` is the content of ``calcParam.out``
+    when the caller already read it.
+    """
+    conf_dir = Path(conf_dir)
+    out = conf_dir / output_name
+    result = {"status": JOB_NOT_STARTED, "detail": f"no {output_name}", "n_normal_terminations": 0,
+              "failed_after_success": False}
+    if text is None:
+        if not out.is_file():
+            return result
+        text = out.read_text(errors="replace")
+
+    last_normal = last_error = -1
+    n_normal = 0
+    orca_error = None
+    for i, line in enumerate(text.splitlines()):
+        if ORCA_NORMAL in line:
+            last_normal, n_normal = i, n_normal + 1
+        else:
+            m = ORCA_ERROR_RE.search(line)
+            if m:
+                if orca_error is None or last_error < last_normal:  # keep the first, most specific, line of a run
+                    orca_error = m.group(0).strip()
+                last_error = i
+    result["n_normal_terminations"] = n_normal
+
+    if last_normal > last_error:
+        detail = "" if n_normal == 1 else f"{n_normal} normal terminations in {output_name} (submitted several times?)"
+        result.update(status=JOB_COMPLETED, detail=detail)
+        return result
+    kill = slurm_kill_reason(conf_dir)
+    if last_error >= 0:
+        result.update(status=JOB_FAILED, detail=kill or orca_error, failed_after_success=last_normal >= 0)
+        return result
+    if kill:
+        result.update(status=JOB_FAILED, detail=kill)
+        return result
+    result.update(status=JOB_RUNNING,
+                  detail=f"no termination line in {output_name}: still running, or killed without a message")
+    return result

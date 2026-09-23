@@ -36,6 +36,26 @@ def molecule_folder(path: str) -> str:
     return _CONF_SUFFIX.sub("", p.rstrip("/"))
 
 
+#: per-conformer bookkeeping columns that are summarised, never aggregated as descriptors
+JOB_COLUMNS = ("n_conformer_folders",)
+#: the summary columns ``completeness`` adds to every aggregated row
+COMPLETENESS_COLUMNS = ("n_conformers_completed", "n_conformer_folders", "all_conformers_completed")
+
+
+def completeness(g: pd.DataFrame) -> dict:
+    """Conformer-set completeness of one molecule from its per-conformer rows (see :func:`aggregate_frame`)."""
+    status = g["orca_job_status"].astype(str)
+    n_completed = int((status == "completed").sum())
+    folders = pd.to_numeric(g["n_conformer_folders"], errors="coerce") if "n_conformer_folders" in g else pd.Series(dtype=float)
+    n_folders = int(folders.max()) if folders.notna().any() else int(len(g))
+    n_folders = max(n_folders, len(g))
+    if (status == "unknown").any():
+        flag = pd.NA
+    else:
+        flag = bool(n_completed == n_folders)
+    return {"n_conformers_completed": n_completed, "n_conformer_folders": n_folders, "all_conformers_completed": flag}
+
+
 def aggregate_frame(
     df: pd.DataFrame,
     group_by: str,
@@ -51,10 +71,18 @@ def aggregate_frame(
     Groups without a single valid energy are skipped, as in the original notebook cell.
     ``exclude_columns`` are numeric columns that must not be aggregated (label index
     columns, bookkeeping columns).
+
+    When the per-conformer table carries ``orca_job_status`` (see
+    ``desc_utils.extract.job_status_columns``) every row also gets ``n_conformers_completed``,
+    ``n_conformer_folders`` and the flag ``all_conformers_completed``: True when every conformer
+    folder of the molecule holds a completed ORCA job, False when at least one is running, failed
+    or absent, and empty (NA) when a status is ``unknown`` (files condensed before the status
+    was recorded) so that an old library is not reported as broken.
     """
     if energy_column not in df.columns:
         raise KeyError(f"energy column {energy_column!r} not found; available: {list(df.columns)[:10]}...")
-    exclude = set(exclude_columns) | {group_by}
+    exclude = set(exclude_columns) | {group_by} | set(JOB_COLUMNS)
+    has_status = "orca_job_status" in df.columns
     # Numeric columns with at least one value. Descriptors that are empty for every conformer (e.g.
     # Enthalpy without a thermochemistry step) are dropped here so the library is the same whether the
     # per-conformer table comes from memory (object column of None) or from a CSV (float column of NaN).
@@ -69,6 +97,8 @@ def aggregate_frame(
         idx_low = e.idxmin()
         w = boltzmann_weights(e, temperature_K, kB)
         out: dict = {group_by: key, "n_conformers": int(len(g))}
+        if has_status:
+            out.update(completeness(g))
         for c in carry_first:
             out[c] = g[c].iloc[0]
         for col in numeric_cols:
@@ -134,7 +164,8 @@ def apply_filter(agg: pd.DataFrame, spec: Spec) -> tuple[pd.DataFrame, dict]:
     from desc_utils.data_extraction import filter_numeric_descriptors
 
     filtered, report = filter_numeric_descriptors(agg, **filter_kwargs_from_spec(spec))
-    meta = [c for c in ["smiles", spec.aggregate["group_by"], "inchi_folder", "ligand_class", "n_conformers"]
+    meta = [c for c in ["smiles", spec.aggregate["group_by"], "inchi_folder", "ligand_class", "n_conformers",
+                        *COMPLETENESS_COLUMNS]
             if c in agg.columns and c not in filtered.columns]
     for c in meta:
         filtered[c] = agg[c].values

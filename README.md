@@ -11,13 +11,15 @@ Two engines compute the descriptors: the in-house ORCA readers (`desc_utils`) an
 
 ## Contents
 
-- [Installation](#installation)
-- [Descriptor extraction guidelines](#descriptor-extraction-guidelines)
-  - [Prerequisites](#prerequisites)
-  - [A. Run the calculations on the cluster](#a-run-the-calculations-on-the-cluster)
-  - [B. Condense the ORCA outputs, on the cluster](#b-condense-the-orca-outputs-on-the-cluster)
-  - [C. Copy the condensed files to your laptop](#c-copy-the-condensed-files-to-your-laptop)
-  - [D. Extract the descriptors, on your laptop](#d-extract-the-descriptors-on-your-laptop)
+- [Step by step](#step-by-step)
+  - [1. Laptop: install the code and the environment](#1-laptop-install-the-code-and-the-environment)
+  - [2. Cluster: log in, nothing to install](#2-cluster-log-in-nothing-to-install)
+  - [3. Cluster: compute the descriptors and check the jobs](#3-cluster-compute-the-descriptors-and-check-the-jobs)
+  - [4. Cluster: condense the ORCA outputs](#4-cluster-condense-the-orca-outputs)
+  - [5. Laptop: copy the condensed files, extract and compile the descriptors](#5-laptop-copy-the-condensed-files-extract-and-compile-the-descriptors)
+- [Details](#details)
+  - [Installation details](#installation-details)
+  - [Condense by hand](#condense-by-hand)
   - [Reproduce the shipped LNiH2 descriptors](#reproduce-the-shipped-lnih2-descriptors)
   - [Re-run after changing the spec or adding conformers](#re-run-after-changing-the-spec-or-adding-conformers)
   - [What you get](#what-you-get)
@@ -37,212 +39,122 @@ Two engines compute the descriptors: the in-house ORCA readers (`desc_utils`) an
   - [DescriPyTor descriptors](#descripytor-descriptors)
 - [References](#references)
 
-## Installation
+## Step by step
+
+Five steps in order: 1 and 5 on your laptop, 2 to 4 on the cluster. The commands use these names:
+
+| Name | Meaning |
+|---|---|
+| `<LIB>` | the library: one campaign of ORCA jobs, e.g. `LNiH2_library_002` |
+| `$LIB` | full path of the library folder on the cluster, laid out as `<LIB>/<InChIKey>/conf_N/` |
+| `$REPO` | the group clone of this repository on the cluster, `/groups/ReismanLab/orca_descriptors` |
+| `<user>@<cluster>` | your account and the login node |
+
+### 1. Laptop: install the code and the environment
+
+Once, about ten minutes:
 
 ```bash
 git clone https://github.com/ReismanLab/orca_descriptors
 cd orca_descriptors
-git checkout code-review             # the spec-driven pipeline lives on this branch until it is merged into main
+git checkout code-review             # the pipeline lives on this branch until it is merged into main
 git submodule update --init          # DescriPyTor, pinned commit
 conda env create -f gp_env.yml       # environment "gp_env"
-conda activate gp_env
-```
-
-On the cluster the home folder is too small for the environment: use
-[setup_gp_env.sh](setup_gp_env.sh) instead of the last two lines, it puts `gp_env` in the group
-folder (see [Prerequisites](#prerequisites)).
-
-An existing `gp_env` created before 2026-09-22 lacks three packages that were added to `gp_env.yml`
-since (Open Babel for the xyz to sdf conversion of the numbering step, networkx and plotly imported by
-DescriPyTor). Inside the environment:
-
-```bash
-pip install openbabel-wheel==3.1.1.23 networkx==3.6.1 plotly==7.1.0
-```
-
-DescriPyTor is imported from the `DescriPyTor/` folder; do **not** `pip install` it into `gp_env`
-(its `numpy<2` pin would downgrade the environment). The submodule pin is the version the regression
-tests were validated against (`f6bc24c`, 2026-08-31).
-
-The ORCA jobs themselves need ORCA 6.1 and NBO 7 on the cluster (see
-[scripts-for-orca-computations](scripts-for-orca-computations)).
-
-## Descriptor extraction guidelines
-
-A copy-paste recipe for reproducing or computing descriptors from the command line. You do not need
-the rest of this document to run it; the [detailed pipeline](#pipeline-in-detail-from-orca-files-to-the-final-descriptors)
-explains what each command does. Four steps: **A** and **B** run on the cluster, **C** and **D** on
-your laptop. Placeholders: `<LIB>` is the library folder name, `<cluster>` the login node, `<user>`
-your account.
-
-### Prerequisites
-
-Two machines, and they need very different things:
-
-| Where | Steps | Needs |
-|---|---|---|
-| The cluster | A, B | ORCA 6.1 and NBO 7 for the calculations. For `condense`: a `git clone` of this repository and any Python 3.8 or newer, **no conda environment at all** (`desc_utils.condense` and `desc_utils.orca_parse` import the standard library only, so `module load python` is enough). |
-| Your laptop | C, D | The `gp_env` environment below: rdkit, morfeus, DescriPyTor, pandas and the rest. |
-
-Once, on your laptop:
-
-```bash
-git clone https://github.com/ReismanLab/orca_descriptors
-cd orca_descriptors
-git checkout code-review             # the pipeline is on this branch until it is merged into main
-git submodule update --init          # DescriPyTor, pinned commit
-conda env create -f gp_env.yml       # environment "gp_env" (includes Open Babel for the numbering step)
 conda activate gp_env
 pytest tests -m "not slow"           # expected: all passed, a few seconds
 ```
 
-A conda environment does not fit in the home quota of the cluster, and one private copy per group
-member is a waste. [setup_gp_env.sh](setup_gp_env.sh) builds a single `gp_env` in the group folder
-instead; replace the last three lines of the block above with it:
+Never `pip install` DescriPyTor into `gp_env`; it is imported from the `DescriPyTor/` folder
+(see [Installation details](#installation-details)).
+
+### 2. Cluster: log in, nothing to install
+
+The repository is already cloned in the group folder, and the cluster steps need only the Python of
+`module load python`: no conda environment, no `pip install`.
 
 ```bash
-bash setup_gp_env.sh                 # environment + package cache in /groups/ReismanLab/miniconda3, then the tests
-conda activate gp_env
+ssh <user>@<cluster>
+REPO=/groups/ReismanLab/orca_descriptors     # the group clone; put this line in your ~/.bashrc
+module load python                           # any Python 3.8 or newer
+ls $REPO/desc_utils                          # sanity check: the folder exists and is readable
 ```
 
-The first person to run it builds the environment, ten minutes or so. Everybody else in the group
-runs the same command, and it only points their conda at the shared folder, a few seconds:
-
-```bash
-bash setup_gp_env.sh --no-test
-conda activate gp_env
-```
-
-The script prepends the group `envs` and `pkgs` folders to `envs_dirs` and `pkgs_dirs` in your
-`~/.condarc`, so `conda env create` and `conda activate <name>` keep being used exactly as above but
-read and write `/groups/ReismanLab/miniconda3/envs` from now on, this environment and the next ones.
-It then reports whether conda really picked the setting up, rather than assuming it did. The package
-cache moves along with the environments on purpose: conda can only hardlink a cached package into an
-environment on the same filesystem, and copies every file otherwise.
-
-The two shared folders are left group-writable (setgid, so that new files keep the group) but the
-environment itself is left read-only for the group: everyone runs it, only its owner can change it,
-and a stray `pip install` cannot break it for the whole lab. Refreshing it after a change to
-`gp_env.yml` is therefore the owner's job:
-
-```bash
-conda env update --file gp_env.yml --prefix /groups/ReismanLab/miniconda3/envs/gp_env --prune
-```
-
-Options: `--root PATH` for another shared folder, `--no-test` to skip the test suite, `--all-users`
-to write the setting into `$ROOT/.condarc` rather than each `~/.condarc`, which only helps when
-`$ROOT` is the conda installation the whole group runs (the script says so if it is not). Re-running
-the script is harmless; it leaves an existing environment alone. If conda stops on an Anaconda Terms
-of Service error, run the two `conda tos accept` commands it prints and start the script again. A
-conda 22.x installation whose `conda env` subcommand is missing its `conda-env` executable is worked
-around.
-
-On the cluster, the group installation `/groups/ReismanLab/miniconda3` (conda 23.11) is the one to
-use, not a private miniconda in your home folder:
-
-```bash
-source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh    # in your ~/.bashrc, once
-conda activate gp_env
-```
-
-Its own `envs/` is where `setup_gp_env.sh` puts `gp_env` and is the first entry of `envs_dirs` by
-default, so members who source it need no configuration at all.
-
-Every command of step D runs on your laptop, from the repository root, with `gp_env` active. Steps A
-and B run on the cluster and need no environment.
-
-### A. Run the calculations on the cluster
+### 3. Cluster: compute the descriptors and check the jobs
 
 > **Placeholder, to be written by Audrey.** How to launch a descriptor campaign: from the list of
 > ligands or SMILES to submitted ORCA jobs. What belongs here is the conformer search and its
 > settings, the naming of the folders, the generation of the `calcParam.inp` files and how the jobs
-> are submitted and monitored ([launch_orca_all.py](scripts-for-orca-computations/launch_orca_all.py),
+> are submitted ([launch_orca_all.py](scripts-for-orca-computations/launch_orca_all.py),
 > [slurm-calcParam.sh](scripts-for-orca-computations/slurm-calcParam.sh)), plus whatever has to be
 > checked before a campaign of several hundred conformers is launched.
 
-Whatever that procedure is, the rest of the pipeline expects it to produce, somewhere on the cluster:
+Whatever the procedure, it must leave, somewhere on the cluster, one folder per conformer holding
+the output of an ORCA 6.1 compound job run with `calcParam.inp`:
 
 ```
-<LIB>/<molecule InChIKey>/conf_N/     one folder per conformer, holding the output of an ORCA 6.1
-                                      compound job run with calcParam.inp
+$LIB/<InChIKey>/conf_N/
 ```
 
-Four things are read out of each conformer folder in step B: `optimization.xyz`, the
-`*.property.json` files, the GBW dump `singlepoint.json` and `calcParam.out` (NBO and frequencies).
-A different input file or a different folder layout is fine, but it then needs a spec of its own,
-see [2. Spec](#2-spec).
-
-### B. Condense the ORCA outputs, on the cluster
-
-An ORCA compound job leaves about 70 MB per conformer. `condense` reduces that to a single
-`orca_condensed.json` of 0.4 to 1.5 MB holding everything the descriptors need, so that this is all
-that has to travel. Skip this step if [slurm-calcParam.sh](scripts-for-orca-computations/slurm-calcParam.sh)
-already ran it at the end of each job.
-
-**This is the one step that needs no environment**: `python -m desc_utils.condense` imports only the
-Python standard library, so any interpreter 3.8 or newer will do and `gp_env` is irrelevant here. Do
-not `conda activate` anything.
-
-Condensing a library reads every raw ORCA output it has, which is not login-node work: submit
-[slurm-condense.sh](scripts-for-orca-computations/slurm-condense.sh) instead.
+Check the jobs:
 
 ```bash
-ssh <user>@<cluster>
-git clone https://github.com/ReismanLab/orca_descriptors              # once, anywhere; no environment, no pip install
-git -C orca_descriptors checkout code-review
-sbatch orca_descriptors/scripts-for-orca-computations/slurm-condense.sh /path/to/<LIB>
+LIB=/path/to/<LIB>                                                     # the library folder
+python3 $REPO/scripts-for-orca-computations/check_jobs.py $LIB         # every job that is not OK, then a count per status
+python3 $REPO/scripts-for-orca-computations/check_jobs.py $LIB --all   # the finished ones too
+python3 $REPO/scripts-for-orca-computations/list_molecules.py $LIB     # -> molecules.csv: InChIKey, number of conformers
 ```
 
-Nothing to edit in the script: it finds the clone from the path it was submitted with. If you keep
-a copy of it outside the clone, name the clone yourself with
-`sbatch --export=ALL,REPO=$HOME/orca_descriptors ...`.
+Statuses: `QUEUED` and `RUNNING` come from `squeue`; `OK`; `FAILED` with the reason (time limit, out
+of memory, ORCA error); `CHECK` when one `calcParam.out` holds several runs; `NOT STARTED`. Resubmit
+the `FAILED` conformers before step 4, or carry on: the pipeline records the state of every job and
+flags the molecules whose conformers are not all finished (step 5.2).
 
-One node, eight cores, two hours by default; raise the `#SBATCH` lines for a large library. The
-condensed files themselves are written in place, one `orca_condensed.json` per `conf_N/` folder of
-the library. The log of the run, `condense_<jobid>.out` and `.err`, lands in the directory you
-submitted from (`sbatch -o /elsewhere/condense_%j.out -e ...` to put it somewhere else). It ends
-with `condensed N folder(s), skipped 0, failed 0` and
-`checked N file(s): N ok, 0 failed`, and it comes back FAILED if any conformer could not be
-condensed or if a file it wrote does not check out. Folders that already have their
-`orca_condensed.json` are skipped, so submitting the same job again after a new batch of ORCA runs
-only does the new conformers. A `failed` line names a conformer whose ORCA run did not finish; see
-[If something goes wrong](#if-something-goes-wrong).
+### 4. Cluster: condense the ORCA outputs
 
-These are the two commands the job runs, if you ever need them by hand (a couple of conformers, an
-interactive allocation, raw folders sitting on your laptop):
+Each conformer folder holds about 70 MB. This step writes one `orca_condensed.json` (0.4 to 1.5 MB)
+per conformer with everything the descriptors need, on a compute node:
 
 ```bash
-PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/<LIB> --jobs 4
-PYTHONPATH=$PWD/orca_descriptors python -m desc_utils.condense --root /path/to/<LIB> --check
+cd $LIB                                                            # the log lands where you submit from
+sbatch $REPO/scripts-for-orca-computations/slurm-condense.sh $LIB  # 8 cores, 2 h; raise the #SBATCH lines for a big library
+squeue -u $USER                                                    # wait until the "condense" job is gone
+tail -n 4 condense_<jobid>.out   # expected: "... failed 0", "job status: completed N", "checked N file(s): N ok, 0 failed"
 ```
 
-`PYTHONPATH` is the folder that *contains* `desc_utils/`, `--root` the library folder.
+Every conformer that got past its singlepoint gets a file, finished or not, and the file records the
+state of the ORCA job (`job.status`: `completed`, `running` or `failed`). The `job status:` line of the
+log counts them: `completed N` alone means the library is done. Re-running the same command rebuilds
+the files of the unfinished jobs and skips the completed ones, so it can be repeated after every
+resubmission or new batch. A `failed` line names a conformer with nothing to condense yet (no
+singlepoint), see [If something goes wrong](#if-something-goes-wrong). Skip the step if
+`slurm-calcParam.sh` already condenses at the end of every job.
 
-### C. Copy the condensed files to your laptop
+### 5. Laptop: copy the condensed files, extract and compile the descriptors
 
-About 0.5 MB per conformer, against ~70 MB for the raw folders. From the repository root on your
-laptop:
+From the repository root, with `gp_env` active.
+
+**5.1 rsync.** Only the geometry and the condensed file travel, about 0.5 MB per conformer. Both
+trailing slashes matter. The folders of jobs that produced nothing yet come along empty, on purpose:
+that is how the laptop knows the molecule has conformers still to come.
 
 ```bash
-rsync -avz --prune-empty-dirs --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
+conda activate gp_env
+rsync -avz --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
       --exclude='*' <user>@<cluster>:/path/to/<LIB>/  DATA/<LIB>/
 ```
 
-`optimization.xyz` comes along because the numbering step reads the geometry from it. Nothing else
-from the cluster is needed again: from here on the pipeline only reads `DATA/<LIB>/`.
-
-### D. Extract the descriptors, on your laptop
-
-With `gp_env` active, from the repository root.
-
-**D1. Write the spec.** Copy the closest example and edit the marked fields:
+**5.2 Descriptor extraction and compilation.**
 
 ```bash
-cp specs/lnih2_pyox.yaml specs/<LIB>.yaml        # Ni complexes with bidentate N,N ligands
-# or: cp specs/test_molecules_at1_at2.yaml specs/<LIB>.yaml   # small molecules, first atoms labelled
+cp specs/lnih2_pyox.yaml specs/<LIB>.yaml        # closest example; small organics: specs/test_molecules_at1_at2.yaml
+# edit specs/<LIB>.yaml, fields in the table below
+python -m desc_utils.run all --spec specs/<LIB>.yaml
+#   -> <today>_<LIB>_atom_numbering_results.csv (per conformer: atom indices), combined_descriptors.csv
+#      (per conformer: descriptors), <today>_<LIB>_descriptors.csv (per molecule: the spreadsheet)
+#   -> <today>_<LIB>_conformers_to_check.csv only if some conformer needs a look, with a WARNING on the terminal
 ```
 
-| Field | Set to |
+| Spec field | Set to |
 |---|---|
 | `name` | `<LIB>` (used in the output file name) |
 | `data.root` | `DATA/<LIB>` |
@@ -251,36 +163,99 @@ cp specs/lnih2_pyox.yaml specs/<LIB>.yaml        # Ni complexes with bidentate N
 | `descriptors.orca.*`, `descriptors.descripytor` | label lists / label tuples; delete the terms you do not need |
 | `filter.metal_label` | the metal label, or `null` for organic molecules |
 
-```bash
-python -m desc_utils.run validate --spec specs/<LIB>.yaml   # expected: "OK  specs/<LIB>.yaml"
-```
-
-**D2. Number the atoms.** Which atom of each conformer carries which label:
-
-```bash
-python -m desc_utils.run number --spec specs/<LIB>.yaml --strict   # -> atom_numbering_results.csv (name from the spec)
-```
-
-`--strict` stops if any conformer could not be numbered; the table it just wrote lists the offending
-rows with the reason in `numbering_status`. Correcting a few indices by hand in that CSV is a normal
-outcome, keep the file and pass it to the next step.
-
-**D3. Extract and aggregate:**
+The run never stops for a bad conformer. One that could not be numbered, or whose ORCA job is
+running, failed or absent, is left out or NaN in the tables, the molecule gets
+`all_conformers_completed = False` in the spreadsheet, and the conformer is listed in
+`<today>_<LIB>_conformers_to_check.csv` with the reason (`numbering_status`, `numbering_notes`,
+`orca_job_status`). Correcting a few atom indices by hand in the numbering table is a normal outcome;
+rerun with the corrected table instead of re-deriving it:
 
 ```bash
-python -m desc_utils.run all --spec specs/<LIB>.yaml            # -> combined_descriptors.csv, <today>_<LIB>_descriptors.csv
+python -m desc_utils.run all --spec specs/<LIB>.yaml --numbering <date>_<LIB>_atom_numbering_results.csv
 ```
 
-`all` is `number` then `extract` then `aggregate`. It re-runs the numbering, so use
-`all --spec specs/<LIB>.yaml --numbering atom_numbering_results.csv` to keep a hand-corrected table,
-or run `extract` and `aggregate` separately. What the three files contain is in
-[What you get](#what-you-get).
+Output names carry the date of the run and the spec name so that nothing is overwritten from one run
+to the next (`output` section of the spec; `combined_descriptors.csv` is the exception, it is rewritten).
+
+What the output files contain is in [What you get](#what-you-get).
+
+## Details
+
+### Installation details
+
+**Laptop.** `gp_env.yml` pins the versions the reference CSVs were produced with. An existing
+`gp_env` created before 2026-09-22 lacks three packages added since (Open Babel for the xyz to sdf
+conversion of the numbering step, networkx and plotly imported by DescriPyTor):
+
+```bash
+pip install openbabel-wheel==3.1.1.23 networkx==3.6.1 plotly==7.1.0
+```
+
+DescriPyTor is imported from the `DescriPyTor/` submodule folder; a `pip install` of it would pull
+its `numpy<2` pin and downgrade the environment. The submodule pin is the version the regression
+tests were validated against (`f6bc24c`, 2026-08-31).
+
+**Cluster: the group clone.** `$REPO` is a plain `git clone` on the `code-review` branch. Steps 3
+and 4 only need its files: `desc_utils.condense`, `desc_utils.orca_parse`, `check_jobs.py` and
+`list_molecules.py` import the standard library only, so `module load python` is enough and no
+environment is ever activated on the cluster. Updating the clone is its owner's job
+(`git -C $REPO pull`). If you prefer your own clone, `git clone` it anywhere, `git checkout code-review`,
+and submit `slurm-condense.sh` from that clone: the script finds the clone from the path it was
+submitted with. `sbatch --export=ALL,REPO=/your/clone ...` names it explicitly if you keep a copy of
+the script elsewhere.
+
+**Cluster: ORCA and NBO.** The ORCA jobs need ORCA 6.1 and NBO 7 (`module load orca/6.1.0`; NBO is in
+`/resnick/groups/ReismanLab/nbo7`, see [slurm-calcParam.sh](scripts-for-orca-computations/slurm-calcParam.sh)).
+
+**Cluster: `gp_env`, only if you want to run step 5 there.** The home quota does not fit a conda
+environment, so a single shared `gp_env` lives in the group conda installation
+`/groups/ReismanLab/miniconda3` (conda 23.11), built by [setup_gp_env.sh](setup_gp_env.sh):
+
+```bash
+source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh    # in your ~/.bashrc, once; not a private miniconda
+conda activate gp_env
+```
+
+Its own `envs/` is the first `envs_dirs` entry by default, so nothing else has to be configured.
+If `gp_env` is missing there, the first member runs `bash setup_gp_env.sh` from a clone (ten
+minutes: environment and package cache in the group folder, then the tests); everybody else runs
+`bash setup_gp_env.sh --no-test`, which only points their `~/.condarc` at the group folder. The
+environment is read-only for the group so that a stray `pip install` cannot break it for everyone;
+the owner refreshes it after a change to `gp_env.yml` with:
+
+```bash
+conda env update --file gp_env.yml --prefix /groups/ReismanLab/miniconda3/envs/gp_env --prune
+```
+
+Options of the script: `--root PATH` for another shared folder, `--all-users` to write the setting into
+`$ROOT/.condarc` rather than each `~/.condarc`. Re-running it is harmless. If conda stops on an
+Anaconda Terms of Service error, run the two `conda tos accept` commands it prints and start again.
+A conda 22.x installation whose `conda env` subcommand is missing its `conda-env` executable is
+worked around.
+
+### Condense by hand
+
+The two commands `slurm-condense.sh` runs, for a couple of conformers, an interactive allocation, or
+raw folders sitting on your laptop. `PYTHONPATH` is the folder that *contains* `desc_utils/`, `--root`
+the library folder:
+
+```bash
+PYTHONPATH=$REPO python -m desc_utils.condense --root $LIB --jobs 4
+PYTHONPATH=$REPO python -m desc_utils.condense --root $LIB --check
+# laptop, in gp_env, driven by the spec:
+python -m desc_utils.run condense --spec specs/<LIB>.yaml --jobs 4
+```
+
+The condensed files are written in place, one per `conf_N/` folder. The SLURM job's log,
+`condense_<jobid>.out` and `.err`, lands in the directory you submitted from
+(`sbatch -o /elsewhere/condense_%j.out -e ...` to put it somewhere else), and the job comes back
+FAILED if any conformer could not be condensed or if a file it wrote does not check out.
 
 ### Reproduce the shipped LNiH2 descriptors
 
 The LNiH2 / PyOx library (308 conformers, 38 ligands) is not in the repository. Copy it into
 `DATA/LNiH2_library_001_to_download_2026_03_24/` either as the raw ORCA folders or, much smaller, as
-the condensed files with the rsync command of step C. Then:
+the condensed files with the rsync command of step 5.1. Then:
 
 ```bash
 python -m desc_utils.run condense --spec specs/lnih2_pyox.yaml --jobs 4   # ~20 s; skipped for folders that already have orca_condensed.json
@@ -300,8 +275,8 @@ pytest tests -m slow                 # ~10 min; also re-derives the atom numberi
 | You changed | Run |
 |---|---|
 | Descriptor terms only | `python -m desc_utils.run extract --spec S` then `aggregate --spec S` (morfeus geometry is cached in `<conf>/xyz.json`; add `--overwrite-xyz-json` if you changed `vbur_radii` or `quadrants`) |
-| Atom labels or numbering rules | `number --spec S --strict`, then `all --spec S --numbering <csv>` |
-| Added conformer folders on the cluster | B (existing files are skipped), C, then `all --spec S` |
+| Atom labels or numbering rules | `all --spec S`, or `number --spec S` then `all --spec S --numbering <csv>` after hand corrections |
+| Added conformer folders on the cluster | step 4 (existing files are skipped), 5.1, then `all --spec S` |
 | Only the aggregation temperature | `aggregate --spec S` |
 | You want the noise filter (correlation / variance pruning) for a modelling set | `aggregate --spec S --filter`, or set `filter.enabled: true` in the spec; needs enough molecules for correlations to mean anything (with two molecules every column is perfectly correlated and one survives) |
 
@@ -309,9 +284,10 @@ pytest tests -m slow                 # ~10 min; also re-derives the atom numberi
 
 | File | One row per | Content |
 |---|---|---|
-| `atom_numbering_results.csv` | conformer | 1-based index of every label, SCF energy, SMILES, `numbering_status` |
-| `combined_descriptors.csv` | conformer | every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
-| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchi`, `smiles`, `n_conformers`, then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
+| `<date>_<name>_atom_numbering_results.csv` | conformer | 1-based index of every label, SCF energy, SMILES, `numbering_status` |
+| `combined_descriptors.csv` | conformer | `orca_job_status` (`completed`, `running`, `failed`; `unknown` for files condensed before 2026-09-23, `missing` for a folder with no file), `n_conformer_folders` of its molecule, then every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
+| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchi`, `smiles`, `n_conformers` (rows aggregated), `n_conformers_completed`, `n_conformer_folders` (folders on disk), `all_conformers_completed` (`True` / `False`; empty when a status is `unknown`), then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
+| `<date>_<name>_conformers_to_check.csv` | conformer needing a look | only written when there is one (today's copy is removed otherwise): `path`, `reason`, `numbering_status`, `numbering_notes`, `orca_job_status` |
 
 Conventions worth knowing when reading the spreadsheet: energies are in Hartree, HOMO/LUMO in eV,
 IP and EA are positive for bound electrons (`IP = E(cation) - E(neutral)`), Fukui functions follow
@@ -323,14 +299,18 @@ The full list is under [Descriptors provided](#descriptors-provided).
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `check_jobs.py` reports `FAILED ... killed by SLURM: time limit` or `out of memory` | the SLURM allocation was too small for this conformer | raise `-t` or `--ntasks-per-node` in `slurm-calcParam.sh` and resubmit that folder |
+| `all_conformers_completed` is `False` | a conformer of that molecule is `running`, `failed` or `missing` in `orca_job_status`; its late descriptors (NMR, redox, Fukui) are NaN and left out of the averages | finish or resubmit the job, step 4 again (rebuilds that file), 5.1, then `all` |
+| `all_conformers_completed` is empty and `orca_job_status` is `unknown` | the condensed files predate the job status (before 2026-09-23) | step 4 on the cluster rebuilds them, then 5.1; or leave it, the descriptors are unaffected |
+| `orca_job_status` is `failed` with `terminated normally, then a later run failed` | the folder was resubmitted after a successful run and the second run died | `tail calcParam.out`; if the first run's outputs are intact the descriptors are fine, otherwise resubmit |
 | `condense` prints `failed ... no complete NBO block (NBO started but never returned)` | the ORCA job aborted; `tail calcParam.out` shows the error | rerun the ORCA job or drop the conformer folder |
 | `condense` prints `failed ... optimization.xyz missing` / `singlepoint.property.json missing` | the job did not reach that step, or a different input file was used | same as above; the pipeline needs the `calcParam.inp` steps |
 | `numbering_status` is `failed` or `incomplete` | no SMARTS stage matched this conformer | check the SMILES in the table, adjust the stage patterns, or switch to `backend: manual` with your own indices |
 | `numbering_status` is `element_mismatch` | the matched atom is not the element declared in `atoms` | fix the SMARTS role positions or the `atoms` element |
 | `numbering_status` is `inconsistent` | conformers of one molecule got different indices | usually a symmetric ligand; set `numbering.smarts.match_selection: lowest_indices` or add an `orient` rule |
-| `descripytor_notes` says `no orca_condensed.json in ...` | the folder holds raw files only or was not transferred | run step B / C, or `python -m desc_utils.run condense --spec S` locally when the raw files are present |
+| `descripytor_notes` says `no orca_condensed.json in ...` | the folder holds raw files only or was not transferred | run step 4 / 5.1, or `python -m desc_utils.run condense --spec S` locally when the raw files are present |
 | `descripytor_notes` says `expected 1 molecule file ..., loaded 0` | the condensed file is unreadable | `python -m desc_utils.condense --root DATA/<LIB> --check` and rebuild with `--overwrite` |
-| `nbo_extraction_error` column is not empty | the NBO block of that conformer is missing or truncated | same as the first row |
+| `nbo_extraction_error` column is not empty | the NBO block of that conformer is missing or truncated | same as the `condense ... NBO block` row |
 | `No module named desc_utils.run` | the clone is on `main`, which predates the pipeline | `git checkout code-review` and run the commands from the repository root |
 | every row has `numbering_status` `failed` with `No module named 'openbabel'` | Open Babel missing from the environment (needed to convert xyz to sdf) | `pip install openbabel-wheel==3.1.1.23` in `gp_env`, then rerun `number` |
 | `extract` stops with `No module named 'networkx'` or `'plotly'` | environment created from an older `gp_env.yml` | `pip install networkx==3.6.1 plotly==7.1.0` in `gp_env` |
@@ -347,7 +327,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
 | [orca2gaussian](orca2gaussian) | Deprecated. Former converter writing a pseudo-Gaussian log per conformer for DescriPyTor (unit and layout bugs, see CODE_REVIEW C3 to C7). Replaced by the condensed JSON; only used with `descriptors.descripytor.input.kind: feather`. |
-| [scripts-for-orca-computations](scripts-for-orca-computations) | ORCA compound input (`calcParam.inp`), SLURM scripts and launcher used on the cluster: `slurm-calcParam.sh` (one ORCA job), `launch_orca_all.py`, `slurm-condense.sh` (condense a whole library on a compute node). |
+| [scripts-for-orca-computations](scripts-for-orca-computations) | ORCA compound input (`calcParam.inp`), SLURM scripts and launcher used on the cluster: `slurm-calcParam.sh` (one ORCA job), `launch_orca_all.py`, `check_jobs.py` (queued / running / done / failed state of every job), `list_molecules.py` (InChIKey and conformer count), `slurm-condense.sh` (condense a whole library on a compute node). |
 | [tests](tests) | Unit tests and regression tests against the committed descriptor CSVs. |
 | `setup_gp_env.sh` | One-shot installer for `gp_env` in the group folder rather than the home folder (`envs_dirs` and `pkgs_dirs`, environment, tests). |
 | [review](review) | Notes and scripts from the DescriPyTor upgrade (old vs new Sterimol comparison, per-conformer reference CSVs). |
@@ -364,7 +344,7 @@ ORCA compound job per conformer                                                 
         │  rsync optimization.xyz + orca_condensed.json                                        (laptop)
         ▼
 [2] spec  ──►  [3] number  ──►  [4] extract  ──►  [5] aggregate (+ optional filter)
-                atom_numbering_results.csv   combined_descriptors.csv   <date>_<name>_descriptors.csv
+     <date>_<name>_atom_numbering_results.csv   combined_descriptors.csv   <date>_<name>_descriptors.csv
 ```
 
 All stages read the same spec. From the repository root, in `gp_env`:
@@ -372,7 +352,7 @@ All stages read the same spec. From the repository root, in `gp_env`:
 ```bash
 python -m desc_utils.run validate  --spec specs/lnih2_pyox.yaml
 python -m desc_utils.run condense  --spec specs/lnih2_pyox.yaml            # -> <conf>/orca_condensed.json (normally run on the cluster)
-python -m desc_utils.run number    --spec specs/lnih2_pyox.yaml            # -> atom_numbering_results.csv
+python -m desc_utils.run number    --spec specs/lnih2_pyox.yaml            # -> <date>_<name>_atom_numbering_results.csv
 python -m desc_utils.run extract   --spec specs/lnih2_pyox.yaml            # -> combined_descriptors.csv (per conformer)
 python -m desc_utils.run aggregate --spec specs/lnih2_pyox.yaml            # -> <date>_<name>_descriptors.csv
 python -m desc_utils.run all       --spec specs/lnih2_pyox.yaml            # number -> extract -> aggregate
@@ -422,7 +402,7 @@ python -m desc_utils.run condense --spec specs/lnih2_pyox.yaml
 Then pull the condensed files together with the 3 KB geometry; everything else stays on the cluster:
 
 ```bash
-rsync -avz --prune-empty-dirs --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
+rsync -avz --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
       --exclude='*' user@cluster:/path/to/LIB/  DATA/LIB/
 ```
 
@@ -435,12 +415,22 @@ Content (schema version 1; units in the key names; `null` when ORCA did not prin
 | `nbo.blocks[]` | `NBOProps.results` per NBO block: NPA, NAO occupancies, NBO summary, hybrids, NHO directionality, second-order perturbation, cycle info. Block 0 (neutral) in full; the cation and anion blocks keep NPA only unless `--nbo-full all` | `calcParam.out` |
 | `properties`, `vibrations`, `charges` | DescriPyTor's JSON schema: dipole in Debye (singlepoint), polarizability, frequencies with unit-norm displacements per mode (translations and rotations dropped, IR intensities where printed), NPA / Hirshfeld / CM5 charges | derived from the above |
 | `producer` | ORCA and NBO versions, host, time, git commit, size and mtime of every input file | |
+| `job` | `status` (`completed`, `running`, `failed`), `detail` (ORCA error line or SLURM kill reason), `checked_utc` | `calcParam.out` termination lines, `error_<jobid>.txt` |
 
 Every reader (`OrcaReader`, the NBO loader, `scf_energy` of the numbering stage, DescriPyTor's
 `Molecules`) uses the condensed file when `<conf>/<data.condensed_file>` exists and the raw files
 otherwise, so folders downloaded before this step keep working; `data.condensed_file: null` forces the
 raw files. `python -m desc_utils.condense --check` validates existing files, and `tests/test_condense.py`
 asserts that every in-house column is identical whichever source is read.
+
+A file is written as soon as the singlepoint and its NBO block exist, so a job that died or is still
+running afterwards gets one too, with the missing states as `null` and `job.status` saying so. The
+condenser only skips files whose status is `completed`; any other stored status is rebuilt from the
+raw files when they are there (`tests/test_job_status.py`). The extract stage copies the status into
+`orca_job_status` and counts the conformer folders of the molecule (`n_conformer_folders`, empty
+folders included); the aggregation turns the two into `n_conformers_completed` and
+`all_conformers_completed`. Descriptors of unfinished conformers are still aggregated: their missing
+values are simply absent from the min / max / Boltzmann statistics, as any NaN is.
 
 ### 2. Spec
 
@@ -455,7 +445,7 @@ A spec has these sections (defaults in `desc_utils/spec.py::DEFAULTS`):
 | `descriptors.descripytor` | DescriPyTor "Schema B" keys with label tuples: `charges`, `charge_diff`, `sterimol`, `bond_length`, `bond_angle`, `stretching_vibration`, `bending_vibration`, `dipole`, plus thresholds, `radii`, `drop_atoms`. |
 | `aggregate` | `group_by`, `energy_column`, `temperature_K`, `kB_hartree_per_K`, `stats`, `carry_first`. |
 | `filter` | Every option of `filter_numeric_descriptors`, plus `metal_label`. |
-| `output` | File names of the three stage outputs. |
+| `output` | File names of the three stage outputs and of `check_csv`, the list of conformers to look at; `{date}` and `{name}` are filled in at run time. |
 
 `validate` reports every problem at once (unknown labels, wrong arity, SMARTS that do not parse, roles
 outside the SMARTS, labels never assigned). Quote every SMARTS string: `#` starts a YAML comment.

@@ -34,6 +34,14 @@ Schema version 1 (units in key names, ``null`` = not available)::
                     ``results`` is ``NBOProps.results`` of that block with its list tables packed as
                     {columns, rows}; open-shell rows carry a ``spin`` field (alpha rows before beta rows).
     notes           parser messages emitted while condensing
+    job             status: completed | failed | running, detail, checked_utc  (``orca_parse.job_status`` of the
+                    folder when it was condensed; files written before 2026-09-23 lack the key -> ``unknown``)
+
+A file is written as soon as ``optimization.xyz``, ``singlepoint.property.json`` and one complete NBO
+block exist, so a job that died or is still running after the singlepoint gets a file too, with its
+missing states as ``null`` and ``job.status`` saying so. Re-running the condenser rebuilds every file
+whose stored status is not ``completed`` (when the raw files are still there), and only skips the
+completed ones.
 """
 from __future__ import annotations
 
@@ -54,7 +62,9 @@ from pathlib import Path
 from typing import Iterable, Optional, Union
 
 from desc_utils import orca_parse as op
-from desc_utils.orca_parse import CONDENSED_FILENAME, NBOProps, bohr_to_A  # noqa: F401  (re-exported)
+from desc_utils.orca_parse import (  # noqa: F401  (re-exported)
+    CONDENSED_FILENAME, JOB_COMPLETED, JOB_FAILED, JOB_NOT_STARTED, JOB_RUNNING, JOB_STATUSES, NBOProps, bohr_to_A,
+)
 
 SCHEMA_VERSION = 1
 AU_TO_DEBYE = 2.541746
@@ -67,6 +77,9 @@ TABLE_KEYS = ("natural_atomic_orbitals", "natural_bond_orbitals", "bond_orbital_
 #: the tables NBO prints once per spin set in an open-shell block
 SPIN_TABLE_KEYS = ("natural_bond_orbitals", "bond_orbital_details", "nho_directionality", "second_order_perturbation")
 REQUIRED_TOP_KEYS = ("schema_version", "producer", "molecule", "properties", "vibrations", "charges", "states", "nbo")
+#: ``job.status`` of a condensed file written before the key existed, and of a folder that has neither a
+#: condensed file nor raw outputs (see :func:`conformer_job_status`)
+JOB_UNKNOWN, JOB_MISSING = "unknown", "missing"
 _SNIFF_BYTES = 8192  # DescriPyTor's folder scanner needs "molecule" and "atoms" within the first 8192 bytes
 
 
@@ -204,7 +217,8 @@ def build_condensed(conf_dir, mo_states=("singlepoint",), nbo_full_blocks=(0,), 
     """The condensed dict for one conformer folder (see the module docstring for the schema).
 
     Required inputs: ``optimization.xyz``, ``singlepoint.property.json`` and at least one complete
-    NBO block in ``calcParam.out``. Everything else is optional and recorded under ``producer.sources``.
+    NBO block in ``calcParam.out``. Everything else is optional and recorded under ``producer.sources``;
+    whether the ORCA job actually finished is recorded under ``job`` (see :func:`orca_parse.job_status`).
     ``mo_states``: states whose MO energies / occupations are stored (the GBW dumps are large).
     ``nbo_full_blocks``: NBO block indices stored with every table (others keep NPA and cycle info only).
     """
@@ -298,7 +312,42 @@ def build_condensed(conf_dir, mo_states=("singlepoint",), nbo_full_blocks=(0,), 
         "nbo": {"source_file": "calcParam.out", "n_blocks": len(blocks), "block_map": DEFAULT_NBO_BLOCKS,
                 "blocks": blocks},
         "notes": notes,
+        "job": _job_entry(conf_dir, text),
     }
+
+
+def _job_entry(conf_dir, text):
+    js = op.job_status(conf_dir, text)
+    return {"status": js["status"], "detail": js["detail"], "checked_utc": _utc()}
+
+
+def stored_job_status(cond) -> str:
+    """``job.status`` of a parsed condensed file; ``unknown`` for files written before the key existed."""
+    return ((cond or {}).get("job") or {}).get("status") or JOB_UNKNOWN
+
+
+def _read_job_status(path) -> str:
+    """``job.status`` stored in the condensed file at ``path`` (``unknown`` when unreadable or absent)."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return stored_job_status(json.load(fh))
+    except Exception:
+        return JOB_UNKNOWN
+
+
+def conformer_job_status(conf_dir, condensed_file: Optional[str] = CONDENSED_FILENAME) -> str:
+    """Job status of a conformer folder as the pipeline sees it.
+
+    From the condensed file when there is one (``unknown`` if it predates the ``job`` key), else from the
+    raw ``calcParam.out`` (``completed`` / ``failed`` / ``running`` / ``not_started``), else ``missing``:
+    the folder holds neither, typically a job that had not started when the library was copied.
+    """
+    cond = find_condensed(conf_dir, condensed_file)
+    if cond is not None:
+        return _read_job_status(cond)
+    if (Path(conf_dir) / "calcParam.out").is_file():
+        return op.job_status(conf_dir)["status"]
+    return JOB_MISSING
 
 
 def write_condensed(conf_dir, data, name=CONDENSED_FILENAME, overwrite=False):
@@ -378,22 +427,50 @@ def iter_conformer_dirs(root, glob="conf_*"):
 
 
 def _work(item):
+    """Condense one folder; returns ``(folder, ok | skipped | failed, message, bytes, job status)``.
+
+    An existing file is kept only if it says the job completed. Any other stored status (``running``,
+    ``failed``, or ``unknown`` for a file written before the status existed) is rebuilt from the raw files,
+    since the job may have finished since; without raw files there is nothing to rebuild from and the file
+    is kept as it is.
+    """
     conf_dir, name, overwrite, mo_states, full, decimals = item
     target = Path(conf_dir) / name
+    previous = None
     if target.exists() and not overwrite:
-        return (str(conf_dir), "skipped", "exists", target.stat().st_size)
+        previous = _read_job_status(target)
+        if previous == JOB_COMPLETED:
+            return (str(conf_dir), "skipped", "exists (completed)", target.stat().st_size, previous)
+        if not (Path(conf_dir) / "calcParam.out").is_file():
+            return (str(conf_dir), "skipped", f"exists ({previous}); no raw files to rebuild from",
+                    target.stat().st_size, previous)
     try:
         data = build_condensed(conf_dir, mo_states=mo_states, nbo_full_blocks=full, mode_decimals=decimals)
         out = write_condensed(conf_dir, data, name=name, overwrite=True)
     except Exception as exc:  # one bad folder must not stop the batch
-        return (str(conf_dir), "failed", f"{type(exc).__name__}: {exc}", 0)
+        try:
+            job = op.job_status(conf_dir)["status"]
+        except Exception:
+            job = JOB_UNKNOWN
+        return (str(conf_dir), "failed", f"{type(exc).__name__}: {exc} [job {job}]", 0, job)
     size = out.stat().st_size
-    return (str(conf_dir), "ok", f"{size / 1e6:.2f} MB", size)
+    job = data["job"]["status"]
+    msg = f"{size / 1e6:.2f} MB"
+    if job != JOB_COMPLETED:
+        msg += f", job {job}: {data['job']['detail']}"
+    if previous is not None:
+        msg += f" (rebuilt, was {previous})"
+    return (str(conf_dir), "ok", msg, size, job)
 
 
 def condense_tree(dirs: Iterable[Union[str, Path]], name=CONDENSED_FILENAME, overwrite=False, jobs=1,
                   mo_states=("singlepoint",), nbo_full_blocks=(0,), mode_decimals=6, log=print):
-    """Condense every folder in ``dirs``; returns ``{"ok", "skipped", "failed", "bytes", "results"}``."""
+    """Condense every folder in ``dirs``.
+
+    Returns ``{"ok", "skipped", "failed", "bytes", "job_status", "results"}``; ``job_status`` counts the
+    folders per ORCA job state (``completed`` / ``running`` / ``failed`` / ...), whatever happened to their
+    condensed file, so the summary says at a glance whether the library is finished.
+    """
     items = [(str(d), name, overwrite, tuple(mo_states), nbo_full_blocks, mode_decimals) for d in dirs]
     if jobs and jobs > 1 and len(items) > 1:
         import multiprocessing
@@ -402,16 +479,28 @@ def condense_tree(dirs: Iterable[Union[str, Path]], name=CONDENSED_FILENAME, ove
             results = list(pool.imap_unordered(_work, items))
     else:
         results = [_work(it) for it in items]
-    summary = {"ok": 0, "skipped": 0, "failed": 0, "bytes": 0, "results": sorted(results)}
-    for d, status, msg, size in summary["results"]:
+    summary = {"ok": 0, "skipped": 0, "failed": 0, "bytes": 0, "job_status": {}, "results": sorted(results)}
+    for d, status, msg, size, job in summary["results"]:
         summary[status] += 1
         summary["bytes"] += size
+        summary["job_status"][job] = summary["job_status"].get(job, 0) + 1
         if log:
             log(f"{status:7s} {d}  {msg}")
     if log:
-        log(f"condensed {summary['ok']} folder(s), skipped {summary['skipped']}, failed {summary['failed']}, "
-            f"total {summary['bytes'] / 1e6:.1f} MB")
+        log(summary_lines(summary))
     return summary
+
+
+def job_status_line(counts) -> str:
+    """``job status: completed 290, running 5, failed 5`` (known states first, in a fixed order)."""
+    order = list(JOB_STATUSES) + [JOB_UNKNOWN, JOB_MISSING]
+    keys = [k for k in order if counts.get(k)] + sorted(k for k in counts if k not in order and counts[k])
+    return "job status: " + ", ".join(f"{k} {counts[k]}" for k in keys)
+
+
+def summary_lines(summary) -> str:
+    return (f"condensed {summary['ok']} folder(s), skipped {summary['skipped']}, failed {summary['failed']}, "
+            f"total {summary['bytes'] / 1e6:.1f} MB\n" + job_status_line(summary["job_status"]))
 
 
 # --------------------------------------------------------------------------- consumer side
@@ -568,15 +657,21 @@ def main(argv=None) -> int:
         return 1
     if args.check:
         bad = 0
+        job_counts: dict = {}
         for d in dirs:
             path = Path(d) / args.name
             problems = check_condensed(path) if path.is_file() else ["missing"]
+            job = _read_job_status(path) if path.is_file() else JOB_MISSING
+            job_counts[job] = job_counts.get(job, 0) + 1
             if problems:
                 bad += 1
                 print(f"FAIL {path}: {'; '.join(problems)}")
+            elif job != JOB_COMPLETED:
+                print(f"ok   {path}  (job {job})")
             elif not args.quiet:
                 print(f"ok   {path}")
         print(f"checked {len(dirs)} file(s): {len(dirs) - bad} ok, {bad} failed")
+        print(job_status_line(job_counts))
         return 1 if bad else 0
     mo_states = STATES if args.mo_states.strip() == "all" else tuple(s.strip() for s in args.mo_states.split(",") if s.strip())
     full = "all" if args.nbo_full.strip() == "all" else tuple(int(x) for x in args.nbo_full.split(",") if x.strip())
@@ -584,8 +679,7 @@ def main(argv=None) -> int:
                             nbo_full_blocks=full, mode_decimals=args.mode_decimals,
                             log=(lambda s: None) if args.quiet else print)
     if args.quiet:
-        print(f"condensed {summary['ok']}, skipped {summary['skipped']}, failed {summary['failed']}, "
-              f"total {summary['bytes'] / 1e6:.1f} MB")
+        print(summary_lines(summary))
     return 1 if summary["failed"] else 0
 
 

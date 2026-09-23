@@ -5,12 +5,14 @@
     python -m desc_utils.run extract     --spec S --numbering CSV [--families orca.xyz,descripytor,...] [--out CSV]
     python -m desc_utils.run aggregate   --spec S --per-conformer CSV [--out CSV] [--filter | --no-filter]
     python -m desc_utils.run all         --spec S [--data ROOT] [--numbering CSV] [--filter | --no-filter]
+                                         (never stops for a bad conformer: it warns and lists them in output.check_csv)
     python -m desc_utils.run to-schema-b --spec S --numbering CSV [--row N]
     python -m desc_utils.run condense    --spec S [--data ROOT] [--overwrite] [--jobs N] [--nbo-full all]
 
 Every subcommand is a thin wrapper around a library function so notebooks can call the
 same functions directly. All paths are resolved relative to the repository root (the
-parent of ``desc_utils/``) unless absolute.
+parent of ``desc_utils/``) unless absolute. ``{date}`` and ``{name}`` in the ``output`` names of the
+spec are filled in at run time, so the tables of one day never overwrite those of another.
 """
 from __future__ import annotations
 
@@ -54,8 +56,59 @@ def _use_filter(spec: Spec, args) -> bool:
     return bool(getattr(args, "filter", False) or spec.filter.get("enabled", False))
 
 
+def _output_name(spec: Spec, key: str) -> str:
+    """``output.<key>`` of the spec with ``{date}`` (today) and ``{name}`` filled in."""
+    return spec.output[key].format(date=datetime.now().strftime("%Y%m%d"), name=spec.name)
+
+
 def _aggregated_name(spec: Spec) -> str:
-    return spec.output["aggregated_csv"].format(date=datetime.now().strftime("%Y%m%d"), name=spec.name)
+    return _output_name(spec, "aggregated_csv")
+
+
+def _existing_output(spec: Spec, key: str) -> Path:
+    """The file ``output.<key>`` names for today if it exists, else the most recent one matching the pattern.
+
+    Lets ``extract`` and ``to-schema-b`` find the numbering table of a previous day without ``--numbering``.
+    Falls back to today's name (which the caller will then report as missing) when nothing matches.
+    """
+    today = _resolve(_output_name(spec, key))
+    if today.exists() or "{date}" not in spec.output[key]:
+        return today
+    pattern = spec.output[key].replace("{date}", "*").format(name=spec.name)
+    candidates = sorted(p for p in today.parent.glob(Path(pattern).name) if p.is_file())
+    if candidates:
+        print(f"using {candidates[-1]} (most recent {key})")
+        return candidates[-1]
+    return today
+
+
+def _report_check(df: pd.DataFrame, df_num: pd.DataFrame, spec: Spec) -> Path:
+    """Warn about the conformers that need a look and write them to ``output.check_csv``.
+
+    The run is never stopped for them: their descriptors are simply missing or NaN, and the
+    aggregation flags the molecule (``all_conformers_completed``). The file is only there when
+    there is something to look at; today's copy from an earlier run is removed otherwise.
+    """
+    from desc_utils.extract import conformers_to_check
+
+    path = _resolve(_output_name(spec, "check_csv"))
+    bad = conformers_to_check(df, df_num)
+    if len(bad) == 0:
+        if path.exists():
+            path.unlink()
+        msg = f"all {len(df)} conformers numbered"
+        if "orca_job_status" in df.columns:
+            unknown = int((df["orca_job_status"] == "unknown").sum())
+            msg += (f"; ORCA job status unknown for {unknown} (condensed before the status was recorded)" if unknown
+                    else " and their ORCA jobs completed")
+        print(msg)
+        return path
+    bad.to_csv(path, index=False)
+    counts = bad["reason"].value_counts().to_dict()
+    print(f"WARNING: {len(bad)} conformer(s) need checking, see {path}  {counts}", file=sys.stderr)
+    print(bad.drop(columns=[c for c in ["numbering_notes"] if c in bad.columns]).head(20).to_string(index=False),
+          file=sys.stderr)
+    return path
 
 
 # --------------------------------------------------------------------------- commands
@@ -88,7 +141,7 @@ def cmd_number(args) -> int:
     # always write the table (even when --strict fails) so the offending rows can be inspected
     df = build_numbering_table(spec, repo_root=REPO_ROOT, backend=backend_override,
                                strict=False, regenerate_sdf=args.regenerate_sdf)
-    out = _resolve(args.out, spec.output["numbering_csv"])
+    out = _resolve(args.out, _output_name(spec, "numbering_csv"))
     write_numbering_table(df, out)
     status = df["numbering_status"].value_counts().to_dict()
     print(f"wrote {out}  rows={len(df)}  status={status}")
@@ -106,13 +159,14 @@ def cmd_extract(args) -> int:
     from desc_utils.numbering import read_numbering_table
 
     spec = _load(args)
-    df_num = read_numbering_table(_resolve(args.numbering, spec.output["numbering_csv"]), spec)
+    df_num = read_numbering_table(_resolve(args.numbering) if args.numbering else _existing_output(spec, "numbering_csv"), spec)
     families = args.families.split(",") if args.families else None
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, families=families,
                         overwrite_xyz_json=args.overwrite_xyz_json)
     out = _resolve(args.out, spec.output["per_conformer_csv"])
     df.to_csv(out, index=False)
     print(f"wrote {out}  rows={len(df)}  columns={df.shape[1]}")
+    _report_check(df, df_num, spec)
     return 0
 
 
@@ -141,15 +195,20 @@ def cmd_all(args) -> int:
         df_num = read_numbering_table(_resolve(args.numbering), spec)
     else:
         df_num = build_numbering_table(spec, repo_root=REPO_ROOT)
-        write_numbering_table(df_num, _resolve(spec.output["numbering_csv"]))
+        num_out = _resolve(_output_name(spec, "numbering_csv"))
+        write_numbering_table(df_num, num_out)
+        print(f"wrote {num_out}  rows={len(df_num)}  status={df_num['numbering_status'].value_counts().to_dict()}")
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT)
-    df.to_csv(_resolve(spec.output["per_conformer_csv"]), index=False)
+    per_conf = _resolve(spec.output["per_conformer_csv"])
+    df.to_csv(per_conf, index=False)
+    print(f"wrote {per_conf}  rows={len(df)}  columns={df.shape[1]}")
     agg = aggregate_conformers(df, spec)
     if _use_filter(spec, args):
         agg, _ = apply_filter(agg, spec)
     out = _resolve(_aggregated_name(spec))
     agg.to_csv(out, index=False)
     print(f"wrote {out}  rows={len(agg)}  columns={agg.shape[1]}")
+    _report_check(df, df_num, spec)
     return 0
 
 
@@ -158,7 +217,7 @@ def cmd_to_schema_b(args) -> int:
     from desc_utils.numbering import read_numbering_table
 
     spec = _load(args)
-    df_num = read_numbering_table(_resolve(args.numbering, spec.output["numbering_csv"]), spec)
+    df_num = read_numbering_table(_resolve(args.numbering) if args.numbering else _existing_output(spec, "numbering_csv"), spec)
     row = df_num.iloc[args.row]
     print(json.dumps(to_schema_b(spec.descripytor, row), indent=2))
     return 0
@@ -206,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_number)
 
     sp = sub.add_parser("extract", help="compute per-conformer descriptors"); common(sp)
-    sp.add_argument("--numbering", help="numbering CSV (default: output.numbering_csv)")
+    sp.add_argument("--numbering", help="numbering CSV (default: output.numbering_csv of today, else the most recent one)")
     sp.add_argument("--families", help="comma list, e.g. orca.xyz,orca.charges,orca.nbo,orca.redox,descripytor")
     sp.add_argument("--out", help="output CSV (default: output.per_conformer_csv)")
     sp.add_argument("--overwrite-xyz-json", action="store_true", help="recompute morfeus descriptors instead of reading xyz.json")
@@ -227,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_all)
 
     sp = sub.add_parser("to-schema-b", help="print the DescriPyTor JSON for one conformer"); common(sp)
-    sp.add_argument("--numbering", help="numbering CSV (default: output.numbering_csv)")
+    sp.add_argument("--numbering", help="numbering CSV (default: output.numbering_csv of today, else the most recent one)")
     sp.add_argument("--row", type=int, default=0)
     sp.set_defaults(func=cmd_to_schema_b)
 

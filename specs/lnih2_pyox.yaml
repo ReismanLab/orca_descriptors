@@ -141,6 +141,6 @@ filter:                               # optional noise filter for modelling sets
   bond_analysis_filter: remove phi theta
 
 output:
-  numbering_csv: atom_numbering_results.csv
+  numbering_csv: "{date}_{name}_atom_numbering_results.csv"
   per_conformer_csv: combined_descriptors.csv
   aggregated_csv: "{date}_{name}_descriptors.csv"

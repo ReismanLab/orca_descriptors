@@ -2,7 +2,8 @@
 
 Expects the campaign layout ``<computation_folder>/<inchikey>/conf_*/`` created by launch_orca_all.py. Queued
 and running jobs are found by asking SLURM (``squeue``) for the working directory of your jobs, so run this
-on the cluster; elsewhere it falls back to how recently calcParam.out was written. Standard library only.
+on the cluster; elsewhere it falls back to how recently calcParam.out was written. Standard library only; the
+verdict on the files is ``desc_utils.orca_parse.job_status``, the same one the condensed file records.
 
 Usage:
     python3 scripts-for-orca-computations/check_jobs.py [computation_folder] [--all]
@@ -12,22 +13,17 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
-import re
 import subprocess
+import sys
 import time
 from collections import Counter
 from pathlib import Path
 
-NORMAL = "ORCA TERMINATED NORMALLY"
-ORCA_ERROR = re.compile(r"ORCA finished by error termination.*|aborting the run", re.IGNORECASE)
-# Messages SLURM / Open MPI write to the job's error_<jobid>.txt when the job is killed before ORCA can.
-SLURM_ERRORS = {
-    "DUE TO TIME LIMIT": "killed by SLURM: time limit",
-    "oom-kill": "killed by SLURM: out of memory",
-    "Out Of Memory": "killed by SLURM: out of memory",
-    "CANCELLED AT": "cancelled (scancel or node failure)",
-    "not enough slots": "Open MPI: not enough slots for the requested processes",
-}
+# The verdict on a folder's files (termination lines of calcParam.out, SLURM messages in error_<jobid>.txt)
+# is the one desc_utils.orca_parse.job_status gives, the same the condensed file records; this script only
+# adds what squeue knows. The clone is the folder above scripts-for-orca-computations/.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from desc_utils.orca_parse import job_status as file_job_status  # noqa: E402  (standard library only)
 
 
 def queued_jobs() -> dict[str, tuple[str, str]] | None:
@@ -44,59 +40,25 @@ def queued_jobs() -> dict[str, tuple[str, str]] | None:
     return jobs
 
 
-def latest_error_file(conf: Path) -> Path | None:
-    """error_<jobid>.txt of the most recent submission (earlier ones stay in the folder after a resubmit)."""
-    files = [(int(m.group(1)), p) for p in conf.glob("error_*.txt") if (m := re.fullmatch(r"error_(\d+)\.txt", p.name))]
-    return max(files)[1] if files else None
-
-
-def failure_reason(conf: Path, orca_error: str | None) -> str:
-    err = latest_error_file(conf)
-    if err is not None:
-        text = err.read_text(errors="replace")
-        for marker, reason in SLURM_ERRORS.items():
-            if marker in text:
-                return reason
-    if orca_error:
-        return orca_error
-    return "no termination message: job killed or crashed (look at error_*.txt / output_*.txt)"
-
-
 def job_status(conf: Path, jobs: dict[str, tuple[str, str]] | None, stale_minutes: float) -> tuple[str, str]:
     """(status, detail) for one conformer folder."""
-    out = conf / "calcParam.out"
     if jobs is not None and (job := jobs.get(os.path.realpath(conf))):
         job_id, state = job
         return ("QUEUED" if state == "PENDING" else "RUNNING"), f"job {job_id} {state}"
-    if not out.is_file():
-        return "NOT STARTED", "no calcParam.out"
-
-    # calcParam.out is appended to (>>) on every submission, so it can hold several runs: judge by the last one.
-    last_normal = last_error = -1
-    n_normal = 0
-    orca_error = None
-    with open(out, errors="replace") as fh:
-        for i, line in enumerate(fh):
-            if NORMAL in line:
-                last_normal, n_normal = i, n_normal + 1
-            elif m := ORCA_ERROR.search(line):
-                if orca_error is None or last_error < last_normal:  # keep the first, most specific, line of a run
-                    orca_error = m.group(0).strip()
-                last_error = i
-
-    if last_normal > last_error:
-        if n_normal > 1:
-            return "CHECK", f"{n_normal} normal terminations in calcParam.out (submitted several times?)"
-        return "OK", ""
-    if last_normal >= 0:
-        return "CHECK", f"terminated normally, then a later run failed: {orca_error}"
-    if last_error >= 0:
-        return "FAILED", failure_reason(conf, orca_error)
-
-    age_min = (time.time() - out.stat().st_mtime) / 60
+    js = file_job_status(conf)
+    if js["status"] == "not_started":
+        return "NOT STARTED", js["detail"]
+    if js["status"] == "completed":
+        return ("CHECK", js["detail"]) if js["n_normal_terminations"] > 1 else ("OK", "")
+    if js["status"] == "failed":
+        if js["failed_after_success"]:
+            return "CHECK", f"terminated normally, then a later run failed: {js['detail']}"
+        return "FAILED", js["detail"]
+    # no termination line and not in the queue: still writing, or killed without a message
+    age_min = (time.time() - (conf / "calcParam.out").stat().st_mtime) / 60
     if jobs is None and age_min < stale_minutes:
         return "RUNNING?", f"calcParam.out written {age_min:.0f} min ago (squeue unavailable)"
-    return "FAILED", failure_reason(conf, None)
+    return "FAILED", "no termination message: job killed or crashed (look at error_*.txt / output_*.txt)"
 
 
 def main() -> None:

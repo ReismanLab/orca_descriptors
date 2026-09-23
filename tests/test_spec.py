@@ -27,7 +27,7 @@ def test_minimal_spec_fills_defaults():
     assert spec.aggregate["temperature_K"] == 298.15
     assert spec.descripytor["stretch_threshold"] == 1400
     assert spec.descripytor["sterimol"] == []          # unset families default to empty
-    assert spec.output["numbering_csv"] == "atom_numbering_results.csv"
+    assert spec.output["numbering_csv"] == "{date}_{name}_atom_numbering_results.csv"
 
 
 def test_all_problems_reported_at_once():

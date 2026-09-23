@@ -102,10 +102,16 @@ DEFAULTS: dict[str, Any] = {
     # The noise filter (correlation / variance pruning) is opt-in: the library should stay complete and
     # reproducible; enable it in the spec or with `aggregate --filter` when preparing a modelling set.
     "filter": {"enabled": False},
+    # `{date}` (YYYYMMDD of the run) and `{name}` (the spec name) are filled in by desc_utils.run, so that
+    # a new run never overwrites the tables of an earlier one. When a command needs the numbering table
+    # and today's does not exist, it takes the most recent one matching the pattern.
     "output": {
-        "numbering_csv": "atom_numbering_results.csv",
+        "numbering_csv": "{date}_{name}_atom_numbering_results.csv",
         "per_conformer_csv": "combined_descriptors.csv",
         "aggregated_csv": "{date}_{name}_descriptors.csv",
+        # written by `extract` / `all` only when some conformer needs a human look (numbering not ok,
+        # ORCA job not completed); today's copy is removed again when everything is fine
+        "check_csv": "{date}_{name}_conformers_to_check.csv",
     },
 }
 
