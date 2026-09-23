@@ -12,7 +12,9 @@
 #     sbatch slurm-condense.sh /path/to/<LIB>
 #
 # Writes <LIB>/<molecule>/conf_N/orca_condensed.json, one small JSON per conformer instead of
-# ~70 MB of raw ORCA output, then checks every file it wrote. Only those files, plus the
+# ~70 MB of raw ORCA output, then checks every file it wrote. The log of the run,
+# condense_<jobid>.out and .err, lands in the directory you submit from, which is not necessarily
+# the library: cd there first, or pass sbatch -o /somewhere/condense_%j.out -e ... . Only those files, plus the
 # optimization.xyz next to them, have to be copied to your laptop (step C of the README).
 #
 # Standard-library Python only: no conda environment, no pip install, just a git clone of

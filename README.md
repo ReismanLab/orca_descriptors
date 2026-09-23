@@ -183,8 +183,11 @@ vi orca_descriptors/scripts-for-orca-computations/slurm-condense.sh   # one line
 sbatch orca_descriptors/scripts-for-orca-computations/slurm-condense.sh /path/to/<LIB>
 ```
 
-One node, eight cores, two hours by default; raise the `#SBATCH` lines for a large library. The job
-writes `condense_<jobid>.out`, which ends with `condensed N folder(s), skipped 0, failed 0` and
+One node, eight cores, two hours by default; raise the `#SBATCH` lines for a large library. The
+condensed files themselves are written in place, one `orca_condensed.json` per `conf_N/` folder of
+the library. The log of the run, `condense_<jobid>.out` and `.err`, lands in the directory you
+submitted from (`sbatch -o /elsewhere/condense_%j.out -e ...` to put it somewhere else). It ends
+with `condensed N folder(s), skipped 0, failed 0` and
 `checked N file(s): N ok, 0 failed`, and it comes back FAILED if any conformer could not be
 condensed or if a file it wrote does not check out. Folders that already have their
 `orca_condensed.json` are skipped, so submitting the same job again after a new batch of ORCA runs
