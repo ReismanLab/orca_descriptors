@@ -10,6 +10,11 @@
 # Condense a whole library on a compute node, so that nothing heavy runs on the login node:
 #
 #     sbatch slurm-condense.sh /path/to/<LIB>
+#     sbatch slurm-condense.sh /path/to/<LIB> --overwrite     # rebuild every file, completed ones too
+#
+# Anything after the library path is handed to `python -m desc_utils.condense` as is (--overwrite,
+# --nbo-full all, --mo-states ..., see `python -m desc_utils.condense -h`); the check that follows
+# takes none of them.
 #
 # Writes <LIB>/<molecule>/conf_N/orca_condensed.json, one small JSON per conformer instead of
 # ~70 MB of raw ORCA output, then checks every file it wrote. The log of the run,
@@ -33,9 +38,11 @@ set -euo pipefail
 # script out of the clone.
 REPO=${REPO:-}
 LIB=${1:-}                          # <- or edit a default library path here instead of passing one
+shift $(( $# > 0 ? 1 : 0 ))
+EXTRA=("$@")                        # forwarded to desc_utils.condense, e.g. --overwrite
 
 if [[ -z $LIB ]]; then
-    echo "usage: sbatch slurm-condense.sh /path/to/<LIB>" >&2
+    echo "usage: sbatch slurm-condense.sh /path/to/<LIB> [condense options, e.g. --overwrite]" >&2
     exit 2
 fi
 if [[ ! -d $LIB ]]; then
@@ -70,10 +77,11 @@ JOBS=${SLURM_CPUS_PER_TASK:-4}
 echo "library: $LIB"
 echo "repo:    $REPO"
 echo "python:  $(python -V 2>&1), $JOBS worker(s)"
+(( ${#EXTRA[@]} )) && echo "options: ${EXTRA[*]}"
 
 # The check still runs when a conformer failed: one dead ORCA job out of three hundred should not
 # hide the state of the other 299. The job itself fails if either command did.
 status=0
-PYTHONPATH=$REPO python -m desc_utils.condense --root "$LIB" --jobs "$JOBS" || status=1
+PYTHONPATH=$REPO python -m desc_utils.condense --root "$LIB" --jobs "$JOBS" ${EXTRA[@]+"${EXTRA[@]}"} || status=1
 PYTHONPATH=$REPO python -m desc_utils.condense --root "$LIB" --check || status=1
 exit $status

@@ -239,7 +239,7 @@ raw folders sitting on your laptop. `PYTHONPATH` is the folder that *contains* `
 the library folder:
 
 ```bash
-PYTHONPATH=/groups/ReismanLab/orca_descriptors python -m desc_utils.condense --root $LIB --jobs 4
+PYTHONPATH=/groups/ReismanLab/orca_descriptors python -m desc_utils.condense --root $LIB --jobs 4   # add --overwrite to rebuild completed files too
 PYTHONPATH=/groups/ReismanLab/orca_descriptors python -m desc_utils.condense --root $LIB --check
 # laptop, in gp_env, driven by the spec:
 python -m desc_utils.run condense --spec specs/<LIB>.yaml --jobs 4
@@ -308,7 +308,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | `numbering_status` is `element_mismatch` | the matched atom is not the element declared in `atoms` | fix the SMARTS role positions or the `atoms` element |
 | `numbering_status` is `inconsistent` | conformers of one molecule got different indices | usually a symmetric ligand; set `numbering.smarts.match_selection: lowest_indices` or add an `orient` rule |
 | `descripytor_notes` says `no orca_condensed.json in ...` | the folder holds raw files only or was not transferred | run step 4 / 5.1, or `python -m desc_utils.run condense --spec S` locally when the raw files are present |
-| `descripytor_notes` says `expected 1 molecule file ..., loaded 0` | the condensed file is unreadable | `python -m desc_utils.condense --root DATA/<LIB> --check` and rebuild with `--overwrite` |
+| `descripytor_notes` says `expected 1 molecule file ..., loaded 0` | the condensed file is unreadable | `python -m desc_utils.condense --root DATA/<LIB> --check` and rebuild with `--overwrite` (`sbatch slurm-condense.sh $LIB --overwrite` on the cluster) |
 | `nbo_extraction_error` column is not empty | the NBO block of that conformer is missing or truncated | same as the `condense ... NBO block` row |
 | `No module named desc_utils.run` | the clone is on `main`, which predates the pipeline | `git checkout code-review` and run the commands from the repository root |
 | every row has `numbering_status` `failed` with `No module named 'openbabel'` | Open Babel missing from the environment (needed to convert xyz to sdf) | `pip install openbabel-wheel==3.1.1.23` in `gp_env`, then rerun `number` |
