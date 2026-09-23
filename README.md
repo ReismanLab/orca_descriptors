@@ -47,7 +47,6 @@ Five steps in order: 1 and 5 on your laptop, 2 to 4 on the cluster. The commands
 |---|---|
 | `<LIB>` | the library: one campaign of ORCA jobs, e.g. `LNiH2_library_002` |
 | `$LIB` | full path of the library folder on the cluster, laid out as `<LIB>/<InChIKey>/conf_N/` |
-| `$REPO` | the group clone of this repository on the cluster, `/groups/ReismanLab/orca_descriptors` |
 | `<user>@<cluster>` | your account and the login node |
 
 ### 1. Laptop: install the code and the environment
@@ -74,9 +73,8 @@ The repository is already cloned in the group folder, and the cluster steps need
 
 ```bash
 ssh <user>@<cluster>
-REPO=/groups/ReismanLab/orca_descriptors     # the group clone; put this line in your ~/.bashrc
-module load python                           # any Python 3.8 or newer
-ls $REPO/desc_utils                          # sanity check: the folder exists and is readable
+module load python                                       # any Python 3.8 or newer
+ls /groups/ReismanLab/orca_descriptors/desc_utils        # the group clone; sanity check: the folder exists and is readable
 ```
 
 ### 3. Cluster: compute the descriptors and check the jobs
@@ -99,9 +97,9 @@ Check the jobs:
 
 ```bash
 LIB=/path/to/<LIB>                                                     # the library folder
-python3 $REPO/scripts-for-orca-computations/check_jobs.py $LIB         # every job that is not OK, then a count per status
-python3 $REPO/scripts-for-orca-computations/check_jobs.py $LIB --all   # the finished ones too
-python3 $REPO/scripts-for-orca-computations/list_molecules.py $LIB     # -> molecules.csv: InChIKey, number of conformers
+python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/check_jobs.py $LIB         # every job that is not OK, then a count per status
+python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/check_jobs.py $LIB --all   # the finished ones too
+python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/list_molecules.py $LIB     # -> molecules.csv: InChIKey, number of conformers
 ```
 
 Statuses: `QUEUED` and `RUNNING` come from `squeue`; `OK`; `FAILED` with the reason (time limit, out
@@ -116,7 +114,7 @@ per conformer with everything the descriptors need, on a compute node:
 
 ```bash
 cd $LIB                                                            # the log lands where you submit from
-sbatch $REPO/scripts-for-orca-computations/slurm-condense.sh $LIB  # 8 cores, 2 h; raise the #SBATCH lines for a big library
+sbatch /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/slurm-condense.sh $LIB  # 8 cores, 2 h; raise the #SBATCH lines for a big library
 squeue -u $USER                                                    # wait until the "condense" job is gone
 tail -n 4 condense_<jobid>.out   # expected: "... failed 0", "job status: completed N", "checked N file(s): N ok, 0 failed"
 ```
@@ -133,14 +131,15 @@ singlepoint), see [If something goes wrong](#if-something-goes-wrong). Skip the 
 
 From the repository root, with `gp_env` active.
 
-**5.1 rsync.** Only the geometry and the condensed file travel, about 0.5 MB per conformer. Both
-trailing slashes matter. The folders of jobs that produced nothing yet come along empty, on purpose:
-that is how the laptop knows the molecule has conformers still to come.
+**5.1 rsync.** Only the geometry and the condensed file travel, about 0.5 MB per conformer. The
+library folder lands as `DATA/<LIB>/`: no slash after `<LIB>` on the cluster side, or its content
+spills straight into `DATA/`. The folders of jobs that produced nothing yet come along empty, on
+purpose: that is how the laptop knows the molecule has conformers still to come.
 
 ```bash
 conda activate gp_env
 rsync -avz --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
-      --exclude='*' <user>@<cluster>:/path/to/<LIB>/  DATA/<LIB>/
+      --exclude='*' <user>@<cluster>:/path/to/<LIB>  DATA/
 ```
 
 **5.2 Descriptor extraction and compilation.**
@@ -195,11 +194,11 @@ DescriPyTor is imported from the `DescriPyTor/` submodule folder; a `pip install
 its `numpy<2` pin and downgrade the environment. The submodule pin is the version the regression
 tests were validated against (`f6bc24c`, 2026-08-31).
 
-**Cluster: the group clone.** `$REPO` is a plain `git clone` on the `code-review` branch. Steps 3
+**Cluster: the group clone.** `/groups/ReismanLab/orca_descriptors` is a plain `git clone` on the `code-review` branch. Steps 3
 and 4 only need its files: `desc_utils.condense`, `desc_utils.orca_parse`, `check_jobs.py` and
 `list_molecules.py` import the standard library only, so `module load python` is enough and no
 environment is ever activated on the cluster. Updating the clone is its owner's job
-(`git -C $REPO pull`). If you prefer your own clone, `git clone` it anywhere, `git checkout code-review`,
+(`git -C /groups/ReismanLab/orca_descriptors pull`). If you prefer your own clone, `git clone` it anywhere, `git checkout code-review`,
 and submit `slurm-condense.sh` from that clone: the script finds the clone from the path it was
 submitted with. `sbatch --export=ALL,REPO=/your/clone ...` names it explicitly if you keep a copy of
 the script elsewhere.
@@ -240,8 +239,8 @@ raw folders sitting on your laptop. `PYTHONPATH` is the folder that *contains* `
 the library folder:
 
 ```bash
-PYTHONPATH=$REPO python -m desc_utils.condense --root $LIB --jobs 4
-PYTHONPATH=$REPO python -m desc_utils.condense --root $LIB --check
+PYTHONPATH=/groups/ReismanLab/orca_descriptors python -m desc_utils.condense --root $LIB --jobs 4
+PYTHONPATH=/groups/ReismanLab/orca_descriptors python -m desc_utils.condense --root $LIB --check
 # laptop, in gp_env, driven by the spec:
 python -m desc_utils.run condense --spec specs/<LIB>.yaml --jobs 4
 ```
@@ -403,7 +402,7 @@ Then pull the condensed files together with the 3 KB geometry; everything else s
 
 ```bash
 rsync -avz --include='*/' --include='optimization.xyz' --include='orca_condensed.json' \
-      --exclude='*' user@cluster:/path/to/LIB/  DATA/LIB/
+      --exclude='*' user@cluster:/path/to/LIB  DATA/          # -> DATA/LIB/; no slash after LIB
 ```
 
 Content (schema version 1; units in the key names; `null` when ORCA did not print a quantity):
