@@ -137,6 +137,17 @@ of Service error, run the two `conda tos accept` commands it prints and start th
 conda 22.x installation whose `conda env` subcommand is missing its `conda-env` executable is worked
 around.
 
+On the cluster, the group installation `/groups/ReismanLab/miniconda3` (conda 23.11) is the one to
+use, not a private miniconda in your home folder:
+
+```bash
+source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh    # in your ~/.bashrc, once
+conda activate gp_env
+```
+
+Its own `envs/` is where `setup_gp_env.sh` puts `gp_env` and is the first entry of `envs_dirs` by
+default, so members who source it need no configuration at all.
+
 Every command of step D runs on your laptop, from the repository root, with `gp_env` active. Steps A
 and B run on the cluster and need no environment.
 
