@@ -27,7 +27,7 @@ from desc_utils.spec import Spec
 
 __all__ = [
     "iter_conformers", "build_numbering_table", "check_consistency", "apply_orient",
-    "write_numbering_table", "read_numbering_table", "make_backend",
+    "write_numbering_table", "read_numbering_table", "usable_rows", "make_backend",
 ]
 
 
@@ -92,7 +92,7 @@ def _number_one(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, re
     extra: dict = {}
     try:
         sdf = get_sdf_from_xyz(ctx.conf_dir, spec.data["geometry_file"], overwrite=regenerate_sdf)
-        mol = load_mol(sdf)
+        mol = load_mol(sdf, notes=row.notes)
     except Exception as exc:
         row.status, row.notes = STATUS_FAILED, [f"read: {type(exc).__name__}: {exc}"]
         return row, extra
@@ -206,25 +206,35 @@ def write_numbering_table(df: pd.DataFrame, path: str | Path) -> Path:
     return path
 
 
-def read_numbering_table(path: str | Path, spec: Spec, require_ok: bool = True) -> pd.DataFrame:
-    """Read a numbering CSV and keep the rows usable for extraction.
+def usable_rows(df: pd.DataFrame, spec: Spec, require_ok: bool = True, quiet: bool = False) -> pd.DataFrame:
+    """The rows of a numbering table whose atom indices can be used for extraction.
 
-    Rows with any missing label index are dropped with a warning; when the table has a
-    ``numbering_status`` column and ``require_ok`` is set, only ``ok`` rows are kept.
-    Legacy tables without a status column are accepted as-is.
+    Rows with any missing label index are dropped; when the table has a ``numbering_status``
+    column and ``require_ok`` is set, only ``ok`` rows are kept (a molecule whose conformers
+    disagree, or a conformer Open Babel could not perceive, has no reliable indices). The label
+    columns come back as plain ``int`` so a nullable ``Int64`` never reaches ``int()`` downstream.
+    Legacy tables without a status column are accepted as-is. The index is reset.
     """
+    missing = [l for l in spec.labels if l not in df.columns]
+    if missing:
+        raise KeyError(f"numbering table: missing label columns {missing}; the spec declares {spec.labels}")
+    n0 = len(df)
+    if require_ok and "numbering_status" in df.columns:
+        df = df[df["numbering_status"] == STATUS_OK]
+    df = df.dropna(subset=spec.labels).copy()
+    if len(df) < n0 and not quiet:
+        print(f"[numbering] {n0 - len(df)} of {n0} rows skipped (not numbered cleanly)")
+    for l in spec.labels:
+        df[l] = df[l].astype(int)
+    return df.reset_index(drop=True)
+
+
+def read_numbering_table(path: str | Path, spec: Spec, require_ok: bool = True) -> pd.DataFrame:
+    """Read a numbering CSV and keep the rows usable for extraction (see :func:`usable_rows`)."""
     df = pd.read_csv(path)
     missing = [l for l in spec.labels if l not in df.columns]
     if missing:
         raise KeyError(f"{path}: missing label columns {missing}; the spec declares {spec.labels}")
     if "path" not in df.columns:
         raise KeyError(f"{path}: missing 'path' column")
-    n0 = len(df)
-    if require_ok and "numbering_status" in df.columns:
-        df = df[df["numbering_status"] == STATUS_OK]
-    df = df.dropna(subset=spec.labels)
-    if len(df) < n0:
-        print(f"[numbering] {n0 - len(df)} of {n0} rows skipped (not numbered cleanly)")
-    for l in spec.labels:
-        df[l] = df[l].astype(int)
-    return df.reset_index(drop=True)
+    return usable_rows(df, spec, require_ok=require_ok)

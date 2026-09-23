@@ -108,11 +108,23 @@ def run_extraction(spec: Spec, df_num: pd.DataFrame, repo_root: Path, families: 
         raise ValueError(f"unknown families {unknown}; choose from {ALL_FAMILIES}")
 
     from desc_utils.data_extraction import conf_key
+    from desc_utils.numbering import usable_rows
 
     df_num = df_num.reset_index(drop=True).copy()
     df_num["path"] = df_num["path"].map(lambda p: conf_key(p, repo_root))  # one join key for every engine
     out = df_num[_meta_columns(spec, df_num)].copy()
     out = out.merge(job_status_columns(list(out["path"]), spec, repo_root), on="path", how="left")
+
+    # Every conformer keeps its metadata row (so the check report can list it), but only the
+    # cleanly numbered ones are handed to the engines: a failed row has <NA> where an atom index
+    # should be and would crash the first ``int()``. Its descriptor columns stay NaN.
+    df_num = usable_rows(df_num, spec, quiet=True)
+    if len(df_num) < len(out):
+        print(f"[extract] {len(out) - len(df_num)} of {len(out)} conformers not numbered cleanly: "
+              "descriptors left NaN, see numbering_status")
+    if df_num.empty:
+        print("[extract] no conformer is numbered cleanly; nothing to extract")
+        return out
 
     orca_wanted = [f.split(".", 1)[1] for f in wanted if f.startswith("orca.")]
     if spec.orca and orca_wanted:

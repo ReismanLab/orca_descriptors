@@ -41,12 +41,27 @@ def get_xyz_ids(conf_dir: str | Path, geometry_file: str = "optimization.xyz") -
     return out
 
 
-def load_mol(sdf_path: str | Path):
-    """First valid molecule of an sdf file, hydrogens kept."""
+def load_mol(sdf_path: str | Path, notes: list[str] | None = None):
+    """First valid molecule of an sdf file, hydrogens kept.
+
+    Open Babel sometimes perceives an impossible bond order from a DFT geometry (a five-valent
+    carbon, a four-valent neutral nitrogen), and RDKit then refuses to sanitize the whole molecule.
+    Rather than losing the conformer, the molecule is loaded without sanitization and only the
+    connectivity-level properties are computed (degrees, rings), which is what the connectivity
+    SMARTS patterns of a spec need; bond orders and aromaticity are unreliable in that case.
+    A note is appended to ``notes`` (when given) so the numbering table records it.
+    """
     suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
     mol = next((m for m in suppl if m is not None), None)
+    if mol is not None:
+        return mol
+    mol = Chem.MolFromMolFile(str(sdf_path), removeHs=False, sanitize=False)
     if mol is None:
         raise ValueError(f"RDKit could not read a molecule from {sdf_path}")
+    mol.UpdatePropertyCache(strict=False)
+    Chem.FastFindRings(mol)
+    if notes is not None:
+        notes.append("sdf: RDKit sanitization failed (Open Babel bond perception); connectivity only")
     return mol
 
 
