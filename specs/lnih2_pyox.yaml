@@ -124,7 +124,7 @@ aggregate:
   temperature_K: 298.15
   kB_hartree_per_K: 3.166811563e-6
   stats: [min, max, lowE, boltz]
-  carry_first: [smiles, ligand_class]
+  carry_first: [smiles, smiles_noH, ligand_class]
 
 filter:                               # optional noise filter for modelling sets; the library itself stays complete
   enabled: false                      # true, or `aggregate --filter`, applies the settings below

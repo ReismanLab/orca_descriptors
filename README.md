@@ -290,7 +290,7 @@ pytest tests -m slow                 # ~10 min; also re-derives the atom numberi
 |---|---|---|
 | `<date>_<name>_atom_numbering_results.csv` | conformer | 1-based index of every label, SCF energy, SMILES, `numbering_status` |
 | `combined_descriptors.csv` | conformer | `orca_job_status` (`completed`, `running`, `failed`; `unknown` for files condensed before 2026-09-23, `missing` for a folder with no file), `n_conformer_folders` of its molecule, then every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
-| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchi`, `smiles`, `n_conformers` (rows aggregated), `n_conformers_completed`, `n_conformer_folders` (folders on disk), `all_conformers_completed` (`True` / `False`; empty when a status is `unknown`), then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
+| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchi`, `smiles`, `smiles_noH` (implicit hydrogens), `n_conformers` (rows aggregated), `n_conformers_completed`, `n_conformer_folders` (folders on disk), `all_conformers_completed` (`True` / `False`; empty when a status is `unknown`), then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
 | `<date>_<name>_conformers_to_check.csv` | conformer needing a look | only written when there is one (today's copy is removed otherwise): `path`, `reason`, `numbering_status`, `numbering_notes`, `orca_job_status` |
 
 Conventions worth knowing when reading the spreadsheet: energies are in Hartree, HOMO/LUMO in eV,
@@ -457,7 +457,8 @@ outside the SMARTS, labels never assigned). Quote every SMARTS string: `#` start
 ### 3. Atom numbering
 
 `number` writes one row per conformer folder with the 1-based index of every label, plus `path`,
-`inchi`, `SCF_energy`, `smiles`, annotator columns (e.g. `ligand_class`), `numbering_backend`,
+`inchi`, `SCF_energy`, `smiles` (all hydrogens explicit, as in the xyz), `smiles_noH` (implicit hydrogens),
+annotator columns (e.g. `ligand_class`), `numbering_backend`,
 `numbering_status` (`ok`, `incomplete`, `failed`, `element_mismatch`, `inconsistent`) and
 `numbering_notes`. The table is a plain CSV so it can be inspected or corrected by hand; rows whose
 status is not `ok` are skipped downstream.
@@ -500,7 +501,7 @@ kept. This complete table is the default output. Optionally, with `filter.enable
 Boltzmann occupancy is below `occupancy_boltz_threshold`, Rydberg orbitals (except on `metal_label`),
 metal 4f Rydbergs, core orbitals, anisotropic NMR terms, NHO φ/θ angles, near-constant columns
 (`ratio_threshold`) and one member of every pair above `corr_threshold`. The output is
-`<date>_<name>_descriptors.csv` with `inchi_folder`, `inchi`, `smiles`, `ligand_class` in front.
+`<date>_<name>_descriptors.csv` with `inchi_folder`, `inchi`, `smiles`, `smiles_noH`, `ligand_class` in front.
 
 ### Adding a new molecule family
 

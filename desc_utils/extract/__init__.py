@@ -26,7 +26,7 @@ ALL_FAMILIES = ("orca.xyz", "orca.charges", "orca.nbo", "orca.redox", "descripyt
 
 def _meta_columns(spec: Spec, df_num: pd.DataFrame) -> list[str]:
     keep = ["path", "xyz_name", spec.data["molecule_id_column"], spec.numbering["energy"]["column"],
-            "smiles", "ligand_type", "ligand_class", "numbering_status"] + spec.labels
+            "smiles", "smiles_noH", "ligand_type", "ligand_class", "numbering_status"] + spec.labels
     return [c for c in dict.fromkeys(keep) if c in df_num.columns]
 
 

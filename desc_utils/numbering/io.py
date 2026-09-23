@@ -65,16 +65,27 @@ def load_mol(sdf_path: str | Path, notes: list[str] | None = None):
     return mol
 
 
-def smiles_for_mol(mol, mode: str = "whole_molecule", strip_indices: Iterable[int] = ()) -> str:
+def _to_smiles(mol, remove_hs: bool) -> str:
+    if not remove_hs:
+        return Chem.MolToSmiles(mol)
+    try:
+        return Chem.MolToSmiles(Chem.RemoveHs(mol))
+    except Exception:  # a molecule loaded by connectivity only may not sanitise
+        return Chem.MolToSmiles(Chem.RemoveHs(mol, sanitize=False))
+
+
+def smiles_for_mol(mol, mode: str = "whole_molecule", strip_indices: Iterable[int] = (), remove_hs: bool = False) -> str:
     """SMILES for one conformer.
 
     ``whole_molecule``: SMILES of the molecule as read.
     ``strip_atoms``: remove ``strip_indices`` (0-based) and return the SMILES of the first
     fragment with more than one atom, i.e. the ligand once the metal (and any monoatomic
     ligands) are gone. This is the legacy ``get_smiles(type_mol="ni_complex")`` behaviour.
+    ``remove_hs``: drop the explicit hydrogens first (the xyz-derived molecule carries them all),
+    giving the usual implicit-H SMILES; the ``smiles_noH`` column of the tables.
     """
     if mode == "whole_molecule":
-        return Chem.MolToSmiles(mol)
+        return _to_smiles(mol, remove_hs)
     if mode != "strip_atoms":
         raise ValueError(f"unknown smiles mode {mode!r}")
     rw = Chem.RWMol(mol)
@@ -82,8 +93,8 @@ def smiles_for_mol(mol, mode: str = "whole_molecule", strip_indices: Iterable[in
         rw.RemoveAtom(idx)
     for frag in GetMolFrags(rw, asMols=True, sanitizeFrags=False):
         if frag.GetNumAtoms() > 1:
-            return Chem.MolToSmiles(frag)
-    return Chem.MolToSmiles(rw)
+            return _to_smiles(frag, remove_hs)
+    return _to_smiles(rw, remove_hs)
 
 
 def scf_energy(conf_dir: str | Path, basename: str = "singlepoint",

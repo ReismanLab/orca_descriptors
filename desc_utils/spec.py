@@ -96,7 +96,7 @@ DEFAULTS: dict[str, Any] = {
         "temperature_K": 298.15,
         "kB_hartree_per_K": 3.166811563e-6,
         "stats": list(AGGREGATE_STATS),
-        "carry_first": ["smiles", "ligand_class"],
+        "carry_first": ["smiles", "smiles_noH", "ligand_class"],
         "exclude_columns": [],
     },
     # The noise filter (correlation / variance pruning) is opt-in: the library should stay complete and

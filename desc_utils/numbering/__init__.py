@@ -4,7 +4,7 @@
     df = build_numbering_table(spec, repo_root=Path("."))
     write_numbering_table(df, "atom_numbering_results.csv")
 
-Columns: ``xyz_name, path, <molecule id>, <energy>, smiles, <labels...>, <annotator columns>,
+Columns: ``xyz_name, path, <molecule id>, <energy>, smiles, smiles_noH, <labels...>, <annotator columns>,
 numbering_backend, numbering_status, numbering_notes``. Index base conversion happens exactly
 once, at the end of :func:`build_numbering_table`.
 """
@@ -120,8 +120,10 @@ def _number_one(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, re
     try:
         strip = [indices[l] for l in smiles_cfg.get("strip", []) if l in indices]
         extra["smiles"] = smiles_for_mol(mol, smiles_cfg["mode"], strip)
+        extra["smiles_noH"] = smiles_for_mol(mol, smiles_cfg["mode"], strip, remove_hs=True)
     except Exception as exc:
-        extra["smiles"] = None
+        extra.setdefault("smiles", None)
+        extra["smiles_noH"] = None
         row.notes.append(f"smiles: {type(exc).__name__}: {exc}")
     for name in spec.numbering.get("annotators", []):
         fn = ANNOTATORS.get(name)
@@ -146,6 +148,7 @@ def _record(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, regene
         rec[energy_cfg["column"]] = np.nan
         row.notes.append(f"energy: {type(exc).__name__}: {str(exc)[:80]}")
     rec["smiles"] = extra.pop("smiles", None)
+    rec["smiles_noH"] = extra.pop("smiles_noH", None)
     for label in spec.labels:
         rec[label] = row.indices.get(label, np.nan)
     rec.update(extra)
