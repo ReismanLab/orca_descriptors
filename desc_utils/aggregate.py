@@ -1,7 +1,7 @@
 """Boltzmann aggregation of per-conformer descriptors and the post-aggregation filter.
 
 ``aggregate_conformers`` is an exact port of the aggregation cell that used to live in
-``make_descriptor_descripytor.ipynb``: for every molecule (group) and every numeric
+``notebooks/make_descriptor_descripytor.ipynb``: for every molecule (group) and every numeric
 column it writes ``<col>_min``, ``<col>_max``, ``<col>_lowE`` (value at the lowest-energy
 conformer) and ``<col>_boltz`` (Boltzmann-weighted mean at ``temperature_K``).
 """

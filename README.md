@@ -18,9 +18,6 @@ Two engines compute the descriptors: the in-house ORCA readers (`desc_utils`) an
   - [4. Cluster: condense the ORCA outputs](#4-cluster-condense-the-orca-outputs)
   - [5. Laptop: copy the condensed files, extract and compile the descriptors](#5-laptop-copy-the-condensed-files-extract-and-compile-the-descriptors)
 - [Details](#details)
-  - [Installation details](#installation-details)
-  - [Condense by hand](#condense-by-hand)
-  - [Reproduce the shipped LNiH2 descriptors](#reproduce-the-shipped-lnih2-descriptors)
   - [Re-run after changing the spec or adding conformers](#re-run-after-changing-the-spec-or-adding-conformers)
   - [What you get](#what-you-get)
   - [If something goes wrong](#if-something-goes-wrong)
@@ -63,8 +60,8 @@ conda activate gp_env
 pytest tests -m "not slow"           # expected: all passed, a few seconds
 ```
 
-Never `pip install` DescriPyTor into `gp_env`; it is imported from the `DescriPyTor/` folder
-(see [Installation details](#installation-details)).
+Never `pip install` DescriPyTor into `gp_env`: it is imported from the `DescriPyTor/` folder, and its
+`numpy<2` pin would downgrade the environment.
 
 ### 2. Cluster: log in, nothing to install
 
@@ -185,95 +182,6 @@ What the output files contain is in [What you get](#what-you-get).
 
 ## Details
 
-### Installation details
-
-**Laptop.** `gp_env.yml` pins the versions the reference CSVs were produced with. An existing
-`gp_env` created before 2026-09-22 lacks three packages added since (Open Babel for the xyz to sdf
-conversion of the numbering step, networkx and plotly imported by DescriPyTor):
-
-```bash
-pip install openbabel-wheel==3.1.1.23 networkx==3.6.1 plotly==7.1.0
-```
-
-DescriPyTor is imported from the `DescriPyTor/` submodule folder; a `pip install` of it would pull
-its `numpy<2` pin and downgrade the environment. The submodule pin is the version the regression
-tests were validated against (`f6bc24c`, 2026-08-31).
-
-**Cluster: the group clone.** `/groups/ReismanLab/orca_descriptors` is a plain `git clone` on the `code-review` branch. Steps 3
-and 4 only need its files: `desc_utils.condense`, `desc_utils.orca_parse`, `check_jobs.py` and
-`list_molecules.py` import the standard library only, so `module load python` is enough and no
-environment is ever activated on the cluster. Updating the clone is its owner's job
-(`git -C /groups/ReismanLab/orca_descriptors pull`). If you prefer your own clone, `git clone` it anywhere, `git checkout code-review`,
-and submit `slurm-condense.sh` from that clone: the script finds the clone from the path it was
-submitted with. `sbatch --export=ALL,REPO=/your/clone ...` names it explicitly if you keep a copy of
-the script elsewhere.
-
-**Cluster: ORCA and NBO.** The ORCA jobs need ORCA 6.1 and NBO 7 (`module load orca/6.1.0`; NBO is in
-`/resnick/groups/ReismanLab/nbo7`, see [slurm-calcParam.sh](scripts-for-orca-computations/slurm-calcParam.sh)).
-
-**Cluster: `gp_env`, only if you want to run step 5 there.** The home quota does not fit a conda
-environment, so a single shared `gp_env` lives in the group conda installation
-`/groups/ReismanLab/miniconda3` (conda 23.11), built by [setup_gp_env.sh](setup_gp_env.sh):
-
-```bash
-source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh    # in your ~/.bashrc, once; not a private miniconda
-conda activate gp_env
-```
-
-Its own `envs/` is the first `envs_dirs` entry by default, so nothing else has to be configured.
-If `gp_env` is missing there, the first member runs `bash setup_gp_env.sh` from a clone (ten
-minutes: environment and package cache in the group folder, then the tests); everybody else runs
-`bash setup_gp_env.sh --no-test`, which only points their `~/.condarc` at the group folder. The
-environment is read-only for the group so that a stray `pip install` cannot break it for everyone;
-the owner refreshes it after a change to `gp_env.yml` with:
-
-```bash
-conda env update --file gp_env.yml --prefix /groups/ReismanLab/miniconda3/envs/gp_env --prune
-```
-
-Options of the script: `--root PATH` for another shared folder, `--all-users` to write the setting into
-`$ROOT/.condarc` rather than each `~/.condarc`. Re-running it is harmless. If conda stops on an
-Anaconda Terms of Service error, run the two `conda tos accept` commands it prints and start again.
-A conda 22.x installation whose `conda env` subcommand is missing its `conda-env` executable is
-worked around.
-
-### Condense by hand
-
-The two commands `slurm-condense.sh` runs, for a couple of conformers, an interactive allocation, or
-raw folders sitting on your laptop. `PYTHONPATH` is the folder that *contains* `desc_utils/`, `--root`
-the library folder:
-
-```bash
-PYTHONPATH=/groups/ReismanLab/orca_descriptors python -m desc_utils.condense --root $LIB --jobs 4   # add --overwrite to rebuild completed files too
-PYTHONPATH=/groups/ReismanLab/orca_descriptors python -m desc_utils.condense --root $LIB --check
-# laptop, in gp_env, driven by the spec:
-python -m desc_utils.run condense --spec specs/<LIB>.yaml --jobs 4
-```
-
-The condensed files are written in place, one per `conf_N/` folder. The SLURM job's log,
-`condense_<jobid>.out` and `.err`, lands in the directory you submitted from
-(`sbatch -o /elsewhere/condense_%j.out -e ...` to put it somewhere else), and the job comes back
-FAILED if any conformer could not be condensed or if a file it wrote does not check out.
-
-### Reproduce the shipped LNiH2 descriptors
-
-The LNiH2 / PyOx library (308 conformers, 38 ligands) is not in the repository. Copy it into
-`DATA/LNiH2_library_001_to_download_2026_03_24/` either as the raw ORCA folders or, much smaller, as
-the condensed files with the rsync command of step 5.1. Then:
-
-```bash
-python -m desc_utils.run condense --spec specs/lnih2_pyox.yaml --jobs 4   # ~20 s; skipped for folders that already have orca_condensed.json
-python -m desc_utils.run all --spec specs/lnih2_pyox.yaml --numbering atom_numbering_results.csv   # ~6 min
-```
-
-Result: `<today>_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`, 38 rows and about 2450
-columns, numerically equal to the committed `20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv`. To have the test
-suite confirm it column by column:
-
-```bash
-pytest tests -m slow                 # ~10 min; also re-derives the atom numbering and the DescriPyTor block
-```
-
 ### Re-run after changing the spec or adding conformers
 
 | You changed | Run |
@@ -326,17 +234,16 @@ The full list is under [Descriptors provided](#descriptors-provided).
 
 | Path | Content |
 |---|---|
-| [DATA](DATA) | Calculation outputs: one folder per molecule (InChIKey), one sub-folder per conformer (`conf_*`). |
+| [DATA](DATA) | Where the libraries go on your laptop (step 5.1): `DATA/<LIB>/<InChIKey>/conf_N/`. Empty in the repository, ignored by git. |
 | [specs](specs) | One YAML spec per molecule family. `lnih2_pyox.yaml` (LNiH2 / PyOx ligand library) and `test_molecules_at1_at2.yaml` (small organic test set) are the shipped examples. |
 | [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
 | [orca2gaussian](orca2gaussian) | Deprecated. Former converter writing a pseudo-Gaussian log per conformer for DescriPyTor (unit and layout bugs, see CODE_REVIEW C3 to C7). Replaced by the condensed JSON; only used with `descriptors.descripytor.input.kind: feather`. |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | ORCA compound input (`calcParam.inp`), SLURM scripts and launcher used on the cluster: `slurm-calcParam.sh` (one ORCA job), `launch_orca_all.py`, `check_jobs.py` (queued / running / done / failed state of every job), `list_molecules.py` (InChIKey and conformer count), `slurm-condense.sh` (condense a whole library on a compute node). |
-| [tests](tests) | Unit tests and regression tests against the committed descriptor CSVs. |
+| [tests](tests) | Unit tests, and regression tests against the reference CSVs in `tests/reference/` (run when the LNiH2 library is under `DATA/`). |
 | `setup_gp_env.sh` | One-shot installer for `gp_env` in the group folder rather than the home folder (`envs_dirs` and `pkgs_dirs`, environment, tests). |
 | [review](review) | Notes and scripts from the DescriPyTor upgrade (old vs new Sterimol comparison, per-conformer reference CSVs). |
-| `make_descriptor_descripytor.ipynb` | Notebook running the same pipeline interactively. |
-| `atom_numbering_results.csv`, `combined_descriptors.csv`, `<date>_<name>_descriptors.csv` | Outputs of the three stages for the LNiH2 library (regression references). |
+| [notebooks](notebooks) | Exploratory notebooks (`make_descriptor_descripytor.ipynb` ran the pipeline before the CLI existed; ligand separation, substructure numbering, descriptor correlations). Not maintained with the code. |
 
 ## Pipeline in detail: from ORCA files to the final descriptors
 
@@ -512,12 +419,14 @@ the `numbering_status` column before `extract`.
 ### Tests
 
 ```bash
-pytest tests -m "not slow"     # unit tests, seconds (includes the condensed-file round trip on the tracked fixtures)
-pytest tests -m slow           # regression: reproduces atom_numbering_results.csv, the DescriPyTor
-                               # per-conformer reference and the committed aggregated CSVs (minutes)
+pytest tests -m "not slow"     # unit tests, seconds
+pytest tests -m slow           # regression: reproduces tests/reference/atom_numbering_results.csv, the DescriPyTor
+                               # per-conformer reference and the reference aggregated CSVs (minutes)
 ```
 
-The slow tests are skipped when `DATA/` or the submodule is absent.
+The regression tests and the condensed-file round trip need the LNiH2 library under
+`DATA/LNiH2_library_001_to_download_2026_03_24/` (raw ORCA folders for the round trip) and the
+submodule; they are skipped otherwise.
 
 ## Descriptors provided
 
@@ -651,9 +560,3 @@ Descriptor definitions
 - **NPA / NBO.** Reed, A. E.; Weinstock, R. B.; Weinhold, F. *J. Chem. Phys.* **1985**, *83*, 735, [10.1063/1.449486](https://doi.org/10.1063/1.449486); Reed, A. E.; Curtiss, L. A.; Weinhold, F. *Chem. Rev.* **1988**, *88*, 899, [10.1021/cr00088a005](https://doi.org/10.1021/cr00088a005).
 - **Fukui functions.** Parr, R. G.; Yang, W. *J. Am. Chem. Soc.* **1984**, *106*, 4049, [10.1021/ja00326a036](https://doi.org/10.1021/ja00326a036); condensed form: Yang, W.; Mortier, W. J. *J. Am. Chem. Soc.* **1986**, *108*, 5708, [10.1021/ja00279a008](https://doi.org/10.1021/ja00279a008).
 - **Hardness, electronegativity, electrophilicity.** Parr, R. G.; Pearson, R. G. *J. Am. Chem. Soc.* **1983**, *105*, 7512, [10.1021/ja00364a005](https://doi.org/10.1021/ja00364a005); Parr, R. G.; Szentpály, L. v.; Liu, S. *J. Am. Chem. Soc.* **1999**, *121*, 1922, [10.1021/ja983494x](https://doi.org/10.1021/ja983494x).
-
-Level of theory
-
-- **ωB97M-V.** Mardirossian, N.; Head-Gordon, M. *J. Chem. Phys.* **2016**, *144*, 214110, [10.1063/1.4952647](https://doi.org/10.1063/1.4952647); **D4.** Caldeweyher, E. et al. *J. Chem. Phys.* **2019**, *150*, 154122, [10.1063/1.5090222](https://doi.org/10.1063/1.5090222).
-- **M06.** Zhao, Y.; Truhlar, D. G. *Theor. Chem. Acc.* **2008**, *120*, 215, [10.1007/s00214-007-0310-x](https://doi.org/10.1007/s00214-007-0310-x).
-- **def2 basis sets.** Weigend, F.; Ahlrichs, R. *Phys. Chem. Chem. Phys.* **2005**, *7*, 3297, [10.1039/b508541a](https://doi.org/10.1039/b508541a).

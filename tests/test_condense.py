@@ -41,7 +41,7 @@ def condensed_tree(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def numbering():
-    return pd.read_csv(REPO_ROOT / "atom_numbering_results.csv")
+    return pd.read_csv(REPO_ROOT / "tests" / "reference" / "atom_numbering_results.csv")
 
 
 def _rows(numbering, dirs):

@@ -210,4 +210,8 @@ __marimo__/
 
 .DS_Store
 
-DATA/
+# libraries live here locally, only the folder itself is tracked
+DATA/*
+!DATA/.gitkeep
+# run outputs ({date}_{name}_*.csv) land in the repository root
+/*.csv

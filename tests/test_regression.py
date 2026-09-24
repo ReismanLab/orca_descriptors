@@ -1,10 +1,13 @@
 """Slow regression tests: the spec-driven pipeline must reproduce the historical outputs.
 
-Reference data (committed):
+Reference data (committed under ``tests/reference/``):
 * ``atom_numbering_results.csv``                      numbering table of the LNiH2 library
 * ``review/results/library_per_conformer_condensed_json.csv``  DescriPyTor block, per conformer
 * ``20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv``  aggregated, unfiltered
 * ``20260922_test_molecules_descriptors.csv``         aggregated, unfiltered, test molecules
+
+The libraries themselves (``DATA/LNiH2_library_001_to_download_2026_03_24``, ``DATA/test_molecules``) are not
+in the repository: copy them in (rsync of the README) and the tests run, otherwise they are skipped.
 
 The aggregated tables are the complete libraries (the noise filter is opt-in since 2026-09-22; it is
 still exercised below). All three were regenerated from the condensed per-conformer files (``orca_condensed.json``,
@@ -39,7 +42,7 @@ def lnih2(repo_root):
 
 @pytest.fixture(scope="module")
 def numbering_ref(repo_root):
-    return pd.read_csv(repo_root / "atom_numbering_results.csv")
+    return pd.read_csv(repo_root / "tests/reference/atom_numbering_results.csv")
 
 
 def _assert_close(ref: pd.DataFrame, new: pd.DataFrame, cols, tol=TOL):
@@ -78,8 +81,8 @@ def test_descripytor_block_reproduces_reference(lnih2, numbering_ref, repo_root)
 
 
 def test_full_pipeline_reproduces_aggregated_csv(lnih2, repo_root):
-    ref = pd.read_csv(repo_root / "20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv").set_index("inchi")
-    num = read_numbering_table(repo_root / "atom_numbering_results.csv", lnih2)
+    ref = pd.read_csv(repo_root / "tests/reference/20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv").set_index("inchi")
+    num = read_numbering_table(repo_root / "tests/reference/atom_numbering_results.csv", lnih2)
     per_conf = run_extraction(lnih2, num, repo_root, progress=False)
     agg = aggregate_conformers(per_conf, lnih2)
     new = agg.set_index("inchi").reindex(ref.index)
@@ -94,7 +97,7 @@ def test_full_pipeline_reproduces_aggregated_csv(lnih2, repo_root):
 
 def test_test_molecules_pipeline(repo_root):
     spec = load_spec(repo_root / "specs" / "test_molecules_at1_at2.yaml")
-    ref = pd.read_csv(repo_root / "20260922_test_molecules_descriptors.csv").set_index("inchi")
+    ref = pd.read_csv(repo_root / "tests/reference/20260922_test_molecules_descriptors.csv").set_index("inchi")
     num = build_numbering_table(spec, repo_root, progress=False)
     assert (num[["at1", "at2"]].astype(int).values == [1, 2]).all()
     per_conf = run_extraction(spec, num, repo_root, progress=False)
