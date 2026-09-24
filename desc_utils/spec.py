@@ -343,6 +343,11 @@ def _validate_orca(orca: dict | None, labels: set[str], problems: list[str]) -> 
         cfg["atoms"] = [t[0] for t in atoms]
         if fam == "nbo" and cfg.get("spin") not in NBO_SPIN_CHOICES:
             problems.append(f"descriptors.orca.nbo.spin must be one of {list(NBO_SPIN_CHOICES)}, got {cfg.get('spin')!r}")
+        if fam == "redox":
+            bm = cfg.get("nbo_block_map") or {}
+            if not isinstance(bm, Mapping) or any(not isinstance(v, int) or isinstance(v, bool) or v < 1 for v in bm.values()):
+                problems.append("descriptors.orca.redox.nbo_block_map: 1-based NBO block number per state "
+                                "(e.g. {singlepoint: 1, oxidation: 2, reduction: 3}); every value must be an integer >= 1")
         out[fam] = cfg
     return out
 
@@ -374,6 +379,32 @@ def _validate_descripytor(cfg: dict | None, labels: set[str], problems: list[str
         problems.append("descriptors.descripytor.input.kind must be 'json' (the condensed file; the feather path was removed)")
     if not any(out[k] for k in DESCRIPYTOR_TERM_ARITY):
         problems.append("descriptors.descripytor: no descriptor terms given")
+    return out
+
+
+OUTPUT_PLACEHOLDERS = ("date", "name")
+
+
+def _validate_output(cfg: Mapping | None, problems: list[str]) -> dict:
+    """File names of the stage outputs: known keys only, and only ``{date}`` / ``{name}`` as placeholders."""
+    import string
+
+    out = _merge_defaults(cfg, DEFAULTS["output"])
+    for key in cfg or {}:
+        if key not in DEFAULTS["output"]:
+            problems.append(f"output: unknown key {key!r}; expected one of {sorted(DEFAULTS['output'])}")
+    for key, value in out.items():
+        if not isinstance(value, str) or not value.strip():
+            problems.append(f"output.{key} must be a non-empty file name")
+            continue
+        try:
+            fields = [f for _, f, _, _ in string.Formatter().parse(value) if f is not None]
+        except ValueError as exc:
+            problems.append(f"output.{key}: {exc}")
+            continue
+        bad = [f for f in fields if f not in OUTPUT_PLACEHOLDERS]
+        if bad:
+            problems.append(f"output.{key}: unknown placeholder(s) {bad}; only {list(OUTPUT_PLACEHOLDERS)} are filled in")
     return out
 
 
@@ -429,7 +460,7 @@ def validate_spec(raw: Mapping[str, Any], path: Path | None = None) -> Spec:
         problems.append("aggregate.temperature_K must be a positive number")
 
     filt = _merge_defaults(raw.get("filter"), DEFAULTS["filter"])
-    output = _merge_defaults(raw.get("output"), DEFAULTS["output"])
+    output = _validate_output(raw.get("output"), problems)
 
     if problems:
         raise SpecError(problems)

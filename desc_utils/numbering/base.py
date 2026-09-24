@@ -69,14 +69,8 @@ def validate_elements(mol, indices: Mapping[str, int], expected: Mapping[str, st
 
 
 BackendFactory = Callable[[dict, list], NumberingBackend]
+#: backend name -> factory ``(numbering_cfg, labels) -> backend``; filled by ``desc_utils.numbering.backends``
 BACKENDS: dict[str, BackendFactory] = {}
-
-
-def register_backend(name: str):
-    def deco(factory: BackendFactory):
-        BACKENDS[name] = factory
-        return factory
-    return deco
 
 
 def make_backend(numbering_cfg: dict, labels: list[str]) -> NumberingBackend:

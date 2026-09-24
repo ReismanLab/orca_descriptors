@@ -12,10 +12,9 @@ from pathlib import Path
 import pandas as pd
 from rdkit import Chem
 
-from desc_utils.numbering.base import ConformerContext, NoMatch, register_backend
+from desc_utils.numbering.base import ConformerContext, NoMatch
 
 
-@register_backend("smarts")
 class SmartsBackend:
     name = "smarts"
 
@@ -58,7 +57,6 @@ class SmartsBackend:
         return indices
 
 
-@register_backend("manual")
 class ManualCsvBackend:
     """Indices from a CSV with one row per conformer; ``key_column`` identifies the folder."""
 
@@ -76,11 +74,20 @@ class ManualCsvBackend:
         if key_column not in df.columns:
             raise KeyError(f"{self.csv_path}: missing key column {key_column!r}")
         self.table = {self._norm(k): row for k, row in zip(df[key_column], df.to_dict("records"))}
+        # Fallback for absolute paths written by another checkout: the last two components
+        # (<molecule>/<conformer>) identify a conformer in the molecule/conformer layout.
+        tails: dict[str, list] = {}
+        for k, row in self.table.items():
+            tails.setdefault(self._tail(k), []).append(row)
+        self.by_tail = {t: rows[0] for t, rows in tails.items() if len(rows) == 1}
 
     @staticmethod
     def _norm(key) -> str:
-        s = str(key).replace("\\", "/").rstrip("/")
-        return s.split("orca_descriptors/", 1)[-1] if "orca_descriptors/" in s else s
+        return str(key).replace("\\", "/").rstrip("/")
+
+    @staticmethod
+    def _tail(key: str) -> str:
+        return "/".join(key.split("/")[-2:])
 
     @classmethod
     def from_config(cls, numbering_cfg: dict, labels: list[str]) -> "ManualCsvBackend":
@@ -90,6 +97,8 @@ class ManualCsvBackend:
     def number(self, mol, ctx: ConformerContext) -> dict[str, int]:
         key = self._norm(ctx.rel_path)
         row = self.table.get(key)
+        if row is None:  # the CSV may hold absolute paths, or paths relative to another checkout
+            row = self.by_tail.get(self._tail(key))
         if row is None:
             raise NoMatch(f"{key} not found in {self.csv_path.name} ({self.key_column})")
         out = {}
@@ -101,7 +110,6 @@ class ManualCsvBackend:
         return out
 
 
-@register_backend("first_n")
 class FirstNBackend:
     """``atoms`` order -> atom 0, 1, 2, ... (the at1/at2 debugging convention)."""
 
@@ -121,7 +129,6 @@ class FirstNBackend:
         return {label: i for i, label in enumerate(self.labels)}
 
 
-@register_backend("molalign")
 class MolAlignBackend:
     """Map labels from a reference structure onto each conformer with DescriPyTor's MolAlign.
 

@@ -79,10 +79,11 @@ def _existing_output(spec: Spec, key: str) -> Path:
     if today.exists() or "{date}" not in spec.output[key]:
         return today
     pattern = spec.output[key].replace("{date}", "*").format(name=spec.name)
-    candidates = sorted(p for p in today.parent.glob(Path(pattern).name) if p.is_file())
+    candidates = [p for p in today.parent.glob(Path(pattern).name) if p.is_file()]
     if candidates:
-        print(f"using {candidates[-1]} (most recent {key})")
-        return candidates[-1]
+        latest = max(candidates, key=lambda p: p.stat().st_mtime)
+        print(f"using {latest} (most recent {key})")
+        return latest
     return today
 
 
@@ -163,7 +164,9 @@ def cmd_extract(args) -> int:
     from desc_utils.numbering import read_numbering_table
 
     spec = _load(args)
-    df_num = read_numbering_table(_resolve(args.numbering) if args.numbering else _existing_output(spec, "numbering_csv"), spec)
+    # every row, including the badly numbered ones: run_extraction keeps their metadata and skips the engines
+    df_num = read_numbering_table(_resolve(args.numbering) if args.numbering else _existing_output(spec, "numbering_csv"),
+                                  spec, usable=False)
     families = args.families.split(",") if args.families else None
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, families=families,
                         overwrite_xyz_json=args.overwrite_xyz_json, jobs=args.jobs)
@@ -196,7 +199,7 @@ def cmd_all(args) -> int:
 
     spec = _load(args)
     if args.numbering:
-        df_num = read_numbering_table(_resolve(args.numbering), spec)
+        df_num = read_numbering_table(_resolve(args.numbering), spec, usable=False)
     else:
         df_num = build_numbering_table(spec, repo_root=REPO_ROOT, jobs=args.jobs)
         num_out = _resolve(_output_name(spec, "numbering_csv"))

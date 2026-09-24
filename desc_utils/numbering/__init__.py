@@ -247,12 +247,19 @@ def usable_rows(df: pd.DataFrame, spec: Spec, require_ok: bool = True, quiet: bo
     return df.reset_index(drop=True)
 
 
-def read_numbering_table(path: str | Path, spec: Spec, require_ok: bool = True) -> pd.DataFrame:
-    """Read a numbering CSV and keep the rows usable for extraction (see :func:`usable_rows`)."""
+def read_numbering_table(path: str | Path, spec: Spec, require_ok: bool = True, usable: bool = True) -> pd.DataFrame:
+    """Read a numbering CSV.
+
+    With ``usable`` (default) only the rows fit for extraction come back (see :func:`usable_rows`).
+    ``usable=False`` returns every row, validated but unfiltered: what ``run_extraction`` wants, since
+    it keeps the metadata of every conformer for the check report and filters the rows itself.
+    """
     df = pd.read_csv(path)
     missing = [l for l in spec.labels if l not in df.columns]
     if missing:
         raise KeyError(f"{path}: missing label columns {missing}; the spec declares {spec.labels}")
     if "path" not in df.columns:
         raise KeyError(f"{path}: missing 'path' column")
+    if not usable:
+        return df.reset_index(drop=True)
     return usable_rows(df, spec, require_ok=require_ok)

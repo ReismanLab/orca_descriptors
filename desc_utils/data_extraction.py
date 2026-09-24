@@ -384,7 +384,12 @@ def _load_nbo_results(calc_path, basename="singlepoint", nbo_block_index=0, spin
 
 def _extract_nbo_charges_for_reader(reader, calc_path, atom_map, basename="singlepoint", nbo_block_index=0,
                                     condensed_file=CONDENSED_FILENAME):
-    """Add the NBO natural charges of one NBO block to ``reader.results``."""
+    """Add the NBO natural charges of one NBO block to ``reader.results``.
+
+    Returns ``None`` on success, else a one-line description of what went wrong (the block is missing
+    or truncated, typically because the ORCA job died); the Fukui values of that state are then NaN and
+    the caller records the reason in ``redox_nbo_error``.
+    """
     try:
         results = _load_nbo_results(calc_path, basename, nbo_block_index, condensed_file=condensed_file, full=False)
         npa_atoms = results.get("natural_population_analysis", {}).get("atoms", {})
@@ -396,9 +401,9 @@ def _extract_nbo_charges_for_reader(reader, calc_path, atom_map, basename="singl
                 reader.results[f"nbo_charge_{label}"] = charge
                 # Compatibility alias used elsewhere in the codebase.
                 reader.results[f"npa_{label}_charge"] = charge
-    except Exception:
-        # Silently skip if NBO extraction fails
-        pass
+        return None
+    except Exception as exc:
+        return f"{basename} (NBO block {nbo_block_index}): {type(exc).__name__}: {str(exc)[:100]}"
 
 
 def _normalize_nbo_block_map(nbo_block_map):
@@ -435,14 +440,15 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
         neutral_reader.parse_property_json()
         neutral_reader.get_scfenergy()
         neutral_reader.get_all_charges()
-        _extract_nbo_charges_for_reader(
+        nbo_errors = []
+        nbo_errors.append(_extract_nbo_charges_for_reader(
             neutral_reader,
             calc_path,
             atom_map,
             "singlepoint",
             nbo_block_index=int(nbo_block_map.get("singlepoint", 0)),
             condensed_file=condensed_file,
-        )
+        ))
 
         cation_reader = od.OrcaReader(calc_path, basename="oxidation", out_file_path=None, nbo_block_index=0, nbo_job_number=None,
                                         condensed_file=condensed_file)
@@ -450,14 +456,14 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
         cation_reader.parse_property_json()
         cation_reader.get_scfenergy()
         cation_reader.get_all_charges()
-        _extract_nbo_charges_for_reader(
+        nbo_errors.append(_extract_nbo_charges_for_reader(
             cation_reader,
             calc_path,
             atom_map,
             "oxidation",
             nbo_block_index=int(nbo_block_map.get("oxidation", 1)),
             condensed_file=condensed_file,
-        )
+        ))
 
         anion_reader = od.OrcaReader(calc_path, basename="reduction", out_file_path=None, nbo_block_index=0, nbo_job_number=None,
                                         condensed_file=condensed_file)
@@ -465,19 +471,22 @@ def get_redox_descriptors(df, atoms, descriptorPrefixes=["cm5"], nbo_block_map=N
         anion_reader.parse_property_json()
         anion_reader.get_scfenergy()
         anion_reader.get_all_charges()
-        _extract_nbo_charges_for_reader(
+        nbo_errors.append(_extract_nbo_charges_for_reader(
             anion_reader,
             calc_path,
             atom_map,
             "reduction",
             nbo_block_index=int(nbo_block_map.get("reduction", 2)),
             condensed_file=condensed_file,
-        )
+        ))
 
         P = od.RedoxSet(neutralReader=neutral_reader, cationReader=cation_reader, anionReader=anion_reader, descriptorPrefixes=descriptorPrefixes)
 
         results = P.aggregate()
         results['path'] = conf_key(calc_path, repo_root)
+        errors = [e for e in nbo_errors if e]
+        if errors:
+            results['redox_nbo_error'] = "; ".join(errors)
         results_dict[row.Index] = results
     return results_dict
 

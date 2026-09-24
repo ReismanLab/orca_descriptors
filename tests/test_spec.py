@@ -70,3 +70,18 @@ def test_resolve_terms_and_atom_map():
     row = {"A": 3, "B": 7, "M": 1}
     assert resolve_terms(["A", ["A", "B"], ["B", "A", "M"]], row) == [(3,), (3, 7), (7, 3, 1)]
     assert atom_map(row, ["M", "A"]) == {"M": 1, "A": 3}
+
+
+def test_output_section_is_validated():
+    import pytest
+    from desc_utils.spec import SpecError, validate_spec
+    base = {"name": "t", "data": {"root": "DATA/x"}, "atoms": {"A": None}, "numbering": {"backend": "first_n"},
+            "descriptors": {"descripytor": {"charges": ["A"]}}}
+    with pytest.raises(SpecError, match="unknown key 'numbering_cvs'"):
+        validate_spec({**base, "output": {"numbering_cvs": "x.csv"}})
+    with pytest.raises(SpecError, match="unknown placeholder"):
+        validate_spec({**base, "output": {"aggregated_csv": "{data}_x.csv"}})
+    spec = validate_spec({**base, "output": {"aggregated_csv": "{date}_{name}_final.csv"}})
+    assert spec.output["aggregated_csv"] == "{date}_{name}_final.csv" and spec.output["check_csv"].startswith("{date}")
+    with pytest.raises(SpecError, match="nbo_block_map"):
+        validate_spec({**base, "descriptors": {"orca": {"redox": {"atoms": ["A"], "nbo_block_map": {"singlepoint": 0}}}}})

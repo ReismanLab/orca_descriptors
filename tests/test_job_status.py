@@ -201,3 +201,19 @@ def test_conformers_to_check_lists_reasons():
     assert list(out["reason"]) == ["numbering failed", "ORCA job running", "numbering incomplete; ORCA job failed"]
     assert out.loc[0, "numbering_notes"] == "no match" and pd.isna(out.loc[1, "numbering_notes"])
     assert conformers_to_check(df.iloc[[0]]).empty
+
+
+def test_read_numbering_table_unfiltered_keeps_bad_rows_for_the_check(tmp_path):
+    """The CLI reads every row (usable=False) so that a conformer whose numbering failed still reaches the check."""
+    from desc_utils.extract import conformers_to_check
+    from desc_utils.numbering import read_numbering_table, usable_rows
+    csv = tmp_path / "num.csv"
+    pd.DataFrame({"path": ["L/M/conf_1/", "L/M/conf_2/"], "inchi": ["M", "M"], "SCF_energy": [-1.0, -1.0],
+                  "A": [1, np.nan], "B": [2, np.nan], "numbering_status": ["ok", "failed"],
+                  "numbering_notes": ["", "stage 'core': no SMARTS match"]}).to_csv(csv, index=False)
+    every = read_numbering_table(csv, SPEC, usable=False)
+    assert len(every) == 2 and len(read_numbering_table(csv, SPEC)) == 1
+    assert len(usable_rows(every, SPEC, quiet=True)) == 1 and usable_rows(every, SPEC, quiet=True)["A"].dtype == int
+    check = conformers_to_check(every[["path", "numbering_status"]], every)
+    assert list(check["path"]) == ["L/M/conf_2/"] and check.loc[0, "reason"] == "numbering failed"
+    assert check.loc[0, "numbering_notes"] == "stage 'core': no SMARTS match"
