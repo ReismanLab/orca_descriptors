@@ -22,8 +22,6 @@ def conf_key(path_value, repo_root):
     are returned absolute. This is the join key shared by every extraction engine.
     """
     s = str(path_value).replace("\\", "/").rstrip("/")
-    if s.endswith(".feather"):
-        s = s.rsplit("/", 1)[0]
     p = Path(s)
     if not p.is_absolute():
         p = (Path(repo_root) / p)

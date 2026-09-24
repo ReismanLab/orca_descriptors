@@ -26,7 +26,7 @@ Schema version 1 (units in key names, ``null`` = not available)::
                     energies{final_single_point_energy_hartree_orca}
     vibrations      modes[{mode_index, frequency_cm-1, ir_intensity_km_per_mol, displacements[{dx, dy, dz}]}]
                     (translations / rotations dropped), source, displacement_decimals, n_dropped_zero_modes, n_imaginary
-    charges         nbo (NPA natural charges, NBO block 0), hirshfeld, cm5 (= hirshfeld, CODE_REVIEW C1); singlepoint, per atom
+    charges         nbo (NPA natural charges, NBO block 0), hirshfeld, cm5 (= hirshfeld: the CM5 correction is not implemented); singlepoint, per atom
     states          singlepoint / oxidation / reduction / nmr -> scf_energy_eh, charge, multiplicity, electron counts,
                     atomic_numbers, charges{mulliken, loewdin, chelpg, hirshfeld}, dipole_au, dipole_magnitude_au,
                     polarizability, thermochemistry, nmr{nuc, elems, siso_ppm, saniso_ppm}, mo{energies_eh, occupations}
@@ -274,7 +274,7 @@ def build_condensed(conf_dir, mo_states=("singlepoint",), nbo_full_blocks=(0,), 
         "hirshfeld": hirshfeld,
         "cm5": list(hirshfeld) if hirshfeld is not None else None,
         "note": "nbo: NPA natural charges of NBO block 0 (singlepoint); cm5 is a copy of hirshfeld because the "
-                "CM5 correction is not implemented (CODE_REVIEW C1)",
+                "CM5 correction is not implemented",
     }
 
     dipole = None

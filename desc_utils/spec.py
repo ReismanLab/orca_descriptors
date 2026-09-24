@@ -43,7 +43,7 @@ DESCRIPYTOR_SCALAR_KEYS: dict[str, Any] = {
     "bend_threshold": 1300,
     "radii": "CPK",
     "drop_atoms": [],
-    "input": {"kind": "json"},  # json = <conf>/<data.condensed_file>; feather = legacy orca2gaussian path
+    "input": {"kind": "json"},  # the molecule file DescriPyTor reads: <conf>/<data.condensed_file>
 }
 
 #: ORCA-side (morfeus / OrcaReader) families and the arity of each term list.
@@ -370,8 +370,8 @@ def _validate_descripytor(cfg: dict | None, labels: set[str], problems: list[str
     for l in out.get("drop_atoms") or []:
         if l not in labels:
             problems.append(f"descriptors.descripytor.drop_atoms: unknown label {l!r}")
-    if not isinstance(out["input"], dict) or out["input"].get("kind") not in ("feather", "json"):
-        problems.append("descriptors.descripytor.input.kind must be 'feather' or 'json'")
+    if not isinstance(out["input"], dict) or out["input"].get("kind") != "json":
+        problems.append("descriptors.descripytor.input.kind must be 'json' (the condensed file; the feather path was removed)")
     if not any(out[k] for k in DESCRIPYTOR_TERM_ARITY):
         problems.append("descriptors.descripytor: no descriptor terms given")
     return out

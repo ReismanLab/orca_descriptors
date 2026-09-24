@@ -342,7 +342,7 @@ class OrcaReader:
         alpha = 2.474
 
         # The CM5 pairwise correction is not implemented: _tij is 0 for every pair, so every
-        # cm5_<label> equals hirshfeld_<label> exactly (CODE_REVIEW C1).
+        # cm5_<label> equals hirshfeld_<label> exactly: the CM5 correction is not implemented.
         def _tij(i, j):
             return 0.0
         for idx, label in local_atom_index_map.items():

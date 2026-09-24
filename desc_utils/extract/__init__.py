@@ -4,7 +4,7 @@ Two engines:
 
 * ``orca``        ORCA property JSON / NBO output / morfeus on the optimised geometry
                   (``desc_utils.extract.orca``, wrapping the functions in ``data_extraction``)
-* ``descripytor`` DescriPyTor ``Molecules`` families on the condensed JSON (or legacy feather) file
+* ``descripytor`` DescriPyTor ``Molecules`` families on the condensed JSON file
                   (``desc_utils.extract.descripytor``)
 
 :func:`run_extraction` joins their outputs on the conformer key ``path``.

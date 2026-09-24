@@ -37,7 +37,7 @@ descriptors:
     nbo: {atoms: [at1, at2], basename: singlepoint, homo_lumo_rank_range: [1, 2, 3, 4, 5], drop_analysis_info: true}
     redox: {atoms: [at1, at2], prefixes: [nbo_charge, cm5], nbo_block_map: {singlepoint: 1, oxidation: 2, reduction: 3}}
   descripytor:
-    input: {kind: json}                 # <conf>/orca_condensed.json (desc_utils.condense); feather = legacy path
+    input: {kind: json}                 # <conf>/orca_condensed.json, written by desc_utils.condense
     charges: [at1, at2]
     sterimol: [[at1, at2]]
     bond_length: [[at1, at2]]

@@ -145,7 +145,7 @@ class MolAlignBackend:
     def number(self, mol, ctx: ConformerContext) -> dict[str, int]:
         raise NotImplementedError(
             "molalign backend is not implemented; number the reference with `smarts` or `manual`, "
-            "or renumber the feathers with DescriPyTor MolAlign first and use `manual`."
+            "or number the conformers with DescriPyTor MolAlign yourself and use `manual`."
         )
 
 

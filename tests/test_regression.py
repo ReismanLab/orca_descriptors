@@ -2,7 +2,7 @@
 
 Reference data (committed under ``tests/reference/``):
 * ``atom_numbering_results.csv``                      numbering table of the LNiH2 library
-* ``review/results/library_per_conformer_condensed_json.csv``  DescriPyTor block, per conformer
+* ``library_per_conformer_condensed_json.csv``        DescriPyTor block, per conformer
 * ``20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv``  aggregated, unfiltered
 * ``20260922_test_molecules_descriptors.csv``         aggregated, unfiltered, test molecules
 
@@ -10,11 +10,10 @@ The libraries themselves (``DATA/LNiH2_library_001_to_download_2026_03_24``, ``D
 in the repository: copy them in (rsync of the README) and the tests run, otherwise they are skipped.
 
 The aggregated tables are the complete libraries (the noise filter is opt-in since 2026-09-22; it is
-still exercised below). All three were regenerated from the condensed per-conformer files (``orca_condensed.json``,
-``desc_utils.condense``): DescriPyTor reads them through its JSON reader instead of the orca2gaussian
-feathers, so the vibration, dipole and NBO-charge columns differ from the 2026-09-18 references on
-purpose (see ``review/DESCRIPYTOR_UPGRADE.md``). Every numeric column is compared. The condensed files
-themselves are rebuilt from the raw ORCA outputs by ``python -m desc_utils.run condense --spec ...``.
+still exercised below). All three were generated from the condensed per-conformer files
+(``orca_condensed.json``, ``desc_utils.condense``), which DescriPyTor reads through its JSON reader.
+Every numeric column is compared. The condensed files themselves are rebuilt from the raw ORCA
+outputs by ``python -m desc_utils.run condense --spec ...``.
 
 Run with ``pytest -m slow`` (several minutes). Skipped automatically when DATA/ is absent.
 """
@@ -68,7 +67,7 @@ def test_smarts_numbering_reproduces_table(lnih2, numbering_ref, repo_root):
 def test_descripytor_block_reproduces_reference(lnih2, numbering_ref, repo_root):
     from desc_utils.extract.descripytor import label_columns
 
-    ref = pd.read_csv(repo_root / "review/results/library_per_conformer_condensed_json.csv").set_index("path")
+    ref = pd.read_csv(repo_root / "tests/reference/library_per_conformer_condensed_json.csv").set_index("path")
     from desc_utils.data_extraction import conf_key
 
     out = extract_descripytor(numbering_ref, lnih2.descripytor, repo_root, progress=False,

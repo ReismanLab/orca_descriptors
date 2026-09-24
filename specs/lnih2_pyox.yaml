@@ -99,7 +99,7 @@ descriptors:
       prefixes: [nbo_charge, cm5]
       nbo_block_map: {singlepoint: 1, oxidation: 2, reduction: 3}   # 1-based NBO block per job
   descripytor:                        # DescriPyTor `Molecules` families (Schema B key names)
-    input: {kind: json}                 # <conf>/orca_condensed.json (desc_utils.condense); feather = legacy path
+    input: {kind: json}                 # <conf>/orca_condensed.json, written by desc_utils.condense
     charges: [H1, H2, C1, C2, N1, N2, Ni]
     sterimol: *bonds
     bond_length: *bonds

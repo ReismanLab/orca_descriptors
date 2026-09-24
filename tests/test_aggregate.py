@@ -24,7 +24,6 @@ def test_boltzmann_weights_basic_and_nan():
 
 def test_molecule_folder():
     assert molecule_folder("DATA/lib/ID/conf_12/") == "DATA/lib/ID"
-    assert molecule_folder("DATA/lib/ID/conf_1/conf_1.feather") == "DATA/lib/ID"
     assert molecule_folder("DATA/lib/ID") == "DATA/lib/ID"
 
 

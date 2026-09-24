@@ -29,10 +29,8 @@ def boltzmann_weights(energies: pd.Series, temperature_K: float = 298.15, kB: fl
 
 
 def molecule_folder(path: str) -> str:
-    """``DATA/lib/<id>/conf_3`` -> ``DATA/lib/<id>`` (also accepts trailing slash / feather file)."""
+    """``DATA/lib/<id>/conf_3`` -> ``DATA/lib/<id>`` (a trailing slash is accepted)."""
     p = str(path).replace("\\", "/")
-    if p.endswith(".feather"):
-        p = p.rsplit("/", 1)[0]
     return _CONF_SUFFIX.sub("", p.rstrip("/"))
 
 

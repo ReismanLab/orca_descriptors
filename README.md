@@ -238,10 +238,8 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | [specs](specs) | One YAML spec per molecule family. `lnih2_pyox.yaml` (LNiH2 / PyOx ligand library) and `test_molecules_at1_at2.yaml` (small organic test set) are the shipped examples. |
 | [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
-| [orca2gaussian](orca2gaussian) | Deprecated. Former converter writing a pseudo-Gaussian log per conformer for DescriPyTor (unit and layout bugs, see CODE_REVIEW C3 to C7). Replaced by the condensed JSON; only used with `descriptors.descripytor.input.kind: feather`. |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | ORCA compound input (`calcParam.inp`), SLURM scripts and launcher used on the cluster: `slurm-calcParam.sh` (one ORCA job), `launch_orca_all.py`, `check_jobs.py` (queued / running / done / failed state of every job), `list_molecules.py` (InChIKey and conformer count), `slurm-condense.sh` (condense a whole library on a compute node). |
 | [tests](tests) | Unit tests, and regression tests against the reference CSVs in `tests/reference/` (run when the LNiH2 library is under `DATA/`). |
-| `setup_gp_env.sh` | One-shot installer for `gp_env` in the group folder rather than the home folder (`envs_dirs` and `pkgs_dirs`, environment, tests). |
 | [review](review) | Notes and scripts from the DescriPyTor upgrade (old vs new Sterimol comparison, per-conformer reference CSVs). |
 | [notebooks](notebooks) | Exploratory notebooks (`make_descriptor_descripytor.ipynb` ran the pipeline before the CLI existed; ligand separation, substructure numbering, descriptor correlations). Not maintained with the code. |
 
@@ -390,7 +388,7 @@ engines. Column names embed the labels, never the indices (`%Vbur_atom_Ni_radius
   (`singlepoint.property.json`, `nmr.property.json`), `nbo` (NBO 7 block of `calcParam.out`),
   `redox` (`singlepoint`/`oxidation`/`reduction`); all of them from `orca_condensed.json` when it exists.
 - DescriPyTor side (`desc_utils/extract/descripytor.py`): one `Molecules` object per conformer, loaded
-  from `orca_condensed.json` (`input.kind: json`; `feather` selects the deprecated orca2gaussian path),
+  from `orca_condensed.json` (`input.kind: json`),
   one call per family; the `FAMILIES` table maps DescriPyTor's index-based column names to label-based
   names. `python -m desc_utils.run to-schema-b --spec ... --row 0` prints the index-based JSON that
   DescriPyTor's own tools consume for one conformer.
@@ -445,7 +443,7 @@ enabled in the shipped specs. :x: not implemented yet.
 - %Vbur (Bondi radii × 1.17, H included, sphere radius `Y`): `%Vbur_atom_X_radius_Y` :white_check_mark:
 - Atomic SASA: `SASA_X` :white_check_mark:
 - Pyramidalization P and P angle: `Pyr_X`, `Pyr_angle_X` :white_check_mark:
-- Sterimol (morfeus, CRC van der Waals radii; L axis from first to second label): `Sterimol_X_X_L`, `Sterimol_X_X_Bmin`, `Sterimol_X_X_Bmax` :white_check_mark: / B1 and B5 do not match DescriPyTor `B1_X-X`, `B5_X-X` (different radii and slicing; see [review/DESCRIPYTOR_UPGRADE.md](review/DESCRIPYTOR_UPGRADE.md))
+- Sterimol (morfeus, CRC van der Waals radii; L axis from first to second label): `Sterimol_X_X_L`, `Sterimol_X_X_Bmin`, `Sterimol_X_X_Bmax` :white_check_mark: / B1 and B5 do not match DescriPyTor `B1_X-X`, `B5_X-X` (different radii and slicing)
 - Bond length: `Bond_X_X` :white_check_mark: / matches DescriPyTor `dist_X-X`
 - Angle: `Angle_X_X_X` :white_check_mark: / matches DescriPyTor `angle_X-X-X`
 - Dihedral: `Dihed_X_X_X_X` :white_check_mark:
@@ -462,7 +460,7 @@ enabled in the shipped specs. :x: not implemented yet.
 - Loewdin: `loewdin_X` :white_check_mark:
 - CHELPG: `chelpG_X` :white_check_mark:
 - Hirshfeld: `hirshfeld_X` :white_check_mark:
-- CM5: `cm5_X` :x: not implemented yet (the current column is a stub equal to `hirshfeld_X`, see [CODE_REVIEW.md](CODE_REVIEW.md) C1)
+- CM5: `cm5_X` :x: not implemented yet (the current column is a stub equal to `hirshfeld_X`)
 - NBO / NPA charge: `npa_X_charge` :white_check_mark: / matches DescriPyTor `charge_NBO_X`
 
 **Orbital analysis** (NBO 7 block of `calcParam.out`, `descriptors.orca.nbo`)

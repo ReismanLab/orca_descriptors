@@ -211,22 +211,19 @@ def extract_one(mols, cfg: Mapping[str, Any], row: Mapping[str, Any]) -> tuple[d
 
 
 @contextlib.contextmanager
-def _molecule_dir(files: list[Path], kind: str):
+def _molecule_dir(condensed: Path):
     """Folder handed to ``Molecules``.
 
-    ``Molecules`` loads every molecule file it finds in a folder. For the condensed JSON a temporary
-    folder holding only a link to that file is used, so legacy ``conf_N.feather`` files or other
-    molecule-shaped JSON in the conformer folder can never be loaded as extra molecules.
+    ``Molecules`` loads every molecule file it finds in a folder. A temporary folder holding only a
+    link to the condensed file is used, so that other molecule-shaped JSON in the conformer folder
+    (``singlepoint.json``, ``xyz.json``) can never be loaded as extra molecules.
     """
-    if kind == "feather":
-        yield files[0].parent
-        return
     with tempfile.TemporaryDirectory(prefix="descripytor_") as td:
-        link = Path(td) / files[0].name
+        link = Path(td) / condensed.name
         try:
-            os.symlink(files[0].resolve(), link)
+            os.symlink(condensed.resolve(), link)
         except OSError:  # file systems without symlinks
-            shutil.copy(files[0], link)
+            shutil.copy(condensed, link)
         yield Path(td)
 
 
@@ -239,13 +236,11 @@ def extract_descripytor(df_num: pd.DataFrame, cfg: Mapping[str, Any], repo_root:
                         progress: bool = True, condensed_file: str | None = None) -> pd.DataFrame:
     """Per-conformer DescriPyTor descriptors for every row of the numbering table.
 
-    Each row's ``path`` is a conformer folder. With ``input.kind: json`` (default) the molecule
-    file is ``<folder>/<condensed_file>`` written by ``desc_utils.condense``; with ``feather`` it
-    is the legacy ``conf_N.feather`` of the orca2gaussian path. Missing files or failing
-    families produce NaN plus a note in ``descripytor_notes``; they never abort the run.
+    Each row's ``path`` is a conformer folder; the molecule file DescriPyTor reads is
+    ``<folder>/<condensed_file>`` written by ``desc_utils.condense``. A missing file or a failing
+    family produces NaN plus a note in ``descripytor_notes``; they never abort the run.
     """
     Molecules = _import_molecules(repo_root)
-    kind = (cfg.get("input") or {}).get("kind", "json")
     condensed_name = condensed_file or CONDENSED_FILENAME
     rows: dict = {}
     iterator = df_num.iterrows()
@@ -256,22 +251,15 @@ def extract_descripytor(df_num: pd.DataFrame, cfg: Mapping[str, Any], repo_root:
     for i, row in iterator:
         folder = conformer_dir(row, repo_root)
         rec: dict[str, Any] = {"path": row["path"]}
-        if kind == "feather":
-            files = sorted(folder.glob("*.feather")) if folder.is_dir() else []
-            missing = (f"no .feather file in {folder}. Run `python orca2gaussian/orca_2_gauss.py --orca-folder <root>` "
-                       f"and `logs_to_feather` first")
-        else:
-            candidate = folder / condensed_name
-            files = [candidate] if candidate.is_file() else []
-            missing = (f"no {condensed_name} in {folder}. Run `python -m desc_utils.run condense --spec <spec>` "
-                       f"(or on the cluster `python -m desc_utils.condense --conf-dir <folder>`) first")
-        if not files:
-            rec["descripytor_notes"] = missing
+        condensed = folder / condensed_name
+        if not condensed.is_file():
+            rec["descripytor_notes"] = (f"no {condensed_name} in {folder}. Run `python -m desc_utils.run condense --spec <spec>` "
+                                        f"(or on the cluster `python -m desc_utils.condense --conf-dir <folder>`) first")
             for col in label_columns(cfg):
                 rec[col] = np.nan
             rows[i] = rec
             continue
-        with _quiet_cwd(), _molecule_dir(files, kind) as mol_dir:
+        with _quiet_cwd(), _molecule_dir(condensed) as mol_dir:
             try:
                 mols = Molecules(molecules_dir_name=str(mol_dir))
             except Exception as exc:
