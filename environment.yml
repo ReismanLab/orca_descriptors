@@ -6,7 +6,9 @@ channels:
 dependencies:
   - python=3.11   # scine-molassembler 3.0.1 wheels: cp38-cp312, Linux x86_64 only; fairchem-core: >=3.11
   - xtb
-  - crest>=3.1    # if conda-forge lags, build CREST 3.1 from source (needed for the mlip/UMA level)
+  - crest         # newest on conda-forge (3.0.2 at the time of writing). The `+uma` methods need the
+                  # `mlip` level, i.e. CREST >= 3.1: build it from source and point those methods at it
+                  # with `params.executable: /abs/path/to/crest`. Everything else works with 3.0.2.
   - pip
   - pip:
       - -e .[uma,molassembler]   # bceg + fairchem-core/ase (UMA) + scine-molassembler==3.0.1
