@@ -22,17 +22,13 @@ These requirements define the project; the code implements them.
    ([composite workflows](https://crest-lab.github.io/crest-docs/page/examples/composite.html)).
    The default level of theory for these inline steps is **UMA**.
 4. **Post-search optimisation**, specified by the user; **uma-s** by default.
-5. **Replicates**: every workflow is run **3 times** to evaluate variability. The start geometries must
-   differ between runs, so the N-Ni-N angle is expected to vary a lot. The Ni-N distance must stay within
-   a limit that guarantees coordination, and start geometries are pre-optimised.
-   > **Open question for the owner.** For a chelate, the N-Ni-N bite angle is fixed by the ligand
-   > (85-87° for bpy after any optimisation). With the default full GFN2 pre-optimisation, rigid ligands
-   > (bpy-NiF2, bpy-NiH2) reach the same square-planar minimum from every seed: replicate start RMSD
-   > 0.01-0.2 Å, τ4 ≈ 0.05. Flexible ligands (tBu-pyox, dtbbpy) keep differences through their
-   > rotamers. What should "vary a lot": the X-Ni-X plane vs the N-Ni-N plane (square planar ↔
-   > tetrahedral, τ4), or something else? And are identical converged starts acceptable for rigid ligands?
-   > Decided: diversity will **not** come from a looser pre-optimisation. The pre-optimisation stays a
-   > full GFN2 optimisation (`start_preopt_level: normal`). Each `run_<i>.json` records the RMSDs and τ4.
+5. **Replicates**: every workflow is run **3 times** to evaluate variability, each from its own start
+   geometry (a new random embedding per replicate), pre-optimised with GFN2-xTB. The N-Ni-N bite angle
+   varies from ligand to ligand, but should be relatively consistent for a single ligand. The Ni-N distance
+   must stay within a limit that guarantees coordination (≤ 2.5 Å).
+   For rigid ligands (e.g. bpy) the pre-optimised starts of the 3 replicates can be nearly identical; that is
+   accepted, and the variability then comes from the searches. Looser pre-optimisation is not used to create
+   diversity. Each `run_<i>.json` records the start-geometry RMSDs, the angles at Ni and τ4.
 6. **Spin state**: defaults to 1, is easy for the user to change, and is carried through every step of the jobs.
 7. **Folder organisation**:
    - depth 1: the transformation applied to the SMILES (e.g. `NiF2`, `NiH2`);

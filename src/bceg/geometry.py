@@ -10,12 +10,11 @@ pre-optimised with xtb, then checked:
 A rejected geometry is re-embedded with the next seed (``seed + attempt * 10007``),
 so the result is deterministic per replicate.
 
-Diversity caveat: a full pre-optimisation (``start_preopt_level: normal``) takes rigid
-chelates (e.g. bpy-NiF2) to the same minimum from every seed, so the replicates then
-start from the same geometry. The chelate bite angle N-Ni-N is fixed by the ligand
-(~85 deg); what can differ is the arrangement at Ni (square-planar vs tetrahedral,
-see ``tau4``). The info returned records the RMSD to the raw embedding and the
-geometry at each metal so this can be monitored.
+The full pre-optimisation (``start_preopt_level: normal``) takes rigid chelates
+(e.g. bpy-NiF2) to the same minimum from every seed. This is accepted: the N-Ni-N bite
+angle varies between ligands but should be consistent for one ligand, and replicate
+variability comes from the searches. The info returned records the RMSD to the raw
+embedding and the geometry at each metal (angles, ``tau4``) for monitoring.
 """
 
 from __future__ import annotations
