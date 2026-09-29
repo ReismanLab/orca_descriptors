@@ -55,6 +55,33 @@ def test_local_run_layout_and_skip(project):
     assert run_local(cfg) == {}
 
 
+def test_compute_usage_recorded(project, monkeypatch):
+    root, write = project
+    monkeypatch.setattr("bceg.tasks.available_cpus", lambda: 8)
+    monkeypatch.setattr("bceg.tasks.gpu_names", lambda: ("NVIDIA A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"))
+    run_local(Config.load(write()))
+
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    for name in ("run_1.json", "run_1_fake-lot.json"):  # search and post-optimisation both account
+        rec = json.loads((md / name).read_text())
+        assert rec["cpus"] == 8 and rec["gpus"] == ["NVIDIA A100-SXM4-80GB"] * 2
+        assert isinstance(rec["cpu_model"], str)
+        assert rec["cpu_hours"] == round(rec["wall_time_s"] / 3600 * 8, 5)
+        assert rec["gpu_hours"] == round(rec["wall_time_s"] / 3600 * 2, 5)
+
+
+def test_compute_usage_recorded_on_failure(project, monkeypatch):
+    """A run that dies still costs core-hours; the failed record must carry them."""
+    root, write = project
+    monkeypatch.setattr("bceg.tasks.available_cpus", lambda: 4)
+    monkeypatch.setattr("bceg.tasks.gpu_names", lambda: ())
+    run_local(Config.load(write(params="{n_confs: 0}")))
+    rec = json.loads((root / "results" / "none" / BUTANE / "etkdg" / "run_1.json").read_text())
+    assert rec["status"] == "failed"
+    assert rec["cpus"] == 4 and rec["gpus"] == [] and "gpu_hours" not in rec
+    assert rec["cpu_hours"] == round(rec["wall_time_s"] / 3600 * 4, 5)
+
+
 def test_changed_hyperparameter_is_refused(project):
     root, write = project
     run_local(Config.load(write()))
