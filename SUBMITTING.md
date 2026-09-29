@@ -62,7 +62,7 @@ slurm:
   setup:                     # run at the start of every job
     - source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
     - conda activate bceg
-    - module load orca       # if you use GOAT
+    - module load orca/6.1.0   # if you use GOAT; the version is mandatory, and GOAT needs ORCA >= 6.0
   tasks_per_job: 1
   array_throttle: 50         # max jobs running at once per array
   cpu: {partition: <cpu partition>, time: "24:00:00", cpus_per_task: 8, mem: 16G, account: <account>}
