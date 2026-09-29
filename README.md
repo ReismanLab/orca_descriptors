@@ -122,7 +122,10 @@ Each cluster job runs the conformer search of one replicate and then its UMA pos
 - Run for real on the development machine (conda env `crest`: CREST 3.0.2 + xtb 6.7.1):
   - GFN2-xTB pre-optimisation of NiF2/NiH2 × {bpy, tBu-pyox} × 3 replicates, all accepted on the first
     attempt (Ni-N 1.87-1.97 Å, Ni-F 1.73 Å, Ni-H 1.41 Å);
-  - a full `bceg run` with `crest_gfn2`, which gave the documented layout, and a rerun that skipped everything.
+  - a full `bceg run` with `crest_gfn2` on ethanol, which gave the documented layout, and a rerun that skipped everything.
+  - **But the local CREST 3.0.2 build is unreliable**: for 1-hexanol it optimizes 0 of 1106 snapshots
+    (floating-point exceptions) with 1 or 4 threads, and writes no ensemble. The pipeline marks such
+    replicates `failed`. Use the cluster build for real runs.
 - **Not yet run**: CREST 3.1 with inline UMA (`mlip`), GOAT, molassembler, LoQI and the UMA post-optimisation.
   Things to verify on the first cluster run are listed in [PLAN.md](PLAN.md).
 

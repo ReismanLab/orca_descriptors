@@ -84,6 +84,13 @@ Suggested test: 1 ligand × NiF2 × {crest_gfn2, crest_gfn2+uma-opt, molassemble
 - [x] xtb pre-optimisation of NiF2/NiH2 complexes passes the coordination check (bpy, tBu-pyox; locally with xtb 6.7.1)
 - [x] CREST accepts the generated TOML (`crest --input input.toml`, `charge`/`uhf` keys; CREST 3.0.2 locally, ethanol and NH4+)
 - [ ] CREST 3.1 `mlip` level for the inline UMA steps, with `fmlip-relay-server` found
+- [ ] **CREST run-to-run variability**: run CREST twice from the *same* start geometry (flexible and
+      rigid ligand) and compare `crest_conformers.xyz`. The iMTD-GC workflow has no documented seed
+      (only the `ttconf` runtype has `-ttseed`). Since identical starts are accepted for rigid ligands,
+      replicate variability relies on CREST not being deterministic. If it is deterministic, the rigid-ligand
+      replicates will be identical and this decision needs revisiting. (Not testable locally: the local
+      CREST 3.0.2 build fails to optimize the snapshots for 1-hexanol.)
+- [ ] Same question for GOAT (does ORCA expose/record a seed?). Molassembler takes the replicate seed explicitly.
 - [ ] GOAT writes `goat.finalensemble.xyz` with the energy as the first float of each comment line
 - [ ] molassembler Python API calls (`interpret.molecules`, `dg.generate_ensemble`) match the installed version
 - [ ] LoQI CLI options (`--n-confs`, seeding)
