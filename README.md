@@ -86,6 +86,12 @@ DATA/                                 git-ignored (only DATA/.gitkeep is tracked
 xyz comment lines start with the energy in Hartree at the level that produced the file. All files in a
 method folder share the atom order of `AddHs(MolFromSmiles(<transformed smiles>))`.
 
+Results are keyed by molecule, not by submission: every `bceg submit` (today's ligands, tomorrow's additions,
+a re-run after a crash) writes into the same `<transformation>/<InChIKey>/<method>/` tree and only submits
+what is not finished there yet. `_jobs/<timestamp>/` is bookkeeping for one submission: the config snapshot
+its jobs read, their task lists, sbatch scripts and SLURM logs. Nothing in the results tree refers to it, so
+old `_jobs` folders can be deleted once their jobs have finished.
+
 ### Hyper-parameter log (skip or rename)
 
 `params.json` stores every parameter that determines the ensemble (all searcher parameters with defaults
