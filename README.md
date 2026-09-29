@@ -79,7 +79,7 @@ DATA/                                 git-ignored (only DATA/.gitkeep is tracked
         raw_1_<lot>.xyz raw_2_<lot>.xyz raw_3_<lot>.xyz    post-optimised, e.g. raw_1_uma-s-1p2.xyz
         params.json                   hyper-parameter log of the search
         params_<lot>.json             hyper-parameter log of the post-optimisation
-        run_<i>.json, run_<i>_<lot>.json   per-replicate record (status, seed, versions, timings, host, SLURM ids)
+        run_<i>.json, run_<i>_<lot>.json   per-replicate record (status, seed, versions, compute usage, host, SLURM ids)
         logs/                         start geometries and program inputs/outputs (CREST TOML, ORCA input, stdout)
 ```
 
@@ -105,6 +105,42 @@ anything runs:
   Results made with different parameters are never mixed or overwritten.
 
 `params_<lot>.json` does the same for the post-optimisation and is tied to the search parameters' hash.
+
+### Compute usage
+
+Every `run_<i>.json` (search and post-optimisation, successful **and** failed) records what the step cost
+and the hardware it ran on:
+
+| field | |
+|---|---|
+| `wall_time_s` | wall-clock time of that step |
+| `cpus` | cores allocated to the job (`SLURM_CPUS_PER_TASK`, else the machine's CPU count) |
+| `cpu_hours` | `wall_time_s` x `cpus`, in hours |
+| `gpus` | names of the GPUs the job could see, e.g. `["NVIDIA A100-SXM4-80GB"]`; `[]` on a CPU node |
+| `gpu_hours` | `wall_time_s` x number of GPUs; absent when there is none |
+| `cpu_model`, `host`, `platform`, `slurm_partition`, `slurm_job_id`, `slurm_array_task_id` | where it ran |
+
+`cpu_hours` is the **allocation** the step occupied, which is what a cluster bills, not the cores the
+program actually kept busy — for parallel efficiency use `seff <jobid>` while the job is still in SLURM's
+database. GPU names come from `nvidia-smi`; under SLURM's cgroup it sees exactly the GPUs of the
+allocation, so a `--gres=gpu:1` job lists one. Because the fields sit in the run record and not in
+`params.json`, they never take part in the hyper-parameter comparison: re-running on different hardware
+is not a mismatch.
+
+Totals across a tree, e.g. per method:
+
+```bash
+python - <<'EOF'
+import json, collections, pathlib
+t = collections.Counter()
+for p in pathlib.Path("DATA").rglob("run_*.json"):
+    r = json.loads(p.read_text())
+    t[p.parent.name] += r.get("cpu_hours", 0)
+for m, h in t.most_common():
+    print(f"{h:10.2f} CPU-h  {m}")
+EOF
+```
+
 
 ## Usage
 

@@ -116,6 +116,10 @@ bceg status configs/cluster.yaml --smiles my_ligands.txt -t NiF2    # done / fai
 less DATA/_jobs/<timestamp>/slurm_logs/chain_crest_gfn2_<jobid>_<index>.out
 ```
 
+Each `run_<i>.json` also records what the step cost — `wall_time_s`, `cpus`, `cpu_hours`, and `gpus` /
+`gpu_hours` with the GPU model on a GPU node — so a method's price can be totalled from the results tree
+long after the jobs have left SLURM's accounting database (see [README](README.md#compute-usage)).
+
 If a replicate failed, its `run_<i>.json` holds the error and traceback. `logs/raw_<i>_failed/` holds the
 files of its working directory, including every xtb pre-optimisation attempt (`preopt_<n>/`). Fix the
 cause, then run the same `bceg submit` again.

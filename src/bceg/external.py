@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -29,6 +31,36 @@ def available_cpus() -> int:
 def resolve_threads(value: int | None) -> int:
     """``None`` or 0 means "all CPUs allotted to the job"."""
     return available_cpus() if not value else int(value)
+
+
+@lru_cache(maxsize=1)
+def cpu_model() -> str | None:
+    """Marketing name of the node's CPU, e.g. 'AMD EPYC 7763 64-Core Processor'."""
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():  # Linux, i.e. every compute node
+        for line in cpuinfo.read_text(errors="replace").splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    if platform.system() == "Darwin":
+        out = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    return platform.processor() or None
+
+
+@lru_cache(maxsize=1)
+def gpu_names() -> tuple[str, ...]:
+    """Names of the GPUs this job can see, e.g. ('NVIDIA A100-SXM4-80GB',).
+
+    Empty on a CPU node or without ``nvidia-smi``. SLURM's cgroup hides the GPUs of
+    other jobs, so on an allocation with ``--gres=gpu:N`` this lists exactly those N.
+    """
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return ()
+    return tuple(line.strip() for line in out.stdout.splitlines() if line.strip()) if out.returncode == 0 else ()
 
 
 def run(cmd: list[str], cwd: Path, threads: int = 1, log_name: str = "stdout.log") -> subprocess.CompletedProcess:
