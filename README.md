@@ -26,8 +26,8 @@ These requirements define the project; the code implements them.
    geometry (a new random embedding per replicate), pre-optimised with GFN2-xTB. The N-Ni-N bite angle
    varies from ligand to ligand, but should be relatively consistent for a single ligand. The Ni-N distance
    must stay within a limit that guarantees coordination (≤ 2.5 Å).
-   For rigid ligands (e.g. bpy) the pre-optimised starts of the 3 replicates can be nearly identical; that is
-   accepted, and the variability then comes from the searches. Looser pre-optimisation is not used to create
+   Identical starts are accepted: for rigid ligands (e.g. bpy) the 3 replicates may start from the same
+   geometry, and any variability comes from the searches themselves (CREST's metadynamics, GOAT, Molassembler). Looser pre-optimisation is not used to create
    diversity. Each `run_<i>.json` records the start-geometry RMSDs, the angles at Ni and τ4.
 6. **Spin state**: defaults to 1, is easy for the user to change, and is carried through every step of the jobs.
 7. **Folder organisation**:

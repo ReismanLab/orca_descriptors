@@ -69,8 +69,9 @@ Measured with real GFN2-xTB (`tests/test_geometry.py::test_real_xtb_preopt_nix2_
 Decisions (owner):
 - The N-Ni-N bite angle varies from ligand to ligand, and should be relatively consistent for a single
   ligand. The consistency across replicates seen above is therefore expected.
-- Nearly identical starts for rigid ligands are accepted. Variability between replicates comes from the
-  searches (random embedding + stochastic sampling).
+- **Identical starts are accepted.** For rigid ligands the three replicates may start from the same
+  geometry, and any variability comes from the searches themselves (CREST's metadynamics, GOAT,
+  Molassembler).
 - No looser pre-optimisation (`crude`/`loose` rejected), and no artificial twisting at Ni. The
   pre-optimisation stays a full GFN2 optimisation.
 - `run_<i>.json` keeps recording the start RMSDs, the angles at Ni and τ4 for monitoring. Stage 2 can
