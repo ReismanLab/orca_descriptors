@@ -1,22 +1,17 @@
+# Minimal cluster environment. conda provides only python and the two binaries (xtb, crest);
+# every Python dependency comes from pyproject.toml through the editable install below.
 name: bceg
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
-  - numpy
-  - pandas
-  - scipy
-  - pyyaml
-  - rdkit
-  - ase
+  - python=3.11   # scine-molassembler 3.0.1 wheels: cp38-cp312, Linux x86_64 only; fairchem-core: >=3.11
   - xtb
-  - crest>=3.1   # if conda-forge lags, build CREST 3.1 from source (needed for the mlip/UMA level)
-  - pytest
+  - crest>=3.1    # if conda-forge lags, build CREST 3.1 from source (needed for the mlip/UMA level)
   - pip
   - pip:
-      - fairchem-core          # UMA (run `huggingface-cli login`; UMA weights are gated)
-      - scine-molassembler
-      - -e .
+      - -e .[uma,molassembler]   # bceg + fairchem-core/ase (UMA) + scine-molassembler==3.0.1
+# Extras: `pip install -e .[uma]` or `.[molassembler]` alone if a method is not needed; `.[dev]` adds pytest.
+# UMA weights are gated: run `huggingface-cli login` once.
 # Not installed here:
 #   ORCA (GOAT)         -> cluster module; set methods.<name>.params.orca_cmd to the absolute path
 #   fmlip-relay[uma]    -> pip install '<crest-src>/subprojects/fmlip_relay[uma]'; needs fmlip-relay-server on PATH

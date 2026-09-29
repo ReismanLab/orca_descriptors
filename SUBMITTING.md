@@ -14,7 +14,7 @@ git clone https://github.com/ReismanLab/B-CEG-MCD.git && cd B-CEG-MCD
 conda env create -f environment.yml
 conda activate bceg
 huggingface-cli login          # UMA weights are gated on HuggingFace
-pytest                         # quick sanity check
+pip install -e ".[dev]" && pytest   # optional sanity check (pytest is not in the cluster env)
 ```
 
 External programs (see the comments in `environment.yml`):

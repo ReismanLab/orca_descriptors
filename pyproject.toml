@@ -11,14 +11,13 @@ requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "pandas",
-    "scipy",
     "pyyaml",
     "rdkit",
 ]
 
 [project.optional-dependencies]
-uma = ["fairchem-core", "ase"]
-molassembler = ["scine-molassembler"]
+uma = ["fairchem-core", "ase"]  # fairchem-core already requires ase; listed because bceg imports it directly
+molassembler = ["scine-molassembler==3.0.1", "scine-utilities==10.1.0"]  # exact pin; utilities from the same SCINE release (2025-10-09)
 dev = ["pytest"]
 
 [project.scripts]
