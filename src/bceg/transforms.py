@@ -2,22 +2,27 @@
 
 A transformation is a Python file defining::
 
-    def transform(smiles: str) -> str | dict | Structure | None
+    def transform(smiles: str, **params) -> str | dict | Structure | None
 
 returning ``None`` to skip a molecule, or the product SMILES, a dict of ``Structure`` fields
 (``smiles``, ``charge``, ``multiplicity``, ``coords``, ``metadata``), or a
-``Structure``. The input is the canonical SMILES of the input molecule.
+``Structure``. The input is the canonical SMILES of the input molecule; ``params``
+come from the config, so one script can serve several transformations::
 
-NOTE: the interface will be finalised against the sample scripts.
+    transformations:
+      NiF2: {script: ../transforms/ni_x2.py, params: {x: F}, multiplicity: 1}
+
+``charge`` / ``multiplicity`` given in the config override whatever the script
+returns (and also apply to ``none``). Multiplicity defaults to 1.
 """
 
 from __future__ import annotations
 
 import hashlib
 import importlib.util
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from bceg.structure import Structure
 
@@ -28,6 +33,9 @@ IDENTITY = "none"
 class Transformation:
     name: str
     script: Path | None = None
+    params: dict[str, Any] = field(default_factory=dict)
+    charge: int | None = None  # overrides the charge returned by the script / formal charge
+    multiplicity: int | None = None  # overrides the multiplicity returned by the script (default 1)
 
     def __post_init__(self) -> None:
         self._fn: Callable | None = None
@@ -41,7 +49,9 @@ class Transformation:
         return None if self.script is None else hashlib.sha256(self.script.read_bytes()).hexdigest()
 
     def identity(self) -> dict:
-        return {"name": self.name, "script": None if self.script is None else self.script.name, "script_sha256": self.sha256}
+        return {"name": self.name, "script": None if self.script is None else self.script.name,
+                "script_sha256": self.sha256, "params": self.params,
+                "charge": self.charge, "multiplicity": self.multiplicity}
 
     def _load(self) -> Callable:
         if self._fn is None:
@@ -55,13 +65,23 @@ class Transformation:
 
     def apply(self, canonical_smiles: str) -> Structure | None:
         """``None`` means the transformation does not apply to this molecule (it is skipped)."""
-        if self.script is None:
-            return Structure(canonical_smiles)
-        out = self._load()(canonical_smiles)
-        if out is None or isinstance(out, Structure):
-            return out
+        out = canonical_smiles if self.script is None else self._load()(canonical_smiles, **self.params)
+        if out is None:
+            return None
         if isinstance(out, str):
-            return Structure(out)
+            out = {"smiles": out}
         if isinstance(out, dict):
+            out = dict(out)
+            if self.charge is not None:
+                out["charge"] = self.charge
+            if self.multiplicity is not None:
+                out["multiplicity"] = self.multiplicity
             return Structure(**out)
+        if isinstance(out, Structure):
+            if self.charge is not None:
+                out.charge = self.charge
+            if self.multiplicity is not None:
+                out.multiplicity = self.multiplicity
+            out.check_spin()
+            return out
         raise TypeError(f"{self.script}: transform() returned {type(out).__name__}")

@@ -1,8 +1,14 @@
-"""SLURM job-array generation: one array per search method and one per post-optimisation LOT.
+"""SLURM job-array generation.
+
+``mode: chained`` (default): one array per method; each array element runs the
+search of one replicate and immediately its post-optimisation.
+``mode: split``: one array per search method plus one per post-optimisation
+level, the latter starting (``afterany``) once all search arrays have finished.
 
 Config (``slurm:`` block)::
 
     slurm:
+      mode: chained
       setup: ["module load orca", "source activate bceg"]   # run before each task
       tasks_per_job: 1          # tasks executed sequentially per array element
       array_throttle: 50        # max simultaneously running array elements
@@ -38,17 +44,24 @@ def _directives(profile: dict) -> list[str]:
     return lines
 
 
-def write_jobs(cfg: Config, tasks: list[Task], jobs_root: Path | None = None) -> Path:
+def new_jobdir(cfg: Config) -> Path:
+    jobdir = cfg.results_dir / "_jobs" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    (jobdir / "slurm_logs").mkdir(parents=True, exist_ok=True)
+    return jobdir
+
+
+def write_jobs(cfg: Config, tasks: list[Task], jobdir: Path | None = None) -> Path:
+    """Write task files, sbatch scripts and submit.sh into ``jobdir``; returns it."""
     s = cfg.slurm
     per_job = int(s.get("tasks_per_job", 1))
     throttle = s.get("array_throttle")
     bceg = s.get("command", "bceg")
-    jobdir = (jobs_root or cfg.results_dir / "_jobs") / datetime.now().strftime("%Y%m%d-%H%M%S")
+    jobdir = jobdir or new_jobdir(cfg)
     (jobdir / "slurm_logs").mkdir(parents=True, exist_ok=True)
 
     groups: dict[tuple[str, str], list[Task]] = defaultdict(list)
     for t in tasks:
-        groups[(t.kind, t.method if t.kind == "search" else cfg.refiner.lot)].append(t)
+        groups[(t.kind, cfg.refiner.lot if t.kind == "refine" else t.method)].append(t)
 
     submit = ["#!/bin/bash", "set -euo pipefail", f"cd {shlex.quote(str(jobdir))}", 'deps=""']
     refine_lines = []
@@ -56,8 +69,9 @@ def write_jobs(cfg: Config, tasks: list[Task], jobs_root: Path | None = None) ->
         name = f"{kind}_{label}"
         (jobdir / f"{name}.jsonl").write_text("".join(t.to_json() + "\n" for t in group))
         n_jobs = math.ceil(len(group) / per_job)
-        overrides = cfg.methods[label].slurm if kind == "search" else cfg.refiner_slurm
-        profile = {**s.get(group[0].resource, {}), **overrides}
+        overrides = cfg.refiner_slurm if kind == "refine" else cfg.methods[label].slurm
+        resource = "gpu" if any(t.resource == "gpu" for t in group) else "cpu"
+        profile = {**s.get(resource, {}), **overrides}
         array = f"0-{n_jobs - 1}" + (f"%{throttle}" if throttle else "")
         script = [
             "#!/bin/bash",
@@ -72,7 +86,7 @@ def write_jobs(cfg: Config, tasks: list[Task], jobs_root: Path | None = None) ->
             f"--chunk $SLURM_ARRAY_TASK_ID --chunk-size {per_job}",
         ]
         (jobdir / f"{name}.sbatch").write_text("\n".join(script) + "\n")
-        if kind == "search":
+        if kind != "refine":
             submit += [f"jid=$(sbatch --parsable {name}.sbatch)", 'deps="$deps:${jid%%;*}"', f'echo "{name}: $jid"']
         else:
             refine_lines += [

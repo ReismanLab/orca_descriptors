@@ -25,7 +25,8 @@ class InputMolecule:
 
 
 def load_inputs(path: str | Path) -> list[InputMolecule]:
-    """CSV with a ``smiles`` column and optional ``name``; or a plain text file, one SMILES per line."""
+    """CSV with a ``smiles`` column and optional ``name``; or a text file with one SMILES per line,
+    optionally followed by a name (``#`` starts a comment line)."""
     path = Path(path)
     if path.suffix == ".csv":
         df = pd.read_csv(path)
@@ -34,7 +35,11 @@ def load_inputs(path: str | Path) -> list[InputMolecule]:
         names = df["name"] if "name" in df.columns else [None] * len(df)
         rows = [(s, None if pd.isna(n) else str(n)) for s, n in zip(df["smiles"], names)]
     else:
-        rows = [(ln.split()[0], None) for ln in path.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
+        rows = []
+        for ln in path.read_text().splitlines():
+            if ln.strip() and not ln.lstrip().startswith("#"):
+                fields = ln.split()
+                rows.append((fields[0], fields[1] if len(fields) > 1 else None))
 
     mols: dict[str, InputMolecule] = {}
     for smi, name in rows:
@@ -47,7 +52,7 @@ def load_inputs(path: str | Path) -> list[InputMolecule]:
 
 
 def update_index(results_dir: Path, molecules: list[InputMolecule]) -> None:
-    """Maintain ``results/molecules.csv`` mapping InChIKey to the input SMILES."""
+    """Maintain ``<results_dir>/molecules.csv`` mapping InChIKey to the input SMILES."""
     path = Path(results_dir) / "molecules.csv"
     new = pd.DataFrame([m.__dict__ for m in molecules], columns=["inchikey", "canonical_smiles", "input_smiles", "name"])
     if path.exists():

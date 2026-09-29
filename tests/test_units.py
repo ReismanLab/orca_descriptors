@@ -108,3 +108,26 @@ def test_params_log_rules(tmp_path):
     assert check_or_write(p, make_params({"nested": {"y": [1, 2]}, "x": 1}, {"threads": 64})) == "match"
     with pytest.raises(ParamsMismatch, match=r"~ nested.y: \[1, 2\] -> \[1, 3\]"):
         check_or_write(p, make_params({"x": 1, "nested": {"y": [1, 3]}}))
+
+
+def test_spin_parity_checked():
+    assert Structure("CCCC", multiplicity=3).uhf == 2
+    with pytest.raises(ValueError, match="impossible"):
+        Structure("CCCC", multiplicity=2)
+    assert "uhf = 2" in to_toml(Crest().build_input(Structure("CCCC", multiplicity=3)))
+
+
+def test_select_multiplicity_rename():
+    from bceg.config import select
+
+    raw = {"transformations": {"none": {"script": None}, "NiF2": {"script": "x.py", "multiplicity": 3}}}
+    out = select(raw, transformations=["none", "NiF2"], multiplicity=3)
+    assert list(out["transformations"]) == ["none_m3", "NiF2"]
+    assert out["transformations"]["none_m3"]["multiplicity"] == 3
+
+
+def test_text_inputs_with_names(tmp_path):
+    f = tmp_path / "in.txt"
+    f.write_text("# header\nCCO  ethanol\nCCCC\n")
+    mols = load_inputs(f)
+    assert [(m.canonical_smiles, m.name) for m in mols] == [("CCO", "ethanol"), ("CCCC", None)]

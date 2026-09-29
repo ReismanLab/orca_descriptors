@@ -20,7 +20,7 @@ class RDKitETKDG(Searcher):
     defaults = {
         "n_confs": 300,
         "prune_rms": -1.0,
-        "ff_optimize": "none",  # none | auto | MMFF94 | MMFF94s | UFF
+        "ff_optimize": "none",  # none | auto (MMFF94s if parametrised, else none) | MMFF94 | MMFF94s | UFF
         "max_iters": 2000,
         "use_small_ring_torsions": True,
         "use_macrocycle_torsions": True,

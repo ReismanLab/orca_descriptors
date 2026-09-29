@@ -29,10 +29,16 @@ class Structure:
         self.mol = mol_from_smiles(self.smiles)
         if self.charge is None:
             self.charge = Chem.GetFormalCharge(self.mol)
+        self.check_spin()
         if self.coords is not None:
             self.coords = np.asarray(self.coords, dtype=float)
             if self.coords.shape != (self.mol.GetNumAtoms(), 3):
                 raise ValueError(f"coords shape {self.coords.shape} does not match {self.mol.GetNumAtoms()} atoms")
+
+    def check_spin(self) -> None:
+        n_electrons = sum(a.GetAtomicNum() for a in self.mol.GetAtoms()) - self.charge
+        if self.multiplicity < 1 or (n_electrons + self.multiplicity - 1) % 2:
+            raise ValueError(f"Multiplicity {self.multiplicity} impossible for {n_electrons} electrons ({self.smiles})")
 
     @property
     def elements(self) -> list[str]:

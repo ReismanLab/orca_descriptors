@@ -1,6 +1,6 @@
 """Single source of truth for the results folder layout.
 
-results/<transformation>/<InChIKey>/<method>/
+<results_dir (DATA)>/<transformation>/<InChIKey>/<method>/
     raw_<i>.xyz            ensemble search output, replicate i
     raw_<i>_<lot>.xyz      post-search optimised at level of theory <lot>
     params.json            search hyper-parameter log

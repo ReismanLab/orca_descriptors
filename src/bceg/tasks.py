@@ -1,7 +1,8 @@
 """Task expansion and execution.
 
 A task is one replicate of one method for one (transformation, molecule):
-either a ``search`` (writes raw_<i>.xyz) or a ``refine`` (writes raw_<i>_<lot>.xyz).
+a ``search`` (writes raw_<i>.xyz), a ``refine`` (writes raw_<i>_<lot>.xyz), or a
+``chain`` (search then refine in the same job; the default on the cluster).
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ DONE, FAILED, NOT_APPLICABLE, RUNNING = "done", "failed", "not_applicable", "run
 
 @dataclass(frozen=True)
 class Task:
-    kind: str  # "search" | "refine"
+    kind: str  # "search" | "refine" | "chain"
     transformation: str
     inchikey: str
     input_smiles: str
@@ -87,12 +88,19 @@ def _is_complete(record: dict | None, xyz: Path) -> bool:
 
 
 def expand(cfg: Config, molecules: list[InputMolecule] | None = None, write_params: bool = True,
-           pending_only: bool = True) -> tuple[list[Task], list[str]]:
+           pending_only: bool = True, chain: bool | None = None) -> tuple[list[Task], list[str]]:
     """All tasks implied by the config. Returns (tasks, params-mismatch messages).
 
     Methods whose existing params log does not match are excluded and reported. With
     ``write_params`` missing logs are created; otherwise the check is read-only.
+    ``chain`` (default: ``cfg.chained``) merges search + refine of a replicate into one task.
     """
+    chain = cfg.chained if chain is None else chain
+    if chain and cfg.refiner is not None:
+        split, problems = expand(cfg, molecules, write_params, pending_only, chain=False)
+        return _merge_chains(split, cfg), problems
+    if molecules is None and cfg.inputs is None:
+        raise ValueError("No input SMILES: set 'inputs' in the config or pass --smiles")
     molecules = molecules if molecules is not None else load_inputs(cfg.inputs)
     tasks, problems = [], []
     for tname, transformation in cfg.transformations.items():
@@ -124,6 +132,22 @@ def expand(cfg: Config, molecules: list[InputMolecule] | None = None, write_para
                     if not (pending_only and _is_complete(read_record(md.run_record(rep, lot)), md.refined(rep, lot))):
                         tasks.append(r)
     return tasks, problems
+
+
+def _merge_chains(split: list[Task], cfg: Config) -> list[Task]:
+    """One chain task per replicate with any pending step (GPU if either step needs it)."""
+    merged: dict[tuple, Task] = {}
+    for t in split:
+        key = (t.transformation, t.inchikey, t.method, t.replicate)
+        resource = t.resource
+        if key in merged:
+            resource = "gpu" if "gpu" in (resource, merged[key].resource) else "cpu"
+        elif t.kind == "refine":  # search already complete; the chain only needs the refiner
+            resource = cfg.refiner.resource_class()
+        else:
+            resource = "gpu" if "gpu" in (t.resource, cfg.refiner.resource_class()) else "cpu"
+        merged[key] = Task("chain", *key[:2], t.input_smiles, *key[2:], resource)
+    return list(merged.values())
 
 
 def apply_transform(transformation, mol: InputMolecule) -> Structure | None:
@@ -169,8 +193,10 @@ def run_task(cfg: Config, task: Task) -> str:
     md = method_dir(cfg.results_dir, task.transformation, task.inchikey, task.method)
     sp = search_params(cfg, task.method, task.transformation, structure)
     check_or_write(md.params(), sp, _hint(task.method))
-    if task.kind == "search":
-        return _run_search(cfg, task, structure, md, sp)
+    if task.kind in ("search", "chain"):
+        status = _run_search(cfg, task, structure, md, sp)
+        if task.kind == "search" or cfg.refiner is None or status not in (DONE, "skipped"):
+            return status
     rp = refine_params(cfg, sp["sha256"])
     check_or_write(md.params(cfg.refiner.lot), rp, _hint(task.method))
     return _run_refine(cfg, task, structure, md, sp)
@@ -259,7 +285,7 @@ def run_local(cfg: Config) -> dict[str, int]:
     for p in problems:
         warnings.warn(p)
     counts: dict[str, int] = {}
-    for task in sorted(tasks, key=lambda t: t.kind != "search"):
+    for task in sorted(tasks, key=lambda t: t.kind == "refine"):
         status = run_task(cfg, task)
         counts[status] = counts.get(status, 0) + 1
         print(f"[{status:>14}] {task.id}", flush=True)

@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from bceg.external import find_executable, run
-from bceg.search.base import START_DEFAULTS, SearchResult, Searcher
+from bceg.search.base import START_DEFAULTS, START_RESOURCE_KEYS, SearchResult, Searcher
 from bceg.structure import Structure
 from bceg.xyz import Conformer, read_xyz, write_xyz
 
@@ -23,7 +23,7 @@ class Goat(Searcher):
         "maxcore": 2000,
         "orca_cmd": "orca",  # use the absolute path for parallel runs
     }
-    resource_keys = {"nprocs", "maxcore", "orca_cmd"}
+    resource_keys = {"nprocs", "maxcore", "orca_cmd"} | START_RESOURCE_KEYS
 
     def build_input(self, structure: Structure) -> str:
         p = self.params
@@ -37,13 +37,13 @@ class Goat(Searcher):
     def run(self, structure: Structure, replicate: int, workdir: Path) -> SearchResult:
         exe = find_executable(self.params["orca_cmd"])
         seed = self.seed(replicate)
-        coords, start = self.start_geometry(structure, seed)
+        coords, start = self.start_geometry(structure, seed, workdir)
         write_xyz(workdir / "input.xyz", structure.elements, [Conformer(coords)])
         (workdir / "goat.inp").write_text(self.build_input(structure))
 
         proc = run([exe, "goat.inp"], workdir, threads=1, log_name="goat.out")
         out = workdir / "goat.finalensemble.xyz"
-        logs = [workdir / "goat.inp", workdir / "input.xyz", workdir / "goat.out"]
+        logs = [workdir / "goat.inp", workdir / "start_geometry.xyz", workdir / "goat.out"]
         if proc.returncode != 0 or not out.exists():
             raise RuntimeError(f"GOAT failed (exit {proc.returncode}):\n{proc.stdout[-3000:]}")
         elements, confs = read_xyz(out)

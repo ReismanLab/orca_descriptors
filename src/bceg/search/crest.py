@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from bceg.external import find_executable, program_version, run
-from bceg.search.base import START_DEFAULTS, SearchResult, Searcher
+from bceg.search.base import START_DEFAULTS, START_RESOURCE_KEYS, SearchResult, Searcher
 from bceg.structure import Structure
 from bceg.xyz import Conformer, read_xyz, write_xyz
 
@@ -36,7 +36,7 @@ class Crest(Searcher):
         "mlip_device": "cuda",
         "executable": "crest",
     }
-    resource_keys = {"threads", "refine_threads", "mlip_device", "executable"}
+    resource_keys = {"threads", "refine_threads", "mlip_device", "executable"} | START_RESOURCE_KEYS
 
     def resource_class(self) -> str:
         p = self.params
@@ -65,13 +65,13 @@ class Crest(Searcher):
     def run(self, structure: Structure, replicate: int, workdir: Path) -> SearchResult:
         exe = find_executable(self.params["executable"])
         seed = self.seed(replicate)
-        coords, start = self.start_geometry(structure, seed)
+        coords, start = self.start_geometry(structure, seed, workdir)
         write_xyz(workdir / "input.xyz", structure.elements, [Conformer(coords)])
         (workdir / "input.toml").write_text(to_toml(self.build_input(structure)))
 
         proc = run([exe, "--input", "input.toml"], workdir, threads=self.params["threads"], log_name="crest.out")
         out = workdir / "crest_conformers.xyz"
-        logs = [workdir / "input.toml", workdir / "input.xyz", workdir / "crest.out"]
+        logs = [workdir / "input.toml", workdir / "start_geometry.xyz", workdir / "crest.out"]
         if proc.returncode != 0 or not out.exists():
             raise RuntimeError(f"CREST failed (exit {proc.returncode}):\n{proc.stdout[-3000:]}")
         elements, confs = read_xyz(out)

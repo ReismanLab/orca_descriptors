@@ -44,7 +44,8 @@ def is_organic(elements: list[str]) -> bool:
 def embed(mol: Chem.Mol, seed: int, ff: str = "auto", max_iters: int = 2000) -> np.ndarray:
     """One ETKDGv3 conformer, optionally force-field relaxed. Returns (n, 3) coords in Angstrom.
 
-    ``ff``: "auto" (MMFF94s if parametrised, else UFF), "MMFF94", "MMFF94s", "UFF", or "none".
+    ``ff``: "auto" (MMFF94s if parametrised, else none), "MMFF94", "MMFF94s", "UFF", or "none".
+    UFF is not used automatically: with dative Ni bonds it can collapse ligands (e.g. H-H in NiH2).
     """
     mol = Chem.Mol(mol)
     params = AllChem.ETKDGv3()
@@ -67,7 +68,8 @@ def embed(mol: Chem.Mol, seed: int, ff: str = "auto", max_iters: int = 2000) -> 
 
 
 def ff_for(mol: Chem.Mol) -> str:
-    return "MMFF94s" if AllChem.MMFFHasAllMoleculeParams(mol) else "UFF"
+    """Force field chosen by ``auto``: MMFF94s if parametrised, else none (UFF breaks dative Ni complexes)."""
+    return "MMFF94s" if AllChem.MMFFHasAllMoleculeParams(mol) else "none"
 
 
 def reorder_to_template(mol: Chem.Mol, template: Chem.Mol) -> list[int]:

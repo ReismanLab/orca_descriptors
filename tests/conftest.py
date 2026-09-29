@@ -39,7 +39,7 @@ def project(tmp_path: Path):
             return None
     '''))
 
-    def write(params: str = "{n_confs: 4}", refiner_params: str = "{}", extra: str = "") -> Path:
+    def write(params: str = "{n_confs: 4}", refiner_params: str = "{}", mode: str = "chained") -> Path:
         cfg = tmp_path / "config.yaml"
         cfg.write_text(textwrap.dedent(f"""
             inputs: inputs.csv
@@ -56,8 +56,9 @@ def project(tmp_path: Path):
               refiner: fake
               params: {refiner_params}
             slurm:
+              mode: {mode}
               cpu: {{partition: short, cpus_per_task: 2}}
-            {extra}
+              gpu: {{partition: gpu, gres: "gpu:1"}}
         """))
         return cfg
 

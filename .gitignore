@@ -9,16 +9,6 @@ dist/
 .ipynb_checkpoints/
 .DS_Store
 
-# Pipeline outputs (can be large; commit curated results elsewhere)
-results/
-
-# QM program scratch
-xtbrestart
-xtbtopo.mol
-wbo
-charges
-.xtboptok
-*.engrad
-crest_*
-cregen_*
-coord*
+# Pipeline outputs: the DATA/ folder exists in the repo but its content is never committed
+DATA/*
+!DATA/.gitkeep

@@ -1,15 +1,20 @@
 # B-CEG-MCD example configuration. Relative paths are relative to this file.
-inputs: ../data/inputs/example_NN_ligands.csv
-results_dir: ../results
+inputs: ../inputs/example_NN_ligands.txt   # default input list; `bceg submit --smiles FILE` overrides it
+results_dir: ../DATA                         # git-ignored
 replicates: 3
 
-# depth-1 folders. "none" = no transformation (input SMILES as is).
-# Add scripts as  NiF2: ../transforms/nif2.py   (see transforms/README.md)
+# depth-1 folders; pick with `bceg submit -t NiF2` (default: all). See transforms/README.md
+# multiplicity (default 1) is carried to every step: xtb pre-opt, CREST/GOAT, UMA.
 transformations:
-  none: null
+  none: {multiplicity: 1}
+  NiF2: {script: ../transforms/ni_x2.py, params: {x: F}, multiplicity: 1}
+  NiH2: {script: ../transforms/ni_x2.py, params: {x: H}, multiplicity: 1}
 
 # depth-3 folders. The folder name IS the method name: changing any hyper-parameter
 # of an existing method is refused (see params.json) -> give it a new name.
+# CREST, GOAT and molassembler start from an ETKDG geometry (new seed per replicate),
+# pre-optimised with GFN2-xTB and checked (metal-ligand bonds <= 2.5 A, no broken/collapsed bonds):
+#   start_preopt: gfn2 | gfnff | none,  max_metal_ligand_distance: 2.5,  start_max_attempts: 10
 methods:
   crest_gfn2:
     searcher: crest
@@ -45,6 +50,7 @@ post_optimization:
   params: {model: uma-s-1p2, task: omol, optimizer: LBFGS, fmax: 0.05, max_steps: 500, device: cuda}
 
 slurm:
+  mode: chained            # chained: each job = search + post-optimisation | split: separate dependent arrays
   setup:
     - source ~/miniconda3/etc/profile.d/conda.sh
     - conda activate bceg
