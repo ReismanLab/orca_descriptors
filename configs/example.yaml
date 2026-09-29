@@ -12,29 +12,50 @@ transformations:
 
 # depth-3 folders. The folder name IS the method name: changing any hyper-parameter
 # of an existing method is refused (see params.json) -> give it a new name.
+# Every parameter left out here keeps its default (bceg.search.<searcher>.defaults); the defaults
+# are filled in and logged in params.json, so nothing that determines the ensemble stays implicit.
 # CREST, GOAT and molassembler start from an ETKDG geometry (new seed per replicate),
 # pre-optimised with GFN2-xTB and checked (metal-ligand bonds <= 2.5 A, no broken/collapsed bonds):
 #   start_preopt: gfn2 | gfnff | none,  max_metal_ligand_distance: 2.5,  start_max_attempts: 10
+# Energy window of the final ensemble (kcal/mol, 6.0 by default in both programs) spelled out below:
+# CREST sorts with cregen ([cregen] ewin), GOAT with %goat MaxEn. molassembler, rdkit_etkdg and loqi
+# generate geometries without an energy cut-off and have no equivalent (rdkit prunes by RMSD).
 methods:
   crest_gfn2:
     searcher: crest
-    params: {workhorse: gfn2}          # threads: default = slurm cpus_per_task
+    params:
+      workhorse: gfn2                  # threads: default = slurm cpus_per_task
+      toml_extra: {cregen: {ewin: 6.0}}    # deep-merged into the CREST TOML
 
-  crest_gfn2+uma-sp:
-    searcher: crest
-    params: {workhorse: gfn2, refine: sp}    # refine_level defaults to UMA (uma-s-1p2, omol)
-
-  crest_gfn2+uma-opt:
-    searcher: crest
-    params: {workhorse: gfn2, refine: opt}
+  # Inline UMA refinement during the search, disabled until CREST 3.1 is released: it needs CREST's
+  # `mlip` level, and conda-forge tops out at 3.0.2 (3.1 exists only on the open PR crest-lab/crest#483).
+  # To enable, uncomment; either put a 3.1 build in the env or add `executable: /abs/path/to/crest-3.1`
+  # to params (see SUBMITTING.md). Enabling them changes no existing result: the UMA post-optimisation
+  # below is separate, goes through fairchem directly, and works with 3.0.2.
+  # crest_gfn2+uma-sp:
+  #   searcher: crest
+  #   params:
+  #     workhorse: gfn2
+  #     refine: sp                       # refine_level defaults to UMA (uma-s-1p2, omol)
+  #     toml_extra: {cregen: {ewin: 6.0}}
+  #
+  # crest_gfn2+uma-opt:
+  #   searcher: crest
+  #   params:
+  #     workhorse: gfn2
+  #     refine: opt
+  #     toml_extra: {cregen: {ewin: 6.0}}
 
   goat_xtb:
     searcher: goat
-    params: {method: XTB, orca_cmd: /path/to/orca}
+    params:
+      method: XTB
+      orca_cmd: /path/to/orca          # absolute path: ORCA needs it for parallel runs
+      goat_block: {MaxEn: 6.0}         # lines inside %goat ... end
 
   molassembler:
     searcher: molassembler
-    params: {n_confs: 100}
+    params: {n_confs: 100}             # distance geometry: no energies, hence no ewin
 
   rdkit_etkdg:
     searcher: rdkit_etkdg
