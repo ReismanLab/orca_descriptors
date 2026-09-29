@@ -159,6 +159,32 @@ bceg run    configs/example.yaml --smiles inputs/example_NN_ligands.txt -t none 
 
 Each cluster job runs the conformer search of one replicate and then its UMA post-optimisation.
 
+### The config defines everything; the flags only narrow it
+
+Keep the config exhaustive -- every transformation and method you might ever want, defined and
+documented in one place -- and choose what to actually run per submission:
+
+| flag | effect |
+|---|---|
+| `-t` / `--transformation` | run only these transformations (repeat the flag: `-t NiF2 -t none`) |
+| `-m` / `--methods` | run only these methods (comma-separated, or repeat the flag) |
+| *(omit both)* | run every transformation x every method in the config |
+| `--smiles FILE` | use this input list instead of `inputs:` |
+| `--multiplicity N` | **override**, not a filter (see below) |
+
+`-t` and `-m` can only *select* what the config already defines: naming something it does not have is
+an error listing what is configured, and neither flag can define a method. So there is no need to
+comment blocks out of the YAML to skip them -- leave them defined and filter on the command line. That
+keeps one config valid for every run, instead of a file whose meaning depends on what is commented out
+this week.
+
+`--multiplicity` is the exception: it overrides the configured value, and when it differs the results
+go to `<transformation>_m<N>/`, so spin states never share a folder. Put the multiplicity you normally
+want in the config and use the flag only for a one-off comparison.
+
+`submit`, `run` and `status` take the same selection flags, so you can check the status of exactly the
+subset you submitted.
+
 ## Status
 
 - Implemented and unit-tested: inputs and canonicalisation, NiF2/NiH2 transformation, folder layout,

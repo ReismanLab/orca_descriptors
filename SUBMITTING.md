@@ -187,6 +187,11 @@ bceg submit configs/cluster.yaml --smiles my_ligands.txt -t NiF2 -t NiH2
 bceg submit configs/cluster.yaml --smiles my_ligands.txt -t NiF2 -m crest_gfn2,molassembler --multiplicity 3
 ```
 
+`-t` and `-m` **select from** what the config defines; they cannot add anything, and naming something
+the config does not have is an error. Keep the config exhaustive and filter here rather than commenting
+blocks out of the YAML. `--multiplicity` is the one flag that overrides rather than filters, and it
+sends results to `<transformation>_m<N>/`.
+
 `submit` does the following:
 1. Checks every `params.json` that already exists. If a method's hyper-parameters changed, nothing is
    submitted and you get a diff; rename the method in the config.
