@@ -6,9 +6,9 @@ import pytest
 from rdkit import Chem
 
 from bceg.inputs import InputMolecule
-from bceg.transforms import Transformation
+from bceg.transforms import BUILTIN_TRANSFORMS, Transformation
 
-SCRIPT = Path(__file__).parents[1] / "transforms" / "ni_x2.py"
+SCRIPT = BUILTIN_TRANSFORMS / "ni_x2.py"
 
 LIGANDS = {
     "bipy": "c1ccc(-c2ccccn2)nc1",

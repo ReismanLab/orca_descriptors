@@ -22,7 +22,7 @@ SMILES file ──canonicalise──► InChIKey (depth-2 folder)
 | topic | decision |
 |---|---|
 | Input | text file of SMILES, given at submission with the transformation(s): `bceg submit CONFIG --smiles FILE -t NiF2` |
-| Transformations | `none`, `NiF2`, `NiH2` (`transforms/ni_x2.py`, adapted from `scripts_4_structure/make_Ni{F2,H2}.py`); other scripts can be added |
+| Transformations | `none`, `NiF2`, `NiH2` (`src/bceg/transforms_builtin/ni_x2.py`, adapted from `scripts_4_structure/make_Ni{F2,H2}.py`); other scripts can be added |
 | Searchers | CREST, GOAT, molassembler, RDKit ETKDG, LoQI |
 | CREST inline steps | `refine: sp` / `refine: opt` (composite workflow); default level UMA (`mlip`, `uma-s-1p2`, task `omol`) |
 | Post-search optimisation | user-specified; default UMA-S (`uma-s-1p2`) |

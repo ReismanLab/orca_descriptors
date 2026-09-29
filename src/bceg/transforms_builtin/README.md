@@ -17,8 +17,8 @@ def transform(smiles: str, **params):
 ```yaml
 transformations:
   none: {multiplicity: 1}
-  NiF2: {script: ../transforms/ni_x2.py, params: {x: F}, multiplicity: 1}
-  NiH2: {script: ../transforms/ni_x2.py, params: {x: H}, multiplicity: 1}
+  NiF2: {script: ni_x2.py, params: {x: F}, multiplicity: 1}
+  NiH2: {script: ni_x2.py, params: {x: H}, multiplicity: 1}
 ```
 
 `charge` and `multiplicity` given in the config override what the script returns. Multiplicity

@@ -3,12 +3,13 @@ inputs: ../inputs/example_NN_ligands.txt   # default input list; `bceg submit --
 results_dir: ../DATA                         # git-ignored
 replicates: 3
 
-# depth-1 folders; pick with `bceg submit -t NiF2` (default: all). See transforms/README.md
+# depth-1 folders; pick with `bceg submit -t NiF2` (default: all). `script:` names a script shipped
+# with bceg (src/bceg/transforms_builtin/README.md) or a path to one of your own, relative to THIS file.
 # multiplicity (default 1) is carried to every step: xtb pre-opt, CREST/GOAT, UMA.
 transformations:
   none: {multiplicity: 1}
-  NiF2: {script: ../transforms/ni_x2.py, params: {x: F}, multiplicity: 1}
-  NiH2: {script: ../transforms/ni_x2.py, params: {x: H}, multiplicity: 1}
+  NiF2: {script: ni_x2.py, params: {x: F}, multiplicity: 1}
+  NiH2: {script: ni_x2.py, params: {x: H}, multiplicity: 1}
 
 # depth-3 folders. The folder name IS the method name: changing any hyper-parameter
 # of an existing method is refused (see params.json) -> give it a new name.

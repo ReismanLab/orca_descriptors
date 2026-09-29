@@ -13,9 +13,9 @@ from bceg.chem import embed
 from bceg.search.base import START_DEFAULTS
 from bceg.search.crest import Crest
 from bceg.structure import Structure
-from bceg.transforms import Transformation
+from bceg.transforms import BUILTIN_TRANSFORMS, Transformation
 
-SCRIPT = Path(__file__).parents[1] / "transforms" / "ni_x2.py"
+SCRIPT = BUILTIN_TRANSFORMS / "ni_x2.py"
 
 
 def nix2(x: str, mult: int = 1) -> Structure:

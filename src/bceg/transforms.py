@@ -10,7 +10,7 @@ returning ``None`` to skip a molecule, or the product SMILES, a dict of ``Struct
 come from the config, so one script can serve several transformations::
 
     transformations:
-      NiF2: {script: ../transforms/ni_x2.py, params: {x: F}, multiplicity: 1}
+      NiF2: {script: ni_x2.py, params: {x: F}, multiplicity: 1}
 
 ``charge`` / ``multiplicity`` given in the config override whatever the script
 returns (and also apply to ``none``). Multiplicity defaults to 1.
@@ -27,6 +27,8 @@ from typing import Any, Callable
 from bceg.structure import Structure
 
 IDENTITY = "none"
+#: Scripts shipped with bceg; a config may name one by bare name (see bceg.config._script_path).
+BUILTIN_TRANSFORMS = Path(__file__).parent / "transforms_builtin"
 
 
 @dataclass

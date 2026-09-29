@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+from bceg.config import read_raw
 from bceg.inputs import InputMolecule, load_inputs
 from bceg.layout import method_dir
 from bceg.provenance import ParamsMismatch, check_or_write, make_params
 from bceg.search import SEARCHERS
 from bceg.search.crest import Crest, to_toml
 from bceg.structure import Structure
+from bceg.transforms import BUILTIN_TRANSFORMS, Transformation
 from bceg.xyz import Conformer, read_xyz, write_xyz
 
 
@@ -133,3 +138,44 @@ def test_text_inputs_with_names(tmp_path):
     f.write_text("# header\nCCO  ethanol\nCCCC\n")
     mols = load_inputs(f)
     assert [(m.canonical_smiles, m.name) for m in mols] == [("CCO", "ethanol"), ("CCCC", None)]
+
+
+# --- transformation script resolution (bceg.config._script_path) -------------
+
+def _config(tmp_path: Path, script: str) -> Path:
+    cfg = tmp_path / "cluster.yaml"
+    cfg.write_text(f"results_dir: ./DATA\ntransformations: {{NiF2: {{script: {script}, params: {{x: F}}}}}}\n")
+    return cfg
+
+
+def test_shipped_script_resolves_by_bare_name_from_anywhere(tmp_path):
+    """A config outside the repository may name a shipped script without a path."""
+    raw = read_raw(_config(tmp_path, "ni_x2.py"))
+    assert Path(raw["transformations"]["NiF2"]["script"]) == BUILTIN_TRANSFORMS / "ni_x2.py"
+
+
+def test_old_style_relative_path_still_finds_the_shipped_script(tmp_path):
+    """Configs copied out of configs/ keep working: the bare name is the last resort."""
+    raw = read_raw(_config(tmp_path, "../transforms/ni_x2.py"))
+    assert Path(raw["transformations"]["NiF2"]["script"]) == BUILTIN_TRANSFORMS / "ni_x2.py"
+
+
+def test_own_script_next_to_the_config_wins_over_a_shipped_one(tmp_path):
+    """A local file shadows the shipped script of the same name, so forks stay possible."""
+    mine = tmp_path / "ni_x2.py"
+    mine.write_text("def transform(smiles, **params):\n    return smiles\n")
+    raw = read_raw(_config(tmp_path, "ni_x2.py"))
+    assert Path(raw["transformations"]["NiF2"]["script"]) == mine
+
+
+def test_missing_script_names_every_location_tried(tmp_path):
+    with pytest.raises(FileNotFoundError) as exc:
+        read_raw(_config(tmp_path, "nope.py"))
+    assert str(tmp_path / "nope.py") in str(exc.value) and str(BUILTIN_TRANSFORMS) in str(exc.value)
+
+
+def test_moving_the_script_did_not_change_its_identity(tmp_path):
+    """script_sha256 goes into params.json: the move must not invalidate existing results."""
+    t = Transformation("NiF2", BUILTIN_TRANSFORMS / "ni_x2.py", {"x": "F"})
+    assert t.identity()["script"] == "ni_x2.py"
+    assert t.identity()["script_sha256"] == hashlib.sha256((BUILTIN_TRANSFORMS / "ni_x2.py").read_bytes()).hexdigest()

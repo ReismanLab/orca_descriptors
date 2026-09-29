@@ -30,7 +30,7 @@ conda config --append envs_dirs /groups/ReismanLab/miniconda3/envs
 
 The `bceg` package is part of that environment, installed from the shared clone at
 `/groups/ReismanLab/B-CEG-MCD`. Cloning the repository yourself is optional and only gives you
-`configs/`, `inputs/` and `transforms/` to copy from — **editing `src/` in a clone of your own changes
+`configs/` and `inputs/` to copy from — **editing `src/` in a clone of your own changes
 nothing about what runs**. To work on the code, build your own environment (see
 [Development](README.md#development)).
 
@@ -51,9 +51,14 @@ Copy a config into a directory you own and edit it:
 cp /groups/ReismanLab/B-CEG-MCD/configs/example.yaml ~/cluster.yaml
 ```
 
-Two things must change. `results_dir:` is resolved relative to the config file, so give it an absolute
-path; and the `slurm: setup:` lines must activate the shared environment, because a compute node starts
-from a bare shell:
+Paths inside the config are relative **to the config file**, so a copy keeps working as long as the
+files it points at travel with it -- put your SMILES list next to it and `inputs: my_ligands.txt` is
+enough. The `NiF2` / `NiH2` `script:` entries need nothing at all: they name a script shipped inside
+the package, so they resolve from any directory. (`--smiles` is the one exception to the rule: it is
+resolved against your current directory, not the config.)
+
+Two things must change. `results_dir:` should be an absolute path you own, and the `slurm: setup:`
+lines must activate the shared environment, because a compute node starts from a bare shell:
 
 ```yaml
 results_dir: /groups/ReismanLab/DATA     # absolute; group-writable and setgid if users share results
@@ -153,11 +158,12 @@ and the InChIKey of the input SMILES names its folder. Duplicates are dropped.
 | name | what | depth-1 folder |
 |---|---|---|
 | `none` | input molecule as is | `DATA/none/` |
-| `NiF2` | N,N ligand → L-NiF2 (`transforms/ni_x2.py`) | `DATA/NiF2/` |
+| `NiF2` | N,N ligand → L-NiF2 (`ni_x2.py`, shipped with bceg) | `DATA/NiF2/` |
 | `NiH2` | N,N ligand → L-NiH2 | `DATA/NiH2/` |
 
 Ligands that match none of the script's scaffolds (pyox, box, biox, bilm, bipy) are skipped for that
-transformation. To add another transformation, write a script (see [transforms/README.md](transforms/README.md))
+transformation. To add another transformation, write a script (see
+[src/bceg/transforms_builtin/README.md](src/bceg/transforms_builtin/README.md))
 and add it to the config.
 
 **Spin multiplicity** defaults to 1. It is used by every step: the xtb pre-optimisation (`--uhf`), CREST

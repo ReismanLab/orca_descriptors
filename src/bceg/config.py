@@ -18,7 +18,7 @@ import yaml
 from bceg.layout import check_name
 from bceg.refine import REFINERS, Refiner
 from bceg.search import SEARCHERS, Searcher
-from bceg.transforms import IDENTITY, Transformation
+from bceg.transforms import BUILTIN_TRANSFORMS, IDENTITY, Transformation
 
 TOP_LEVEL_KEYS = {"inputs", "results_dir", "replicates", "transformations", "methods", "post_optimization", "slurm"}
 TRANSFORMATION_KEYS = {"script", "params", "charge", "multiplicity"}
@@ -35,6 +35,32 @@ class Method:
 def _transformation_spec(spec: Any) -> dict:
     """``null`` | ``"path.py"`` | ``{script, params, charge, multiplicity}`` -> dict."""
     return {"script": spec} if spec is None or isinstance(spec, str) else dict(spec)
+
+
+def _script_path(script: str | None, config_dir: Path) -> str | None:
+    """Absolute path of a transformation ``script:``.
+
+    Tried in order: an absolute path as given; relative to the config file, so a
+    script of your own next to your config works; then among the scripts shipped
+    with bceg, by relative path and by bare name. The last step is what lets a
+    config say ``script: ni_x2.py`` from any directory: the shipped scripts are
+    code, not data, so a config must not have to know where the repository is
+    checked out -- and after a non-editable install there is no checkout at all.
+    Matching by bare name also keeps older configs saying
+    ``../transforms/ni_x2.py`` working once they are copied out of ``configs/``.
+    """
+    if script is None:
+        return None
+    p = Path(script)
+    if p.is_absolute():
+        return str(p)  # reported by Transformation.__post_init__ if it does not exist
+    tried = [config_dir / p, BUILTIN_TRANSFORMS / p, BUILTIN_TRANSFORMS / p.name]
+    for candidate in tried:
+        if candidate.exists():
+            return str(candidate.resolve())
+    raise FileNotFoundError(
+        f"Transformation script {script!r} not found. Looked in: "
+        + ", ".join(str(c) for c in dict.fromkeys(tried)))
 
 
 def read_raw(path: str | Path) -> dict:
@@ -55,7 +81,7 @@ def read_raw(path: str | Path) -> dict:
     transformations = {}
     for name, spec in (raw.get("transformations") or {IDENTITY: None}).items():
         spec = _transformation_spec(spec)
-        spec["script"] = rel(spec.get("script"))
+        spec["script"] = _script_path(spec.get("script"), path.parent)
         transformations[name] = spec
     raw["transformations"] = transformations
     return raw

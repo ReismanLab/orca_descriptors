@@ -9,6 +9,7 @@ from bceg.config import Config
 from bceg.inputs import InputMolecule
 from bceg.slurm import write_jobs
 from bceg.tasks import expand, run_local
+from bceg.transforms import BUILTIN_TRANSFORMS
 
 BUTANE = InputMolecule.from_smiles("CCCC").inchikey
 ETHANOL = InputMolecule.from_smiles("CCO").inchikey
@@ -200,7 +201,7 @@ def test_not_applicable_methods_create_no_folder(project, tmp_path):
     from pathlib import Path
 
     root, write = project
-    script = Path(__file__).parents[1] / "transforms" / "ni_x2.py"
+    script = BUILTIN_TRANSFORMS / "ni_x2.py"
     (root / "inputs.csv").write_text("smiles\nc1ccc(-c2ccccn2)nc1\n")
     cfg = Config.load(write("{}", searcher="loqi", transformations=f"{{NiF2: {{script: {script}, params: {{x: F}}}}}}"))
     assert expand(cfg)[0] == []

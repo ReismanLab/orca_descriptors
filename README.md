@@ -49,8 +49,8 @@ These requirements define the project; the code implements them.
 
 1. **Inputs**: a text file with one SMILES per line and an optional name (see `inputs/`). Each SMILES
    is canonicalised with RDKit, and the InChIKey of the canonical **input** names its folder.
-2. **Transformation** (pre-processing): `none`, `NiF2`, `NiH2` (N,N ligand → L-NiX2, `transforms/ni_x2.py`),
-   or your own script (see [transforms/README.md](transforms/README.md)). The spin multiplicity (default 1)
+2. **Transformation** (pre-processing): `none`, `NiF2`, `NiH2` (N,N ligand → L-NiX2, `ni_x2.py`, shipped with the package),
+   or your own script (see [src/bceg/transforms_builtin/README.md](src/bceg/transforms_builtin/README.md)). The spin multiplicity (default 1)
    is set per transformation or with `--multiplicity`, and is passed to every step.
 3. **Ensemble search**, one of:
    | searcher | program | notes |
@@ -188,7 +188,7 @@ SUBMITTING.md         how to submit jobs on the cluster
 PLAN.md               roadmap, decisions, open items
 configs/              configurations (methods, transformations, post-optimisation, cluster)
 inputs/               SMILES lists
-transforms/           pre-processing scripts (ni_x2.py -> NiF2 / NiH2)
+src/bceg/transforms_builtin/  pre-processing scripts shipped with bceg (ni_x2.py -> NiF2 / NiH2)
 scripts_4_structure/  original stand-alone NiF2 / NiH2 scripts (reference; ni_x2.py replaces them)
 src/bceg/             the package
 tests/                pytest suite
