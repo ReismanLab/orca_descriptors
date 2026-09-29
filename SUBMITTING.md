@@ -74,9 +74,14 @@ slurm:
   gpu: {partition: <gpu partition>, time: "24:00:00", cpus_per_task: 8, mem: 32G, gres: "gpu:1", account: <account>}
 ```
 
-If a step needs a GPU (UMA post-optimisation on `cuda`, or CREST with inline UMA), the job goes to the
-`gpu` profile; otherwise it goes to `cpu`. Thread counts (`threads` for CREST and ETKDG, `nprocs` for GOAT,
-the xtb pre-optimisation) default to the job's `cpus_per_task` (`SLURM_CPUS_PER_TASK`). In chained mode,
+The UMA post-optimisation runs on the CPU by default, so the `gpu:` profile above is optional: define it
+only if you set `post_optimization.params.device: cuda` (much faster) or use CREST with inline UMA. A step
+that needs a GPU goes to the `gpu` profile; everything else goes to `cpu`. In `chained` mode a GPU step
+makes its whole job a GPU job, CREST search included -- use `mode: split` to avoid holding a GPU through
+the search.
+
+Thread counts (`threads` for CREST and ETKDG, `nprocs` for GOAT, the xtb pre-optimisation) default to the
+job's `cpus_per_task` (`SLURM_CPUS_PER_TASK`). In chained mode,
 `post_optimization.slurm` and the method's `slurm` overrides both apply, the method's taking precedence. A method can override the profile, e.g.
 `crest_gfn2: {searcher: crest, params: {...}, slurm: {time: "48:00:00"}}`.
 

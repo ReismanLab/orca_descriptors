@@ -30,7 +30,7 @@ class UMA(Refiner):
         "max_steps": 500,
         "keep_unconverged": True,  # unconverged conformers are kept and flagged converged=False
         "lot": None,  # label override; defaults to the model name
-        "device": "cuda",
+        "device": "cpu",  # "cuda" sends the step (and, chained, its whole job) to the gpu profile
     }
     resource_keys = {"device"}
 

@@ -10,6 +10,7 @@ from bceg.config import read_raw
 from bceg.inputs import InputMolecule, load_inputs
 from bceg.layout import method_dir
 from bceg.provenance import ParamsMismatch, check_or_write, make_params
+from bceg.refine import REFINERS
 from bceg.search import SEARCHERS
 from bceg.search.crest import Crest, to_toml
 from bceg.structure import Structure
@@ -179,3 +180,11 @@ def test_moving_the_script_did_not_change_its_identity(tmp_path):
     t = Transformation("NiF2", BUILTIN_TRANSFORMS / "ni_x2.py", {"x": "F"})
     assert t.identity()["script"] == "ni_x2.py"
     assert t.identity()["script_sha256"] == hashlib.sha256((BUILTIN_TRANSFORMS / "ni_x2.py").read_bytes()).hexdigest()
+
+
+def test_uma_defaults_to_cpu_so_no_gpu_profile_is_needed():
+    """A default config must not silently require a slurm `gpu:` profile it has no reason to define."""
+    uma = REFINERS["uma"]()
+    assert uma.params["device"] == "cpu"
+    assert uma.resource_class() == "cpu"
+    assert REFINERS["uma"](device="cuda").resource_class() == "gpu"
