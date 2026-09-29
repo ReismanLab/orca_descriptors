@@ -212,7 +212,8 @@ cause, then run the same `bceg submit` again.
 
 To try things before the cluster, `bceg run` executes the same tasks locally, e.g. with the `crest` conda env
 (CREST 3.0.2 + xtb) on `PATH`: `bceg run configs/example.yaml --smiles in.txt -t none -m crest_gfn2`.
-CREST 3.0.2 has no `mlip` level, so the `+uma` methods need CREST 3.1.
+CREST 3.0.2 has no `mlip` level, so the `+uma` methods cannot run either locally or on the cluster; they
+are commented out in `configs/example.yaml` until CREST 3.1 is released (see the table in §1).
 
 ## What each job does
 
