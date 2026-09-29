@@ -1,0 +1,266 @@
+"""Task expansion and execution.
+
+A task is one replicate of one method for one (transformation, molecule):
+either a ``search`` (writes raw_<i>.xyz) or a ``refine`` (writes raw_<i>_<lot>.xyz).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import shutil
+import socket
+import time
+import traceback
+import warnings
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+from bceg.config import Config
+from bceg.external import workdir
+from bceg.inputs import InputMolecule, load_inputs, update_index
+from bceg.layout import MethodDir, method_dir
+from bceg.provenance import ParamsMismatch, check_or_write, make_params, read_record, write_record
+from bceg.search import SEED_RULE
+from bceg.structure import Structure
+from bceg.xyz import read_xyz, write_xyz
+
+DONE, FAILED, NOT_APPLICABLE, RUNNING = "done", "failed", "not_applicable", "running"
+
+
+@dataclass(frozen=True)
+class Task:
+    kind: str  # "search" | "refine"
+    transformation: str
+    inchikey: str
+    input_smiles: str
+    method: str
+    replicate: int
+    resource: str  # "cpu" | "gpu"
+
+    @property
+    def id(self) -> str:
+        return f"{self.kind}:{self.transformation}/{self.inchikey}/{self.method}/{self.replicate}"
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_json(cls, line: str) -> Task:
+        return cls(**json.loads(line))
+
+
+# ----------------------------------------------------------------------------
+# hyper-parameter logs
+# ----------------------------------------------------------------------------
+def search_params(cfg: Config, method: str, transformation: str, structure: Structure) -> dict:
+    searcher = cfg.methods[method].searcher
+    compared = {
+        "searcher": searcher.name,
+        "params": searcher.compared_params(),
+        "seed_rule": SEED_RULE,
+        "transformation": cfg.transformations[transformation].identity(),
+        "structure": structure.identity(),
+    }
+    return make_params(compared, {"params": searcher.recorded_params(), "replicates": cfg.replicates})
+
+
+def refine_params(cfg: Config, search_sha256: str) -> dict:
+    r = cfg.refiner
+    compared = {"refiner": r.name, "lot": r.lot, "params": r.compared_params(), "search_params_sha256": search_sha256}
+    return make_params(compared, {"params": r.recorded_params()})
+
+
+def _hint(method: str, what: str = "method") -> str:
+    return f"Give the {what} a new name in the config (e.g. '{method}_v2') or restore the logged parameters."
+
+
+# ----------------------------------------------------------------------------
+# expansion
+# ----------------------------------------------------------------------------
+def _is_complete(record: dict | None, xyz: Path) -> bool:
+    if record is None:
+        return False
+    return record.get("status") == NOT_APPLICABLE or (record.get("status") == DONE and xyz.exists())
+
+
+def expand(cfg: Config, molecules: list[InputMolecule] | None = None, write_params: bool = True,
+           pending_only: bool = True) -> tuple[list[Task], list[str]]:
+    """All tasks implied by the config. Returns (tasks, params-mismatch messages).
+
+    Methods whose existing params log does not match are excluded and reported. With
+    ``write_params`` missing logs are created; otherwise the check is read-only.
+    """
+    molecules = molecules if molecules is not None else load_inputs(cfg.inputs)
+    tasks, problems = [], []
+    for tname, transformation in cfg.transformations.items():
+        for mol in molecules:
+            structure = apply_transform(transformation, mol)
+            if structure is None:
+                continue
+            for mname, method in cfg.methods.items():
+                md = method_dir(cfg.results_dir, tname, mol.inchikey, mname)
+                sp = search_params(cfg, mname, tname, structure)
+                rp = refine_params(cfg, sp["sha256"]) if cfg.refiner else None
+                try:
+                    check_or_write(md.params(), sp, _hint(mname), write=write_params)
+                    if rp:
+                        check_or_write(md.params(cfg.refiner.lot), rp, _hint(mname), write=write_params)
+                except ParamsMismatch as exc:
+                    problems.append(str(exc))
+                    continue
+                for rep in range(1, cfg.replicates + 1):
+                    s = Task("search", tname, mol.inchikey, mol.input_smiles, mname, rep, method.searcher.resource_class())
+                    rec = read_record(md.run_record(rep))
+                    search_done = _is_complete(rec, md.raw(rep))
+                    if not (pending_only and search_done):
+                        tasks.append(s)
+                    if rp is None or (rec and rec.get("status") == NOT_APPLICABLE):
+                        continue
+                    lot = cfg.refiner.lot
+                    r = Task("refine", tname, mol.inchikey, mol.input_smiles, mname, rep, cfg.refiner.resource_class())
+                    if not (pending_only and _is_complete(read_record(md.run_record(rep, lot)), md.refined(rep, lot))):
+                        tasks.append(r)
+    return tasks, problems
+
+
+def apply_transform(transformation, mol: InputMolecule) -> Structure | None:
+    structure = transformation.apply(mol.canonical_smiles)
+    if structure is None:
+        warnings.warn(f"Transformation {transformation.name} skipped {mol.input_smiles}")
+    return structure
+
+
+# ----------------------------------------------------------------------------
+# execution
+# ----------------------------------------------------------------------------
+def _env_record() -> dict:
+    return {
+        "host": socket.gethostname(),
+        "platform": platform.platform(),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
+        "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def _write_xyz_atomic(path: Path, elements, conformers) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    write_xyz(tmp, elements, conformers)
+    tmp.replace(path)
+
+
+def _copy_logs(files: list[Path], md: MethodDir, prefix: str) -> None:
+    for f in files:
+        if f.exists():
+            md.logs.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, md.logs / f"{prefix}_{f.name}")
+
+
+def run_task(cfg: Config, task: Task) -> str:
+    """Run one task. Returns its final status ("done", "skipped", "failed", ...)."""
+    transformation = cfg.transformations[task.transformation]
+    mol = InputMolecule.from_smiles(task.input_smiles)
+    if mol.inchikey != task.inchikey:
+        raise RuntimeError(f"{task.id}: InChIKey changed ({mol.inchikey}); RDKit version drift?")
+    structure = transformation.apply(mol.canonical_smiles)
+    md = method_dir(cfg.results_dir, task.transformation, task.inchikey, task.method)
+    sp = search_params(cfg, task.method, task.transformation, structure)
+    check_or_write(md.params(), sp, _hint(task.method))
+    if task.kind == "search":
+        return _run_search(cfg, task, structure, md, sp)
+    rp = refine_params(cfg, sp["sha256"])
+    check_or_write(md.params(cfg.refiner.lot), rp, _hint(task.method))
+    return _run_refine(cfg, task, structure, md, sp)
+
+
+def _base_record(task: Task, structure: Structure, params_sha: str) -> dict:
+    return {
+        "task": asdict(task),
+        "input_smiles": task.input_smiles,
+        "structure": structure.identity() | {"metadata": structure.metadata},
+        "params_sha256": params_sha,
+        **_env_record(),
+    }
+
+
+def _run_search(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp: dict) -> str:
+    rec_path, xyz = md.run_record(task.replicate), md.raw(task.replicate)
+    if _is_complete(read_record(rec_path), xyz):
+        return "skipped"
+    searcher = cfg.methods[task.method].searcher
+    record = _base_record(task, structure, sp["sha256"]) | {"seed": searcher.seed(task.replicate)}
+
+    reason = searcher.applicable(structure)
+    if reason:
+        write_record(rec_path, record | {"status": NOT_APPLICABLE, "reason": reason})
+        return NOT_APPLICABLE
+
+    write_record(rec_path, record | {"status": RUNNING})
+    t0 = time.time()
+    with workdir(prefix=f"{task.method}_{task.replicate}_") as wd:
+        try:
+            result = searcher.run(structure, task.replicate, wd)
+            _write_xyz_atomic(xyz, structure.elements, result.conformers)
+        except Exception as exc:
+            _copy_logs(list(wd.glob("*.out")) + list(wd.glob("*.inp")) + list(wd.glob("*.toml")), md, f"raw_{task.replicate}")
+            write_record(rec_path, record | {"status": FAILED, "wall_time_s": time.time() - t0,
+                                             "error": repr(exc), "traceback": traceback.format_exc()[-5000:]})
+            return FAILED
+        _copy_logs(result.log_files, md, f"raw_{task.replicate}")
+    write_record(rec_path, record | {
+        "status": DONE, "wall_time_s": round(time.time() - t0, 2), "n_conformers": len(result.conformers),
+        "versions": result.versions, "details": result.details,
+        "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    })
+    return DONE
+
+
+def _run_refine(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp: dict) -> str:
+    lot = cfg.refiner.lot
+    rec_path, xyz = md.run_record(task.replicate, lot), md.refined(task.replicate, lot)
+    if _is_complete(read_record(rec_path), xyz):
+        return "skipped"
+    search_rec = read_record(md.run_record(task.replicate))
+    if not search_rec or search_rec.get("status") != DONE or not md.raw(task.replicate).exists():
+        return "waiting_for_search"
+    if search_rec.get("params_sha256") != sp["sha256"]:
+        raise ParamsMismatch(f"{md.raw(task.replicate)} was produced with different search parameters")
+
+    elements, conformers = read_xyz(md.raw(task.replicate))
+    if elements != structure.elements:
+        raise RuntimeError(f"{md.raw(task.replicate)}: atom order does not match the structure template")
+    record = _base_record(task, structure, refine_params(cfg, sp["sha256"])["sha256"]) | {"lot": lot}
+    write_record(rec_path, record | {"status": RUNNING})
+    t0 = time.time()
+    with workdir(prefix=f"{task.method}_{task.replicate}_{lot}_") as wd:
+        try:
+            result = cfg.refiner.run(structure, conformers, wd)
+            _write_xyz_atomic(xyz, structure.elements, result.conformers)
+        except Exception as exc:
+            write_record(rec_path, record | {"status": FAILED, "wall_time_s": time.time() - t0,
+                                             "error": repr(exc), "traceback": traceback.format_exc()[-5000:]})
+            return FAILED
+    write_record(rec_path, record | {
+        "status": DONE, "wall_time_s": round(time.time() - t0, 2), "n_conformers": len(result.conformers),
+        "versions": result.versions, "details": result.details,
+        "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    })
+    return DONE
+
+
+def run_local(cfg: Config) -> dict[str, int]:
+    """Run every pending task sequentially (searches before refinements)."""
+    molecules = load_inputs(cfg.inputs)
+    update_index(cfg.results_dir, molecules)
+    tasks, problems = expand(cfg, molecules)
+    for p in problems:
+        warnings.warn(p)
+    counts: dict[str, int] = {}
+    for task in sorted(tasks, key=lambda t: t.kind != "search"):
+        status = run_task(cfg, task)
+        counts[status] = counts.get(status, 0) + 1
+        print(f"[{status:>14}] {task.id}", flush=True)
+    return counts

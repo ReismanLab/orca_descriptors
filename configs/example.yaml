@@ -1,0 +1,54 @@
+# B-CEG-MCD example configuration. Relative paths are relative to this file.
+inputs: ../data/inputs/example_NN_ligands.csv
+results_dir: ../results
+replicates: 3
+
+# depth-1 folders. "none" = no transformation (input SMILES as is).
+# Add scripts as  NiF2: ../transforms/nif2.py   (see transforms/README.md)
+transformations:
+  none: null
+
+# depth-3 folders. The folder name IS the method name: changing any hyper-parameter
+# of an existing method is refused (see params.json) -> give it a new name.
+methods:
+  crest_gfn2:
+    searcher: crest
+    params: {workhorse: gfn2, threads: 8}
+
+  crest_gfn2+uma-sp:
+    searcher: crest
+    params: {workhorse: gfn2, refine: sp, threads: 8}    # refine_level defaults to UMA (uma-s-1p2, omol)
+
+  crest_gfn2+uma-opt:
+    searcher: crest
+    params: {workhorse: gfn2, refine: opt, threads: 8}
+
+  goat_xtb:
+    searcher: goat
+    params: {method: XTB, nprocs: 8, orca_cmd: /path/to/orca}
+
+  molassembler:
+    searcher: molassembler
+    params: {n_confs: 100}
+
+  rdkit_etkdg:
+    searcher: rdkit_etkdg
+    params: {n_confs: 300}
+
+  loqi:
+    searcher: loqi
+    params: {n_confs: 100}
+
+# Post-search optimisation of every raw_<i>.xyz -> raw_<i>_<lot>.xyz (null to disable)
+post_optimization:
+  refiner: uma
+  params: {model: uma-s-1p2, task: omol, optimizer: LBFGS, fmax: 0.05, max_steps: 500, device: cuda}
+
+slurm:
+  setup:
+    - source ~/miniconda3/etc/profile.d/conda.sh
+    - conda activate bceg
+  tasks_per_job: 1
+  array_throttle: 50
+  cpu: {partition: CHANGE_ME, time: "24:00:00", cpus_per_task: 8, mem: 16G}
+  gpu: {partition: CHANGE_ME, time: "12:00:00", cpus_per_task: 8, mem: 32G, gres: "gpu:1"}

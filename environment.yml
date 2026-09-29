@@ -1,0 +1,24 @@
+name: bceg
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - pyyaml
+  - rdkit
+  - ase
+  - xtb
+  - crest>=3.1   # if conda-forge lags, build CREST 3.1 from source (needed for the mlip/UMA level)
+  - pytest
+  - pip
+  - pip:
+      - fairchem-core          # UMA (run `huggingface-cli login`; UMA weights are gated)
+      - scine-molassembler
+      - -e .
+# Not installed here:
+#   ORCA (GOAT)         -> cluster module; set methods.<name>.params.orca_cmd to the absolute path
+#   fmlip-relay[uma]    -> pip install '<crest-src>/subprojects/fmlip_relay[uma]'; needs fmlip-relay-server on PATH
+#   LoQI                -> separate env (Python>=3.11, PyTorch>=2.8): pip install "loqi @ git+https://github.com/isayevlab/LoQI"
+#                          set methods.<name>.params.executable to that env's `loqi`
