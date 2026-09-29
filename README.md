@@ -31,8 +31,8 @@ These requirements define the project; the code implements them.
    > 0.01-0.2 Å, τ4 ≈ 0.05. Flexible ligands (tBu-pyox, dtbbpy) keep differences through their
    > rotamers. What should "vary a lot": the X-Ni-X plane vs the N-Ni-N plane (square planar ↔
    > tetrahedral, τ4), or something else? And are identical converged starts acceptable for rigid ligands?
-   > The pre-optimisation level is configurable (`start_preopt_level`; `crude` keeps a little more
-   > diversity), and each `run_<i>.json` records the RMSDs and τ4. The default stays `normal` until this is decided.
+   > Decided: diversity will **not** come from a looser pre-optimisation. The pre-optimisation stays a
+   > full GFN2 optimisation (`start_preopt_level: normal`). Each `run_<i>.json` records the RMSDs and τ4.
 6. **Spin state**: defaults to 1, is easy for the user to change, and is carried through every step of the jobs.
 7. **Folder organisation**:
    - depth 1: the transformation applied to the SMILES (e.g. `NiF2`, `NiH2`);

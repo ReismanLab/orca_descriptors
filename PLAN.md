@@ -65,12 +65,14 @@ Measured with real GFN2-xTB (`tests/test_geometry.py::test_real_xtb_preopt_nix2_
 | tBu-pyox-NiF2 | 0.0-0.4 Å (tBu rotamers) | |
 | dtbbpy, tBu-pyox (review) | 0.7-1.3 Å | |
 
-`--opt crude` keeps slightly more diversity (bpy-NiF2 0.03-0.28 Å); `loose` does not. The chelate bite
-angle is fixed by the ligand, so "the N-Ni-N angle varies" can only mean the X-Ni-X plane vs the N-Ni-N
-plane (square planar ↔ tetrahedral). **Questions:** which quantity should vary, and are converged, identical
-starts acceptable for rigid ligands? Options: keep `normal`; use `crude`; or sample the X-Ni-X/N-Ni-N twist
-(or high-spin tetrahedral starts) explicitly before a constrained pre-optimisation.
-`start_preopt_level` is a compared parameter, so decide before the first real run.
+**Decided: diversity must not come from a looser pre-optimisation.** `--opt crude` / `loose` are rejected,
+and the pre-optimisation stays a full GFN2 optimisation (`start_preopt_level: normal`).
+
+The chelate bite angle is fixed by the ligand, so "the N-Ni-N angle varies" can only mean the X-Ni-X plane
+vs the N-Ni-N plane (square planar ↔ tetrahedral). Remaining options, owner to choose:
+1. accept identical converged starts for rigid ligands; variability then comes from the searches;
+2. sample the X-Ni-X / N-Ni-N twist explicitly per replicate, then pre-optimise with the twist
+   (partly) constrained.
 
 ### To verify on the first cluster run
 
@@ -88,7 +90,7 @@ Suggested test: 1 ligand × NiF2 × {crest_gfn2, crest_gfn2+uma-opt, molassemble
 ## Open items
 
 - Cluster details: partitions, account, `setup:` lines (conda, ORCA module) in the config.
-- **Start-geometry diversity** for rigid chelates (see above): what should vary, and which `start_preopt_level`.
+- **Start-geometry diversity** for rigid chelates (see above): option 1 (accept) or 2 (sample the twist at Ni). Looser pre-optimisation is ruled out.
 - Defaults to confirm: CREST workhorse (GFN2), GOAT method (XTB), UMA convergence `fmax` (0.05 eV/Å), metal-ligand cutoff (2.5 Å).
 - Should Ni(II) complexes also run as triplets (e.g. `NiF2_m3`) as part of the benchmark?
 - Chained vs split mode: chained jobs hold a GPU even during CPU-only CREST GFN2 searches.
