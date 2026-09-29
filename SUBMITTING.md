@@ -80,8 +80,9 @@ that needs a GPU goes to the `gpu` profile; everything else goes to `cpu`. In `c
 makes its whole job a GPU job, CREST search included -- use `mode: split` to avoid holding a GPU through
 the search.
 
-Thread counts (`threads` for CREST and ETKDG, `nprocs` for GOAT, the xtb pre-optimisation) default to the
-job's `cpus_per_task` (`SLURM_CPUS_PER_TASK`). In chained mode,
+Thread counts (`threads` for CREST, ETKDG and the UMA post-optimisation, `nprocs` for GOAT, and the xtb
+pre-optimisation) default to the job's `cpus_per_task` (`SLURM_CPUS_PER_TASK`). `molassembler` and `loqi`
+are single-threaded, so give those methods `slurm: {cpus_per_task: 1}` rather than idling seven cores. In chained mode,
 `post_optimization.slurm` and the method's `slurm` overrides both apply, the method's taking precedence. A method can override the profile, e.g.
 `crest_gfn2: {searcher: crest, params: {...}, slurm: {time: "48:00:00"}}`.
 

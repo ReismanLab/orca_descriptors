@@ -188,3 +188,27 @@ def test_uma_defaults_to_cpu_so_no_gpu_profile_is_needed():
     assert uma.params["device"] == "cpu"
     assert uma.resource_class() == "cpu"
     assert REFINERS["uma"](device="cuda").resource_class() == "gpu"
+
+
+def test_uma_pins_torch_to_the_allocated_cpus(monkeypatch):
+    """torch sizes its pool from the node, not the cgroup: an 8-core job must not use 64 threads."""
+    import sys
+    import types
+
+    seen = []
+    torch = types.ModuleType("torch")
+    torch.set_num_threads = seen.append
+    fairchem = types.ModuleType("fairchem.core")
+    fairchem.FAIRChemCalculator = lambda predictor, task_name: ("calc", predictor, task_name)
+    fairchem.pretrained_mlip = types.SimpleNamespace(get_predict_unit=lambda model, device: (model, device))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "fairchem", types.ModuleType("fairchem"))
+    monkeypatch.setitem(sys.modules, "fairchem.core", fairchem)
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "8")
+
+    REFINERS["uma"]().calculator()
+    assert seen == [8]
+
+    seen.clear()
+    REFINERS["uma"](threads=2).calculator()  # an explicit value wins over the allocation
+    assert seen == [2]

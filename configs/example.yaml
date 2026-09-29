@@ -70,6 +70,7 @@ methods:
 post_optimization:
   refiner: uma
   params: {model: uma-s-1p2, task: omol, optimizer: LBFGS, fmax: 0.05, max_steps: 500, device: cpu}
+  # threads: default = slurm cpus_per_task (torch would otherwise size its pool from the whole node)
   # device: cuda is much faster but needs the slurm `gpu:` profile below, and in chained mode the
   # whole job (CREST search included) then holds a GPU -- use `mode: split` if you set it.
 

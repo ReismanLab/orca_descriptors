@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
+from bceg.external import resolve_threads
 from bceg.layout import check_name
 from bceg.refine.base import RefineResult, Refiner
 from bceg.structure import Structure
@@ -31,8 +32,9 @@ class UMA(Refiner):
         "keep_unconverged": True,  # unconverged conformers are kept and flagged converged=False
         "lot": None,  # label override; defaults to the model name
         "device": "cpu",  # "cuda" sends the step (and, chained, its whole job) to the gpu profile
+        "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
     }
-    resource_keys = {"device"}
+    resource_keys = {"device", "threads"}
 
     def __init__(self, **params) -> None:
         super().__init__(**params)
@@ -47,8 +49,13 @@ class UMA(Refiner):
 
     def calculator(self):
         if self._calc is None:
+            import torch
             from fairchem.core import FAIRChemCalculator, pretrained_mlip
 
+            # torch sizes its thread pool from the node's core count, not from the cgroup SLURM put us
+            # in, so an 8-core allocation on a 64-core node would oversubscribe eightfold. This runs
+            # in-process, so run()'s OMP_NUM_THREADS never applies to it.
+            torch.set_num_threads(resolve_threads(self.params["threads"]))
             predictor = pretrained_mlip.get_predict_unit(self.params["model"], device=self.params["device"])
             self._calc = FAIRChemCalculator(predictor, task_name=self.params["task"])
         return self._calc
