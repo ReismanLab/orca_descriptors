@@ -29,7 +29,7 @@ from rdkit.Geometry import Point3D
 from bceg.chem import ORGANIC_ELEMENTS, embed
 from bceg.external import resolve_threads
 from bceg.structure import Structure
-from bceg.xtb import xtb_optimize
+from bceg.xtb import xtb_identity, xtb_optimize
 
 SEED_STRIDE = 10007
 BOND_STRETCH_FACTOR = 1.35
@@ -101,6 +101,9 @@ def metal_geometry(mol: Chem.Mol, coords: np.ndarray) -> dict[str, dict]:
 def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: dict) -> tuple[np.ndarray, dict]:
     """Return (coords, info) following the start_* parameters of a searcher."""
     rejected = []
+    preopt = params["start_preopt"]
+    # which xtb ran is not in the params hash (it is a resource key), so record it here
+    xtb_path, xtb_ver = xtb_identity(params["xtb_executable"]) if preopt != "none" else (None, None)
     for attempt in range(params["start_max_attempts"]):
         s = seed + attempt * SEED_STRIDE
         if params["start_geometry"] == "input":
@@ -125,8 +128,9 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
         problems = coordination_problems(structure.mol, coords, params["max_metal_ligand_distance"])
         if not problems:
             return coords, {
-                "source": source, "seed": s, "attempts": attempt + 1, "preopt": params["start_preopt"],
+                "source": source, "seed": s, "attempts": attempt + 1, "preopt": preopt,
                 "preopt_level": params["start_preopt_level"], "preopt_energy": energy, "rejected": rejected,
+                "preopt_program": xtb_path, "preopt_version": xtb_ver,
                 "rmsd_preopt_vs_embedded": round(heavy_atom_rmsd(structure.mol, embedded, coords), 3),
                 "metal_geometry": metal_geometry(structure.mol, coords),
             }

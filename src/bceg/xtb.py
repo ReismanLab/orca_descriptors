@@ -3,15 +3,39 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
-from bceg.external import find_executable, run
+from bceg.external import ProgramNotFound, find_executable, program_version, run
 from bceg.xyz import Conformer, read_xyz, write_xyz
 
 OPT_LEVELS = ("crude", "sloppy", "loose", "lax", "normal", "tight", "vtight", "extreme")
 METHOD_FLAGS = {"gfnff": ["--gfnff"], "gfn0": ["--gfn", "0"], "gfn1": ["--gfn", "1"], "gfn2": ["--gfn", "2"]}
+
+
+@lru_cache(maxsize=None)
+def _version_of(exe: str) -> str | None:
+    """``--version`` line of an absolute path (one subprocess per binary, per process)."""
+    return program_version([exe, "--version"])
+
+
+def xtb_identity(executable: str = "xtb") -> tuple[str | None, str | None]:
+    """(resolved path, version line) of the xtb ``executable`` names, or (None, None).
+
+    Both are needed: ``xtb_executable`` is a resource key, so a different build never
+    trips the params.json guard, and two builds of the same release report the same
+    version string -- the path is what distinguishes a `module load xtb` from the
+    conda one when both shadow `xtb` on PATH. Resolution is repeated on every call
+    (only the version subprocess is cached, keyed by path), so a name is never
+    reported against a binary it no longer resolves to.
+    """
+    try:
+        exe = find_executable(executable)
+    except ProgramNotFound:
+        return None, None
+    return exe, _version_of(exe)
 
 
 def xtb_optimize(elements: list[str], coords: np.ndarray, charge: int, uhf: int, workdir: Path,

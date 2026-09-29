@@ -58,6 +58,9 @@ def fake_xtb(tmp_path, monkeypatch):
     exe.write_text(textwrap.dedent(f"""\
         #!{sys.executable}
         import shutil, sys
+        if "--version" in sys.argv:
+            print("* xtb version 6.7.1 (fake) compiled for tests")
+            raise SystemExit(0)
         open("args.txt", "w").write(" ".join(sys.argv[1:]))
         shutil.copy(sys.argv[1], "xtbopt.xyz")
         print("          | TOTAL ENERGY               -42.000000000000 Eh   |")

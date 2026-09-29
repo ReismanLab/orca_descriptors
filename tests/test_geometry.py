@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +56,7 @@ def test_start_geometry_preopt_retry_and_spin(fake_xtb, tmp_path, monkeypatch):
     assert info["attempts"] == 2 and info["seed"] == 7 + geometry.SEED_STRIDE
     assert info["rejected"] == [{"seed": 7, "problems": ["forced failure"]}]
     assert info["preopt"] == "gfn2" and info["preopt_energy"] == -42.0
+    assert info["preopt_program"] == str(fake_xtb) and "6.7.1" in info["preopt_version"]
     args = (tmp_path / "preopt_1" / "args.txt").read_text()
     assert "--gfn 2" in args and "--uhf 2" in args and "--chrg 0" in args
     assert (tmp_path / "start_geometry.xyz").exists()
@@ -71,6 +74,26 @@ def test_gives_up_after_max_attempts(fake_xtb, tmp_path, monkeypatch):
     params = {**START_DEFAULTS, "start_max_attempts": 3}
     with pytest.raises(RuntimeError, match="after 3 attempt"):
         geometry.make_start_geometry(nix2("F"), 1, tmp_path, params)
+
+
+def test_xtb_identity_is_not_cached_across_binaries(fake_xtb, tmp_path, monkeypatch):
+    """The recorded path must be the xtb that actually ran, not one seen earlier in the process."""
+    monkeypatch.setattr(geometry, "coordination_problems", lambda *a: [])
+    _, info = Crest().start_geometry(nix2("H"), seed=1, workdir=tmp_path)
+    assert info["preopt_program"] == str(fake_xtb)
+
+    other = tmp_path / "other" / "xtb"          # a second build shadowing the first on PATH
+    other.parent.mkdir()
+    other.write_text(fake_xtb.read_text().replace("6.7.1 (fake)", "6.6.0 (other)"))
+    other.chmod(other.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{other.parent}{os.pathsep}{os.environ['PATH']}")
+    _, info = Crest().start_geometry(nix2("H"), seed=1, workdir=tmp_path / "b")
+    assert info["preopt_program"] == str(other) and "6.6.0" in info["preopt_version"]
+
+
+def test_no_preopt_records_no_xtb(tmp_path):
+    _, info = Crest(start_preopt="none").start_geometry(nix2("H"), seed=1, workdir=tmp_path)
+    assert info["preopt"] == "none" and info["preopt_program"] is None and info["preopt_version"] is None
 
 
 def test_diversity_is_recorded(fake_xtb, tmp_path):
