@@ -19,6 +19,7 @@ START_DEFAULTS = {
     "start_geometry": "etkdg",  # "etkdg": new ETKDG embedding per replicate seed; "input": coords from the transformation
     "start_ff": "auto",  # relax the ETKDG start: auto (MMFF94s if parametrised, else none) | MMFF94 | MMFF94s | UFF | none
     "start_preopt": "gfn2",  # xtb pre-optimisation of the start: gfn2 | gfn1 | gfn0 | gfnff | none
+    "start_preopt_level": "normal",  # xtb --opt level: crude | sloppy | loose | lax | normal | tight | vtight | extreme
     "max_metal_ligand_distance": 2.5,  # Angstrom; longer bonds to a metal reject the start geometry
     "start_max_attempts": 10,  # re-embeddings (new seeds) before giving up
     "xtb_executable": "xtb",

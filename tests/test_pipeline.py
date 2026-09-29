@@ -142,3 +142,55 @@ def test_multiplicity_override_renames_folder_and_is_carried(project):
     assert json.loads((md / "params.json").read_text())["compared"]["structure"]["multiplicity"] == 3
     assert json.loads((md / "run_1_fake-lot.json").read_text())["structure"]["multiplicity"] == 3
     assert not (root / "results" / "none").exists()
+
+
+def test_failed_start_geometry_keeps_workdir_files(project, fake_xtb, monkeypatch):
+    from bceg import geometry
+
+    root, write = project
+    monkeypatch.setattr(geometry, "coordination_problems", lambda *a: ["forced"])
+    cfg = Config.load(write("{start_max_attempts: 2}", searcher="single_start", transformations="{none: null}"))
+    counts = run_local(cfg)
+    assert counts == {"failed": 6}
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    rec = json.loads((md / "run_1.json").read_text())
+    assert rec["status"] == "failed" and "after 2 attempt" in rec["error"]
+    failed = md / "logs" / "raw_1_failed"
+    assert (failed / "preopt_0" / "xtb.out").exists() and (failed / "preopt_1" / "xtbopt.xyz").exists()
+
+
+def test_start_geometry_rmsd_to_other_replicates(project, fake_xtb):
+    root, write = project
+    cfg = Config.load(write("{}", searcher="single_start", transformations="{none: null}"))
+    run_local(cfg)
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    assert (md / "logs" / "raw_3_start_geometry.xyz").exists()
+    rec3 = json.loads((md / "run_3.json").read_text())
+    assert set(rec3["details"]["start_geometry"]["rmsd_to_replicates"]) == {"1", "2"}
+
+
+def test_not_applicable_methods_create_no_folder(project, tmp_path):
+    from pathlib import Path
+
+    root, write = project
+    script = Path(__file__).parents[1] / "transforms" / "ni_x2.py"
+    (root / "inputs.csv").write_text("smiles\nc1ccc(-c2ccccn2)nc1\n")
+    cfg = Config.load(write("{}", searcher="loqi", transformations=f"{{NiF2: {{script: {script}, params: {{x: F}}}}}}"))
+    assert expand(cfg)[0] == []
+    assert not (root / "results").exists() or not any((root / "results").rglob("loqi"))
+
+
+def test_slurm_config_checks_and_chain_overrides(project):
+    import pytest
+
+    root, write = project
+    path = write()
+    raw = yaml.safe_load(path.read_text())
+    raw["slurm"]["task_per_job"] = 4  # typo of tasks_per_job
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="unknown keys"):
+        Config.load(path)
+    cfg = Config.load(write(method_slurm="{time: '48:00:00'}", refiner_slurm="{time: '1:00:00', mem: 64G}"))
+    jobdir = write_jobs(cfg, expand(cfg)[0], root / "jobs")
+    sbatch = (jobdir / "chain_etkdg.sbatch").read_text()
+    assert "--time=48:00:00" in sbatch and "--mem=64G" in sbatch

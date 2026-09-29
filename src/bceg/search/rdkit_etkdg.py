@@ -8,6 +8,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from bceg.chem import ff_for
+from bceg.external import resolve_threads
 from bceg.search.base import SearchResult, Searcher
 from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_KCAL, Conformer
@@ -26,7 +27,7 @@ class RDKitETKDG(Searcher):
         "use_macrocycle_torsions": True,
         "use_random_coords": False,
         "seed_offset": 0,
-        "threads": 0,
+        "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
     }
     resource_keys = {"threads"}
 
@@ -36,7 +37,8 @@ class RDKitETKDG(Searcher):
         params = AllChem.ETKDGv3()
         params.randomSeed = self.seed(replicate)
         params.pruneRmsThresh = p["prune_rms"]
-        params.numThreads = p["threads"]
+        threads = resolve_threads(p["threads"])
+        params.numThreads = threads
         params.useSmallRingTorsions = p["use_small_ring_torsions"]
         params.useMacrocycleTorsions = p["use_macrocycle_torsions"]
         params.useRandomCoords = p["use_random_coords"]
@@ -49,9 +51,9 @@ class RDKitETKDG(Searcher):
         energies = [None] * len(cids)
         converged = [None] * len(cids)
         if ff.startswith("MMFF"):
-            res = AllChem.MMFFOptimizeMoleculeConfs(mol, numThreads=p["threads"], maxIters=p["max_iters"], mmffVariant=ff)
+            res = AllChem.MMFFOptimizeMoleculeConfs(mol, numThreads=threads, maxIters=p["max_iters"], mmffVariant=ff)
         elif ff == "UFF":
-            res = AllChem.UFFOptimizeMoleculeConfs(mol, numThreads=p["threads"], maxIters=p["max_iters"])
+            res = AllChem.UFFOptimizeMoleculeConfs(mol, numThreads=threads, maxIters=p["max_iters"])
         elif ff == "none":
             res = None
         else:

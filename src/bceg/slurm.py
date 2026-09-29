@@ -15,7 +15,8 @@ Config (``slurm:`` block)::
       cpu: {partition: ..., time: "24:00:00", cpus_per_task: 8, mem: 16G, account: ...}
       gpu: {partition: ..., time: "12:00:00", cpus_per_task: 8, mem: 32G, gres: "gpu:1"}
 
-Methods and ``post_optimization`` may override the profile with their own ``slurm:`` mapping.
+Methods and ``post_optimization`` may override the profile with their own ``slurm:`` mapping
+(in chained mode both apply, the method's taking precedence).
 """
 
 from __future__ import annotations
@@ -69,7 +70,12 @@ def write_jobs(cfg: Config, tasks: list[Task], jobdir: Path | None = None) -> Pa
         name = f"{kind}_{label}"
         (jobdir / f"{name}.jsonl").write_text("".join(t.to_json() + "\n" for t in group))
         n_jobs = math.ceil(len(group) / per_job)
-        overrides = cfg.refiner_slurm if kind == "refine" else cfg.methods[label].slurm
+        if kind == "refine":
+            overrides = cfg.refiner_slurm
+        elif kind == "chain":  # search + post-optimisation in one job: method overrides win
+            overrides = {**cfg.refiner_slurm, **cfg.methods[label].slurm}
+        else:
+            overrides = cfg.methods[label].slurm
         resource = "gpu" if any(t.resource == "gpu" for t in group) else "cpu"
         profile = {**s.get(resource, {}), **overrides}
         array = f"0-{n_jobs - 1}" + (f"%{throttle}" if throttle else "")

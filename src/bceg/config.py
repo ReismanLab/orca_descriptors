@@ -22,6 +22,7 @@ from bceg.transforms import IDENTITY, Transformation
 
 TOP_LEVEL_KEYS = {"inputs", "results_dir", "replicates", "transformations", "methods", "post_optimization", "slurm"}
 TRANSFORMATION_KEYS = {"script", "params", "charge", "multiplicity"}
+SLURM_KEYS = {"mode", "setup", "tasks_per_job", "array_throttle", "command", "cpu", "gpu"}
 
 
 @dataclass
@@ -155,6 +156,11 @@ class Config:
             if post:
                 raise ValueError(f"post_optimization: unknown keys {sorted(post)}")
 
+        slurm = raw.get("slurm") or {}
+        unknown = set(slurm) - SLURM_KEYS
+        if unknown:
+            raise ValueError(f"slurm: unknown keys {sorted(unknown)}; allowed: {sorted(SLURM_KEYS)}")
+
         return cls(
             path=path,
             inputs=None if raw.get("inputs") is None else Path(raw["inputs"]),
@@ -164,5 +170,5 @@ class Config:
             methods=methods,
             refiner=refiner,
             refiner_slurm=refiner_slurm,
-            slurm=raw.get("slurm") or {},
+            slurm=slurm,
         )

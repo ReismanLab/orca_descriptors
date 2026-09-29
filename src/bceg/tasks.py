@@ -109,6 +109,8 @@ def expand(cfg: Config, molecules: list[InputMolecule] | None = None, write_para
             if structure is None:
                 continue
             for mname, method in cfg.methods.items():
+                if method.searcher.applicable(structure):
+                    continue  # e.g. LoQI for a Ni complex: no folder, no task
                 md = method_dir(cfg.results_dir, tname, mol.inchikey, mname)
                 sp = search_params(cfg, mname, tname, structure)
                 rp = refine_params(cfg, sp["sha256"]) if cfg.refiner else None
@@ -176,6 +178,37 @@ def _write_xyz_atomic(path: Path, elements, conformers) -> None:
     tmp.replace(path)
 
 
+FAILED_LOG_MAX_BYTES = 10_000_000
+
+
+def _keep_failed_workdir(wd: Path, md: MethodDir, replicate: int) -> None:
+    """Copy the small files of a failed run (incl. preopt_*/ subfolders) to logs/raw_<i>_failed/."""
+    dest = md.logs / f"raw_{replicate}_failed"
+    if dest.exists():
+        shutil.rmtree(dest)
+    for f in wd.rglob("*"):
+        if f.is_file() and f.stat().st_size <= FAILED_LOG_MAX_BYTES:
+            target = dest / f.relative_to(wd)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, target)
+
+
+def _start_geometry_rmsd_to_replicates(structure: Structure, wd: Path, md: MethodDir, replicate: int) -> dict:
+    """Heavy-atom RMSD of this replicate's start geometry to those of already finished replicates."""
+    from bceg.geometry import heavy_atom_rmsd
+
+    own = wd / "start_geometry.xyz"
+    if not own.exists():
+        return {}
+    _, (mine,) = read_xyz(own)
+    out = {}
+    for other in sorted(md.logs.glob("raw_*_start_geometry.xyz")) if md.logs.exists() else []:
+        j = int(other.name.split("_")[1])
+        if j != replicate:
+            out[str(j)] = round(heavy_atom_rmsd(structure.mol, mine.coords, read_xyz(other)[1][0].coords), 3)
+    return out
+
+
 def _copy_logs(files: list[Path], md: MethodDir, prefix: str) -> None:
     for f in files:
         if f.exists():
@@ -231,10 +264,14 @@ def _run_search(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
             result = searcher.run(structure, task.replicate, wd)
             _write_xyz_atomic(xyz, structure.elements, result.conformers)
         except Exception as exc:
-            _copy_logs(list(wd.glob("*.out")) + list(wd.glob("*.inp")) + list(wd.glob("*.toml")), md, f"raw_{task.replicate}")
+            _keep_failed_workdir(wd, md, task.replicate)
             write_record(rec_path, record | {"status": FAILED, "wall_time_s": time.time() - t0,
-                                             "error": repr(exc), "traceback": traceback.format_exc()[-5000:]})
+                                             "error": repr(exc), "traceback": traceback.format_exc()[-5000:],
+                                             "failed_files": f"logs/raw_{task.replicate}_failed/"})
             return FAILED
+        if isinstance(result.details.get("start_geometry"), dict):
+            result.details["start_geometry"]["rmsd_to_replicates"] = _start_geometry_rmsd_to_replicates(
+                structure, wd, md, task.replicate)
         _copy_logs(result.log_files, md, f"raw_{task.replicate}")
     write_record(rec_path, record | {
         "status": DONE, "wall_time_s": round(time.time() - t0, 2), "n_conformers": len(result.conformers),

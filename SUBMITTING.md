@@ -42,7 +42,9 @@ slurm:
 ```
 
 If a step needs a GPU (UMA post-optimisation on `cuda`, or CREST with inline UMA), the job goes to the
-`gpu` profile; otherwise it goes to `cpu`. A method can override the profile, e.g.
+`gpu` profile; otherwise it goes to `cpu`. Thread counts (`threads` for CREST and ETKDG, `nprocs` for GOAT,
+the xtb pre-optimisation) default to the job's `cpus_per_task` (`SLURM_CPUS_PER_TASK`). In chained mode,
+`post_optimization.slurm` and the method's `slurm` overrides both apply, the method's taking precedence. A method can override the profile, e.g.
 `crest_gfn2: {searcher: crest, params: {...}, slurm: {time: "48:00:00"}}`.
 
 ## 2. Input SMILES
@@ -114,8 +116,13 @@ bceg status configs/cluster.yaml --smiles my_ligands.txt -t NiF2    # done / fai
 less DATA/_jobs/<timestamp>/slurm_logs/chain_crest_gfn2_<jobid>_<index>.out
 ```
 
-If a replicate failed, its `run_<i>.json` holds the error and traceback, and `logs/` holds the program
-inputs and outputs. Fix the cause, then run the same `bceg submit` again.
+If a replicate failed, its `run_<i>.json` holds the error and traceback. `logs/raw_<i>_failed/` holds the
+files of its working directory, including every xtb pre-optimisation attempt (`preopt_<n>/`). Fix the
+cause, then run the same `bceg submit` again.
+
+To try things before the cluster, `bceg run` executes the same tasks locally, e.g. with the `crest` conda env
+(CREST 3.0.2 + xtb) on `PATH`: `bceg run configs/example.yaml --smiles in.txt -t none -m crest_gfn2`.
+CREST 3.0.2 has no `mlip` level, so the `+uma` methods need CREST 3.1.
 
 ## What each job does
 
@@ -130,8 +137,9 @@ For one (transformation, molecule, method, replicate):
       broken and no atoms clash (e.g. H-H). A rejected geometry is re-embedded with a new seed, up to
       `start_max_attempts` (10) times.
 
-   The accepted geometry is saved as `logs/raw_<i>_start_geometry.xyz`, and the seeds and rejections are
-   in `run_<i>.json`.
+   The accepted geometry is saved as `logs/raw_<i>_start_geometry.xyz`. `run_<i>.json` records the seeds,
+   the rejections, the RMSD of the pre-optimised start to the raw embedding and to the other replicates'
+   starts, and the angles and τ4 at the metal (0 = square planar, 1 = tetrahedral).
 3. Conformer search → `raw_<i>.xyz`.
 4. UMA-S post-optimisation of every conformer → `raw_<i>_uma-s-1p2.xyz`.
 

@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from bceg.external import find_executable, program_version, run
+from bceg.external import find_executable, program_version, resolve_threads, run
 from bceg.search.base import START_DEFAULTS, START_RESOURCE_KEYS, SearchResult, Searcher
 from bceg.structure import Structure
 from bceg.xyz import Conformer, read_xyz, write_xyz
@@ -31,7 +31,7 @@ class Crest(Searcher):
         "toml_extra": {},  # deep-merged into the TOML document (e.g. {"cregen": {"ewin": 6.0}})
         **START_DEFAULTS,
         "seed_offset": 0,
-        "threads": 8,
+        "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
         "refine_threads": None,  # threads per refinement-level instance
         "mlip_device": "cuda",
         "executable": "crest",
@@ -59,7 +59,8 @@ class Crest(Searcher):
             levels.append(level)
         if workhorse.get("method") == "mlip":
             levels[0]["mlip_device"] = p["mlip_device"]
-        doc = {"input": "input.xyz", "runtype": p["runtype"], "threads": p["threads"], "calculation": {"level": levels}}
+        doc = {"input": "input.xyz", "runtype": p["runtype"], "threads": resolve_threads(p["threads"]),
+               "calculation": {"level": levels}}
         return _deep_merge(doc, p["toml_extra"])
 
     def run(self, structure: Structure, replicate: int, workdir: Path) -> SearchResult:
@@ -69,7 +70,7 @@ class Crest(Searcher):
         write_xyz(workdir / "input.xyz", structure.elements, [Conformer(coords)])
         (workdir / "input.toml").write_text(to_toml(self.build_input(structure)))
 
-        proc = run([exe, "--input", "input.toml"], workdir, threads=self.params["threads"], log_name="crest.out")
+        proc = run([exe, "--input", "input.toml"], workdir, threads=resolve_threads(self.params["threads"]), log_name="crest.out")
         out = workdir / "crest_conformers.xyz"
         logs = [workdir / "input.toml", workdir / "start_geometry.xyz", workdir / "crest.out"]
         if proc.returncode != 0 or not out.exists():

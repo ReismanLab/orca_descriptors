@@ -21,6 +21,16 @@ def find_executable(name: str) -> str:
     return path
 
 
+def available_cpus() -> int:
+    """CPUs allotted to this job (SLURM_CPUS_PER_TASK), else the machine's CPU count."""
+    return int(os.environ.get("SLURM_CPUS_PER_TASK") or os.cpu_count() or 1)
+
+
+def resolve_threads(value: int | None) -> int:
+    """``None`` or 0 means "all CPUs allotted to the job"."""
+    return available_cpus() if not value else int(value)
+
+
 def run(cmd: list[str], cwd: Path, threads: int = 1, log_name: str = "stdout.log") -> subprocess.CompletedProcess:
     """Run ``cmd`` in ``cwd`` with stdout+stderr captured to ``cwd/log_name``."""
     env = dict(os.environ)

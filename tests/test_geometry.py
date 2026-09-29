@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import os
-import stat
-import sys
-import textwrap
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -17,24 +14,6 @@ from bceg.structure import Structure
 from bceg.transforms import Transformation
 
 SCRIPT = Path(__file__).parents[1] / "transforms" / "ni_x2.py"
-
-
-@pytest.fixture
-def fake_xtb(tmp_path, monkeypatch):
-    """An `xtb` on PATH that returns the input geometry and logs its arguments."""
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    exe = bindir / "xtb"
-    exe.write_text(textwrap.dedent(f"""\
-        #!{sys.executable}
-        import shutil, sys
-        open("args.txt", "w").write(" ".join(sys.argv[1:]))
-        shutil.copy(sys.argv[1], "xtbopt.xyz")
-        print("          | TOTAL ENERGY               -42.000000000000 Eh   |")
-    """))
-    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
-    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
-    return exe
 
 
 def nix2(x: str, mult: int = 1) -> Structure:
@@ -92,3 +71,32 @@ def test_gives_up_after_max_attempts(fake_xtb, tmp_path, monkeypatch):
     params = {**START_DEFAULTS, "start_max_attempts": 3}
     with pytest.raises(RuntimeError, match="after 3 attempt"):
         geometry.make_start_geometry(nix2("F"), 1, tmp_path, params)
+
+
+def test_diversity_is_recorded(fake_xtb, tmp_path):
+    _, info = Crest().start_geometry(nix2("F"), seed=1, workdir=tmp_path)
+    assert info["preopt_level"] == "normal" and info["rmsd_preopt_vs_embedded"] == 0.0  # fake xtb: no change
+    (ni,) = info["metal_geometry"].values()
+    assert len(ni["angles_deg"]) == 6 and 0.0 <= ni["tau4"] <= 1.0
+
+
+def test_preopt_level_is_passed_and_validated(fake_xtb, tmp_path):
+    Crest(start_preopt_level="crude").start_geometry(nix2("F"), seed=1, workdir=tmp_path)
+    assert "--opt crude" in (tmp_path / "preopt_0" / "args.txt").read_text()
+    with pytest.raises(ValueError, match="--opt level"):
+        Crest(start_preopt_level="fast").start_geometry(nix2("F"), seed=1, workdir=tmp_path / "x")
+
+
+@pytest.mark.skipif(shutil.which("xtb") is None, reason="xtb not installed")
+@pytest.mark.parametrize("x", ["F", "H"])
+def test_real_xtb_preopt_nix2_bpy(tmp_path, x):
+    """Real GFN2-xTB pre-optimisation of L-NiX2 (bpy): coordination check passes; print diversity."""
+    s = nix2(x)
+    starts = []
+    for rep in (1, 2, 3):
+        coords, info = Crest().start_geometry(s, seed=rep, workdir=tmp_path / str(rep))
+        assert info["attempts"] == 1 and info["rejected"] == []
+        starts.append(coords)
+        print(x, rep, "rmsd vs embedded", info["rmsd_preopt_vs_embedded"], info["metal_geometry"])
+    rmsds = [geometry.heavy_atom_rmsd(s.mol, starts[i], starts[j]) for i, j in ((0, 1), (0, 2), (1, 2))]
+    print(f"Ni{x}2/bpy replicate start RMSDs (A):", [round(r, 3) for r in rmsds])

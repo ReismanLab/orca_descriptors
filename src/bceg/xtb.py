@@ -10,6 +10,7 @@ import numpy as np
 from bceg.external import find_executable, run
 from bceg.xyz import Conformer, read_xyz, write_xyz
 
+OPT_LEVELS = ("crude", "sloppy", "loose", "lax", "normal", "tight", "vtight", "extreme")
 METHOD_FLAGS = {"gfnff": ["--gfnff"], "gfn0": ["--gfn", "0"], "gfn1": ["--gfn", "1"], "gfn2": ["--gfn", "2"]}
 
 
@@ -19,6 +20,8 @@ def xtb_optimize(elements: list[str], coords: np.ndarray, charge: int, uhf: int,
     """Optimise one geometry with xtb; returns (coords, energy in Hartree)."""
     if method not in METHOD_FLAGS:
         raise ValueError(f"Unknown xtb method {method!r}; choose from {sorted(METHOD_FLAGS)}")
+    if level not in OPT_LEVELS:
+        raise ValueError(f"Unknown xtb --opt level {level!r}; choose from {OPT_LEVELS}")
     exe = find_executable(executable)
     workdir.mkdir(parents=True, exist_ok=True)
     write_xyz(workdir / "start.xyz", elements, [Conformer(coords)])

@@ -64,3 +64,10 @@ def test_auto_start_geometry_keeps_hydrides_apart():
     for seed in (1, 2, 3):
         c = embed(s.mol, seed, ff="auto")
         assert np.linalg.norm(c[hydrides[0]] - c[hydrides[1]]) > 1.5
+
+
+def test_stored_smiles_has_no_explicit_carbon_hydrogens():
+    s = Transformation("NiH2", SCRIPT, {"x": "H"}).apply("c1ccc(-c2ccccn2)nc1")
+    assert s.smiles.count("[H") == 2 and "[H]" not in s.smiles  # only the two [H-] hydrides
+    ni = next(a for a in s.mol.GetAtoms() if a.GetSymbol() == "Ni")
+    assert sorted(n.GetSymbol() for n in ni.GetNeighbors()) == ["H", "H", "N", "N"]

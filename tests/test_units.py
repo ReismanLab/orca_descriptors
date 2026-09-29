@@ -52,7 +52,9 @@ def test_params_coercion_and_unknown_keys():
     with pytest.raises(ValueError, match="unknown parameter"):
         Crest(ewin=6)
     with pytest.raises(TypeError):
-        Crest(threads="8")
+        Crest(start_max_attempts="8")
+    with pytest.raises(TypeError):
+        SEARCHERS["rdkit_etkdg"](n_confs=True)
 
 
 def test_resource_keys_not_compared():
@@ -93,7 +95,7 @@ mlip_device = "cuda"
     ({"refine": "sp"}, CREST_UMA_OPT.replace('refine = "opt"', 'refine = "sp"')),
 ])
 def test_crest_toml(params, expected):
-    assert to_toml(Crest(**params).build_input(Structure("CCO"))) == expected
+    assert to_toml(Crest(threads=8, **params).build_input(Structure("CCO"))) == expected
 
 
 def test_crest_toml_charge_mult_and_extra():

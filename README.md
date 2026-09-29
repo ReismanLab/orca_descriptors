@@ -25,6 +25,14 @@ These requirements define the project; the code implements them.
 5. **Replicates**: every workflow is run **3 times** to evaluate variability. The start geometries must
    differ between runs, so the N-Ni-N angle is expected to vary a lot. The Ni-N distance must stay within
    a limit that guarantees coordination, and start geometries are pre-optimised.
+   > **Open question for the owner.** For a chelate, the N-Ni-N bite angle is fixed by the ligand
+   > (85-87° for bpy after any optimisation). With the default full GFN2 pre-optimisation, rigid ligands
+   > (bpy-NiF2, bpy-NiH2) reach the same square-planar minimum from every seed: replicate start RMSD
+   > 0.01-0.2 Å, τ4 ≈ 0.05. Flexible ligands (tBu-pyox, dtbbpy) keep differences through their
+   > rotamers. What should "vary a lot": the X-Ni-X plane vs the N-Ni-N plane (square planar ↔
+   > tetrahedral, τ4), or something else? And are identical converged starts acceptable for rigid ligands?
+   > The pre-optimisation level is configurable (`start_preopt_level`; `crude` keeps a little more
+   > diversity), and each `run_<i>.json` records the RMSDs and τ4. The default stays `normal` until this is decided.
 6. **Spin state**: defaults to 1, is easy for the user to change, and is carried through every step of the jobs.
 7. **Folder organisation**:
    - depth 1: the transformation applied to the SMILES (e.g. `NiF2`, `NiH2`);
@@ -115,9 +123,19 @@ Each cluster job runs the conformer search of one replicate and then its UMA pos
 
 - Implemented and unit-tested: inputs and canonicalisation, NiF2/NiH2 transformation, folder layout,
   hyper-parameter logs, start-geometry checks, ETKDG searcher, task expansion, SLURM script generation, `submit`.
-- **Not yet run for real**: CREST, GOAT, molassembler, LoQI, the xtb pre-optimisation and the UMA
-  post-optimisation. Their programs are not installed on the development machine; the tests use stand-ins.
+- Run for real on the development machine (conda env `crest`: CREST 3.0.2 + xtb 6.7.1):
+  - GFN2-xTB pre-optimisation of NiF2/NiH2 × {bpy, tBu-pyox} × 3 replicates, all accepted on the first
+    attempt (Ni-N 1.87-1.97 Å, Ni-F 1.73 Å, Ni-H 1.41 Å);
+  - a full `bceg run` with `crest_gfn2`, which gave the documented layout, and a rerun that skipped everything.
+- **Not yet run**: CREST 3.1 with inline UMA (`mlip`), GOAT, molassembler, LoQI and the UMA post-optimisation.
   Things to verify on the first cluster run are listed in [PLAN.md](PLAN.md).
+
+To run the tests locally, use any env with rdkit, pandas and pyyaml. Put the `crest` env's `bin/` on
+`PATH` to also run the real-xtb tests:
+
+```bash
+PATH=<conda>/envs/crest/bin:$PATH PYTHONPATH=src python -m pytest -q
+```
 
 ## Repository
 

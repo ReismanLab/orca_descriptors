@@ -20,7 +20,9 @@ def _coerce(key: str, default: Any, value: Any) -> Any:
         if not isinstance(value, bool):
             raise TypeError(f"{key}: expected bool, got {value!r}")
         return value
-    if isinstance(default, float) and isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, bool):
+        raise TypeError(f"{key}: expected {type(default).__name__}, got {value!r}")
+    if isinstance(default, float) and isinstance(value, (int, float)):
         return float(value)
     if isinstance(default, dict):
         if not isinstance(value, dict):

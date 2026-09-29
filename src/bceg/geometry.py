@@ -8,8 +8,14 @@ pre-optimised with xtb, then checked:
 - no two non-bonded atoms may be closer than the covalent-radii sum (e.g. collapsed H-H).
 
 A rejected geometry is re-embedded with the next seed (``seed + attempt * 10007``),
-so the result is deterministic per replicate while replicates still differ
-(the N-Ni-N angle is free to vary).
+so the result is deterministic per replicate.
+
+Diversity caveat: a full pre-optimisation (``start_preopt_level: normal``) takes rigid
+chelates (e.g. bpy-NiF2) to the same minimum from every seed, so the replicates then
+start from the same geometry. The chelate bite angle N-Ni-N is fixed by the ligand
+(~85 deg); what can differ is the arrangement at Ni (square-planar vs tetrahedral,
+see ``tau4``). The info returned records the RMSD to the raw embedding and the
+geometry at each metal so this can be monitored.
 """
 
 from __future__ import annotations
@@ -18,8 +24,11 @@ from pathlib import Path
 
 import numpy as np
 from rdkit import Chem
+from rdkit.Chem import rdMolAlign
+from rdkit.Geometry import Point3D
 
 from bceg.chem import ORGANIC_ELEMENTS, embed
+from bceg.external import resolve_threads
 from bceg.structure import Structure
 from bceg.xtb import xtb_optimize
 
@@ -51,6 +60,45 @@ def coordination_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_di
     return problems
 
 
+def _with_coords(mol: Chem.Mol, coords: np.ndarray) -> Chem.Mol:
+    m = Chem.Mol(mol)
+    m.RemoveAllConformers()
+    conf = Chem.Conformer(m.GetNumAtoms())
+    for i, (x, y, z) in enumerate(coords):
+        conf.SetAtomPosition(i, Point3D(float(x), float(y), float(z)))
+    m.AddConformer(conf)
+    return m
+
+
+def heavy_atom_rmsd(mol: Chem.Mol, a: np.ndarray, b: np.ndarray) -> float:
+    """Symmetry-aware heavy-atom RMSD (Angstrom) between two geometries of ``mol``."""
+    ma = Chem.RemoveHs(_with_coords(mol, a), sanitize=False)
+    mb = Chem.RemoveHs(_with_coords(mol, b), sanitize=False)
+    return float(rdMolAlign.GetBestRMS(ma, mb, maxMatches=10000))
+
+
+def metal_geometry(mol: Chem.Mol, coords: np.ndarray) -> dict[str, dict]:
+    """Ligand-metal-ligand angles and, for 4-coordinate metals, tau4 (0 square planar, 1 tetrahedral)."""
+    out = {}
+    for atom in mol.GetAtoms():
+        if atom.GetSymbol() in ORGANIC_ELEMENTS:
+            continue
+        m, nbrs = atom.GetIdx(), [n.GetIdx() for n in atom.GetNeighbors()]
+        angles = {}
+        for k, i in enumerate(nbrs):
+            for j in nbrs[k + 1:]:
+                u, v = coords[i] - coords[m], coords[j] - coords[m]
+                cos = np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v))
+                label = f"{mol.GetAtomWithIdx(i).GetSymbol()}{i}-{atom.GetSymbol()}{m}-{mol.GetAtomWithIdx(j).GetSymbol()}{j}"
+                angles[label] = round(float(np.degrees(np.arccos(np.clip(cos, -1, 1)))), 1)
+        info = {"angles_deg": angles}
+        if len(nbrs) == 4:
+            a, b = sorted(angles.values())[-2:]
+            info["tau4"] = round((360.0 - a - b) / 141.0, 3)
+        out[f"{atom.GetSymbol()}{m}"] = info
+    return out
+
+
 def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: dict) -> tuple[np.ndarray, dict]:
     """Return (coords, info) following the start_* parameters of a searcher."""
     rejected = []
@@ -69,15 +117,20 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
         else:
             raise ValueError(f"Unknown start_geometry {params['start_geometry']!r}")
 
-        energy = None
+        energy, embedded = None, coords
         if params["start_preopt"] != "none":
             coords, energy = xtb_optimize(
                 structure.elements, coords, structure.charge, structure.uhf, workdir / f"preopt_{attempt}",
-                method=params["start_preopt"], executable=params["xtb_executable"])
+                method=params["start_preopt"], level=params["start_preopt_level"],
+                executable=params["xtb_executable"], threads=resolve_threads(params.get("threads", params.get("nprocs"))))
         problems = coordination_problems(structure.mol, coords, params["max_metal_ligand_distance"])
         if not problems:
-            return coords, {"source": source, "seed": s, "attempts": attempt + 1, "preopt": params["start_preopt"],
-                            "preopt_energy": energy, "rejected": rejected}
+            return coords, {
+                "source": source, "seed": s, "attempts": attempt + 1, "preopt": params["start_preopt"],
+                "preopt_level": params["start_preopt_level"], "preopt_energy": energy, "rejected": rejected,
+                "rmsd_preopt_vs_embedded": round(heavy_atom_rmsd(structure.mol, embedded, coords), 3),
+                "metal_geometry": metal_geometry(structure.mol, coords),
+            }
         rejected.append({"seed": s, "problems": problems})
         if params["start_geometry"] == "input":
             break

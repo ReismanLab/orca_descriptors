@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from bceg.external import find_executable, run
+from bceg.external import find_executable, resolve_threads, run
 from bceg.search.base import START_DEFAULTS, START_RESOURCE_KEYS, SearchResult, Searcher
 from bceg.structure import Structure
 from bceg.xyz import Conformer, read_xyz, write_xyz
@@ -19,7 +19,7 @@ class Goat(Searcher):
         "goat_block": {},  # key -> value lines inside %goat ... end
         **START_DEFAULTS,
         "seed_offset": 0,
-        "nprocs": 8,
+        "nprocs": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
         "maxcore": 2000,
         "orca_cmd": "orca",  # use the absolute path for parallel runs
     }
@@ -28,7 +28,7 @@ class Goat(Searcher):
     def build_input(self, structure: Structure) -> str:
         p = self.params
         lines = [f"! GOAT {p['method']} {p['keywords']}".rstrip(),
-                 f"%pal nprocs {p['nprocs']} end", f"%maxcore {p['maxcore']}"]
+                 f"%pal nprocs {resolve_threads(p['nprocs'])} end", f"%maxcore {p['maxcore']}"]
         if p["goat_block"]:
             lines += ["%goat"] + [f"  {k} {v}" for k, v in p["goat_block"].items()] + ["end"]
         lines.append(f"* xyzfile {structure.charge} {structure.multiplicity} input.xyz")

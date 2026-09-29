@@ -18,19 +18,19 @@ transformations:
 methods:
   crest_gfn2:
     searcher: crest
-    params: {workhorse: gfn2, threads: 8}
+    params: {workhorse: gfn2}          # threads: default = slurm cpus_per_task
 
   crest_gfn2+uma-sp:
     searcher: crest
-    params: {workhorse: gfn2, refine: sp, threads: 8}    # refine_level defaults to UMA (uma-s-1p2, omol)
+    params: {workhorse: gfn2, refine: sp}    # refine_level defaults to UMA (uma-s-1p2, omol)
 
   crest_gfn2+uma-opt:
     searcher: crest
-    params: {workhorse: gfn2, refine: opt, threads: 8}
+    params: {workhorse: gfn2, refine: opt}
 
   goat_xtb:
     searcher: goat
-    params: {method: XTB, nprocs: 8, orca_cmd: /path/to/orca}
+    params: {method: XTB, orca_cmd: /path/to/orca}
 
   molassembler:
     searcher: molassembler

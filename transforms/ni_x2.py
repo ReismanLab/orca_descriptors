@@ -75,7 +75,7 @@ def transform(smiles: str, x: str) -> dict | None:
         elif atom.GetSymbol() == "Ni":
             atom.SetFormalCharge(2)
     return {
-        "smiles": Chem.MolToSmiles(complex_),
+        "smiles": Chem.MolToSmiles(Chem.RemoveHs(complex_)),  # hydrides on Ni are kept
         "charge": 0,
         "metadata": {"scaffold": scaffold, "x": x},
     }
