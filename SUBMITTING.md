@@ -9,30 +9,58 @@ bceg submit configs/example.yaml --smiles my_ligands.txt --transformation NiF2
 
 ## 1. One-time setup
 
+### Use the shared environment
+
+The group maintains one environment at `/groups/ReismanLab/miniconda3/envs/bceg`. **Do not run `conda env create`**:
+the environment is read-only for everyone but its maintainer, and you do not need to build or update it.
+
 ```bash
-git clone https://github.com/ReismanLab/B-CEG-MCD.git && cd B-CEG-MCD
-conda env create -f environment.yml
+source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
 conda activate bceg
-huggingface-cli login          # UMA weights are gated on HuggingFace
-pip install -e ".[dev]" && pytest   # optional sanity check (pytest is not in the cluster env)
+bceg --help
+huggingface-cli login     # once per user: the UMA weights are gated and the token is per-account
 ```
 
-External programs (see the comments in `environment.yml`):
+The plain name works because the env lives inside the shared conda you just sourced. If you use a conda
+of your own instead, point it at the shared envs directory once:
+
+```bash
+conda config --append envs_dirs /groups/ReismanLab/miniconda3/envs
+```
+
+The `bceg` package is part of that environment, installed from the shared clone at
+`/groups/ReismanLab/B-CEG-MCD`. Cloning the repository yourself is optional and only gives you
+`configs/`, `inputs/` and `transforms/` to copy from — **editing `src/` in a clone of your own changes
+nothing about what runs**. To work on the code, build your own environment (see
+[Development](README.md#development)).
+
+External programs, none of which the shared environment can provide for you:
 
 | needed for | program | how |
 |---|---|---|
-| CREST methods, all start geometries | `crest` ≥ 3.1, `xtb` | conda env |
-| CREST with inline UMA (`refine: sp/opt`) | `fmlip-relay-server` | `pip install '<crest-src>/subprojects/fmlip_relay[uma]'` |
+| CREST methods, all start geometries | `crest`, `xtb` | in the shared env (conda-forge `crest`, currently 3.0.2) |
+| CREST with inline UMA (`+uma` methods, `refine: sp/opt`) | `crest` ≥ 3.1 and `fmlip-relay-server` | **unreleased**, so these methods are commented out in `configs/example.yaml`. 3.1 exists only on the open PR [crest-lab/crest#483](https://github.com/crest-lab/crest/pull/483) (branch `pprcht/crest@experimental`). To use it: build that branch with `-Dfmlip-relay=enabled`, `pip install '<crest-src>/subprojects/fmlip_relay[uma]'` into the env, then set `params: {executable: /abs/path/to/crest-3.1}` on those methods |
 | GOAT | ORCA | cluster module; absolute path in `orca_cmd` |
 | LoQI | `loqi` | separate env; path in `executable` |
 
-Then edit the `slurm:` block of your config (copy `configs/example.yaml`, e.g. to `configs/cluster.yaml`):
+### Your config
+
+Copy a config into a directory you own and edit it:
+
+```bash
+cp /groups/ReismanLab/B-CEG-MCD/configs/example.yaml ~/cluster.yaml
+```
+
+Two things must change. `results_dir:` is resolved relative to the config file, so give it an absolute
+path; and the `slurm: setup:` lines must activate the shared environment, because a compute node starts
+from a bare shell:
 
 ```yaml
+results_dir: /groups/ReismanLab/DATA     # absolute; group-writable and setgid if users share results
 slurm:
   mode: chained              # each job: search, then post-optimisation of that replicate
   setup:                     # run at the start of every job
-    - source ~/miniconda3/etc/profile.d/conda.sh
+    - source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
     - conda activate bceg
     - module load orca       # if you use GOAT
   tasks_per_job: 1
@@ -46,6 +74,64 @@ If a step needs a GPU (UMA post-optimisation on `cuda`, or CREST with inline UMA
 the xtb pre-optimisation) default to the job's `cpus_per_task` (`SLURM_CPUS_PER_TASK`). In chained mode,
 `post_optimization.slurm` and the method's `slurm` overrides both apply, the method's taking precedence. A method can override the profile, e.g.
 `crest_gfn2: {searcher: crest, params: {...}, slurm: {time: "48:00:00"}}`.
+
+### Creating or updating the shared environment (maintainer only)
+
+One person owns the environment. A conda env that several people can `pip install` into drifts and
+breaks silently, and concurrent `conda env create` runs corrupt the shared package cache in ways whose
+error messages point nowhere near the cause.
+
+Clone the repo and build the env in group space, on a filesystem the compute nodes mount (a home
+directory is usually `700`, so an env under `~` is unreachable for the others even when the env itself
+is readable):
+
+```bash
+export SHARED=/groups/ReismanLab
+git clone git@github.com:ReismanLab/B-CEG-MCD.git $SHARED/B-CEG-MCD
+source $SHARED/miniconda3/etc/profile.d/conda.sh
+conda env create -f $SHARED/B-CEG-MCD/environment.yml
+```
+
+`name: bceg` in `environment.yml` puts it at `$SHARED/miniconda3/envs/bceg`, which is already in that
+conda's default `envs_dirs` — that is why users get `conda activate bceg` without configuring anything.
+
+`environment.yml` installs the package with `pip install -e .`, so the env points at the clone it was
+created from: use the shared clone, not a personal one, and `git pull` there to update every user at
+once. To decouple the two instead, reinstall non-editably after creating the env, and repeat that line
+whenever you publish an update:
+
+```bash
+conda run -n bceg pip install --no-deps --force-reinstall $SHARED/B-CEG-MCD
+```
+
+Users need `r` on the files and `x` on every directory above them, and nothing more — a group-writable
+env is a writable `bin/python` and `bin/crest` that everyone executes on the compute nodes:
+
+```bash
+env=$SHARED/miniconda3/envs/bceg
+chgrp -R hpc_ReismanLab $env $SHARED/B-CEG-MCD
+chmod -R g+rX,o-rwx $env $SHARED/B-CEG-MCD
+find $env $SHARED/B-CEG-MCD -type d -exec chmod g+s {} +
+namei -l $env/bin/bceg     # every component must be traversable
+```
+
+Scope these to the `bceg` env, not to all of `$SHARED/miniconda3/envs` — other members keep their own
+environments there and you do not own those files.
+
+If a second person must also install into the shared conda prefix, the thing that actually bites is file
+*creation mode*: with the usual `umask 027` their files land `640`, and the next person cannot write
+them — which is what `NotWritableError` on a path under `pkgs/` means. A cache file is safe to delete
+(`find $SHARED/miniconda3/pkgs/cache -type f -delete`) and conda re-downloads it. To stop it recurring,
+put a **default** ACL on the directories you own; it is inherited by files anyone creates there
+afterwards and overrides their umask:
+
+```bash
+find $SHARED/miniconda3 -user $USER -type d -print0 | xargs -0 setfacl -d -m g:hpc_ReismanLab:rwX
+find $SHARED/miniconda3 -user $USER ! -type l -print0 | xargs -0 setfacl -m g:hpc_ReismanLab:rwX
+```
+
+Default ACLs are not retroactive, so files that already exist keep their mode; `find $SHARED/miniconda3
+! -user $USER` lists them. Only their owner or root can change those.
 
 ## 2. Input SMILES
 

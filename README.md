@@ -55,7 +55,7 @@ These requirements define the project; the code implements them.
 3. **Ensemble search**, one of:
    | searcher | program | notes |
    |---|---|---|
-   | `crest` | CREST ≥ 3.1 (TOML input) | iMTD-GC; optional inline `refine: sp` / `refine: opt` ([composite](https://crest-lab.github.io/crest-docs/page/examples/composite.html)), default refinement level **UMA** (`mlip`, `uma-s-1p2`, `omol`) |
+   | `crest` | CREST 3.0.2 (TOML input) | iMTD-GC. The optional inline `refine: sp` / `refine: opt` ([composite](https://crest-lab.github.io/crest-docs/page/examples/composite.html)) at the **UMA** level (`mlip`, `uma-s-1p2`, `omol`) needs CREST ≥ 3.1, which is unreleased — those two methods are commented out in `configs/example.yaml` |
    | `goat` | ORCA GOAT | `! GOAT XTB` by default |
    | `molassembler` | SCINE Molassembler | distance geometry from the molecular graph; suited to TM complexes |
    | `rdkit_etkdg` | RDKit | ETKDGv3, optional MMFF/UFF |
@@ -120,12 +120,6 @@ and the hardware it ran on:
 | `gpu_hours` | `wall_time_s` x number of GPUs; absent when there is none |
 | `cpu_model`, `host`, `platform`, `slurm_partition`, `slurm_job_id`, `slurm_array_task_id` | where it ran |
 
-The xtb binary used for the start-geometry pre-optimisation is recorded alongside it, in
-`details.start_geometry`: `preopt_program` (resolved path) and `preopt_version`. `xtb_executable` is a
-resource key, so changing it does **not** trip the `params.json` guard — without these two fields,
-results from two xtb builds could merge into one method folder unnoticed. The path matters as much as
-the version: a `module load xtb/6.7.1` shadowing the conda binary reports the same version string.
-
 `cpu_hours` is the **allocation** the step occupied, which is what a cluster bills, not the cores the
 program actually kept busy — for parallel efficiency use `seff <jobid>` while the job is still in SLURM's
 database. GPU names come from `nvidia-smi`; under SLURM's cgroup it sees exactly the GPUs of the
@@ -147,14 +141,16 @@ for m, h in t.most_common():
 EOF
 ```
 
-
 ## Usage
 
 **How to submit jobs on the cluster: see [SUBMITTING.md](SUBMITTING.md).** In short:
 
+The group's environment already exists at `/groups/ReismanLab/miniconda3/envs/bceg`; activate it, do not build it.
+
 ```bash
-conda env create -f environment.yml && conda activate bceg
-huggingface-cli login                                                  # UMA weights are gated
+source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
+conda activate bceg
+huggingface-cli login                                                  # once per user: UMA weights are gated
 bceg submit configs/example.yaml --smiles inputs/example_NN_ligands.txt -t NiF2 --dry-run
 bceg submit configs/example.yaml --smiles inputs/example_NN_ligands.txt -t NiF2
 bceg status configs/example.yaml --smiles inputs/example_NN_ligands.txt -t NiF2
@@ -201,9 +197,16 @@ DATA/                 results (git-ignored)
 
 ## Development
 
+The shared cluster environment ships the package, so editing `src/` in your own clone has no effect on
+what `bceg` runs there. To develop, build an environment of your own:
+
 ```bash
+conda env create -f environment.yml -n bceg-dev && conda activate bceg-dev
 pip install -e ".[dev]" && pytest
 ```
+
+Only the environment's maintainer rebuilds the shared one; see
+[SUBMITTING.md](SUBMITTING.md#creating-or-updating-the-shared-environment-maintainer-only).
 
 Add a searcher by subclassing `bceg.search.base.Searcher` (declare `defaults` and `resource_keys`) and
 registering it in `bceg/search/__init__.py`. Refiners work the same way in `bceg/refine/`.
