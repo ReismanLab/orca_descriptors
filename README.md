@@ -120,6 +120,12 @@ and the hardware it ran on:
 | `gpu_hours` | `wall_time_s` x number of GPUs; absent when there is none |
 | `cpu_model`, `host`, `platform`, `slurm_partition`, `slurm_job_id`, `slurm_array_task_id` | where it ran |
 
+The xtb binary used for the start-geometry pre-optimisation is recorded alongside it, in
+`details.start_geometry`: `preopt_program` (resolved path) and `preopt_version`. `xtb_executable` is a
+resource key, so changing it does **not** trip the `params.json` guard — without these two fields,
+results from two xtb builds could merge into one method folder unnoticed. The path matters as much as
+the version: a `module load xtb/6.7.1` shadowing the conda binary reports the same version string.
+
 `cpu_hours` is the **allocation** the step occupied, which is what a cluster bills, not the cores the
 program actually kept busy — for parallel efficiency use `seff <jobid>` while the job is still in SLURM's
 database. GPU names come from `nvidia-smi`; under SLURM's cgroup it sees exactly the GPUs of the
