@@ -6,6 +6,40 @@ Benchmarking **C**onformer **E**nsemble **G**eneration and refinement, and their
 This first stage produces, for every input molecule, conformer ensembles from several search
 methods, each post-optimised at a common level of theory (UMA by default), in 3 replicates, with
 a strict hyper-parameter log. Descriptor extraction and analysis come next.
+The roadmap and open decisions are in [PLAN.md](PLAN.md).
+
+## Requirements (project specification)
+
+These requirements define the project; the code implements them.
+
+1. **Input**: a list of SMILES in a text file, submitted together with the pre-processing to apply
+   (`NiF2`, `NiH2`, `none`, or something else).
+2. **Pre-processing (transformation)**: an optional script that turns each SMILES into the structure to
+   compute. Example: a set of N,N ligands and a script that builds the L-NiF2 (or L-NiH2) complex in which
+   both ligand nitrogens bind the nickel.
+3. **Conformer ensemble search**, chosen by the user: CREST, GOAT, molassembler, RDKit ETKDG or LoQI.
+   CREST can be run with the inline single-point or inline geometry-optimisation options
+   ([composite workflows](https://crest-lab.github.io/crest-docs/page/examples/composite.html)).
+   The default level of theory for these inline steps is **UMA**.
+4. **Post-search optimisation**, specified by the user; **uma-s** by default.
+5. **Replicates**: every workflow is run **3 times** to evaluate variability. The start geometries must
+   differ between runs, so the N-Ni-N angle is expected to vary a lot. The Ni-N distance must stay within
+   a limit that guarantees coordination, and start geometries are pre-optimised.
+6. **Spin state**: defaults to 1, is easy for the user to change, and is carried through every step of the jobs.
+7. **Folder organisation**:
+   - depth 1: the transformation applied to the SMILES (e.g. `NiF2`, `NiH2`);
+   - depth 2: the InChIKey obtained after canonicalisation of the **input** SMILES;
+   - depth 3: the conformer ensemble method.
+
+   The depth-3 folder holds `raw_1.xyz`, `raw_2.xyz`, `raw_3.xyz` (ensemble search) and the sister files
+   `raw_X_<lot>.xyz` (post-search optimised at level of theory `<lot>`).
+8. **Hyper-parameter log**: each conformer-ensemble folder keeps a log of every hyper-parameter used
+   to generate its xyz files. Before a computation is redone, the log is checked. If the parameters match
+   exactly, the computation is skipped. Otherwise the method must be given another name.
+9. **Cluster**: jobs are submitted to an HPC cluster (SLURM + GPUs). For each input, the conformer search
+   and the post-processing run one after the other automatically.
+10. **Data**: results go to a `DATA/` folder that is part of the repository layout but never committed.
+11. **Next stage**: descriptor extraction to rationalise reactivity. It is not part of the current code.
 
 ## Workflow
 
@@ -77,9 +111,20 @@ bceg run    configs/example.yaml --smiles inputs/example_NN_ligands.txt -t none 
 
 Each cluster job runs the conformer search of one replicate and then its UMA post-optimisation.
 
+## Status
+
+- Implemented and unit-tested: inputs and canonicalisation, NiF2/NiH2 transformation, folder layout,
+  hyper-parameter logs, start-geometry checks, ETKDG searcher, task expansion, SLURM script generation, `submit`.
+- **Not yet run for real**: CREST, GOAT, molassembler, LoQI, the xtb pre-optimisation and the UMA
+  post-optimisation. Their programs are not installed on the development machine; the tests use stand-ins.
+  Things to verify on the first cluster run are listed in [PLAN.md](PLAN.md).
+
 ## Repository
 
 ```
+README.md             this file (requirements, workflow, layout)
+SUBMITTING.md         how to submit jobs on the cluster
+PLAN.md               roadmap, decisions, open items
 configs/              configurations (methods, transformations, post-optimisation, cluster)
 inputs/               SMILES lists
 transforms/           pre-processing scripts (ni_x2.py -> NiF2 / NiH2)
