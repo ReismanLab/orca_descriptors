@@ -513,6 +513,33 @@ def validate_spec(raw: Mapping[str, Any], path: Path | None = None) -> Spec:
     )
 
 
+def _yaml_load_no_duplicates(text: str):
+    """``yaml.safe_load`` that refuses a mapping with a repeated key.
+
+    PyYAML silently keeps the last value, so a spec with two ``numbering:`` sections (a block pasted
+    from a template next to the original one) loads without a word and runs with the wrong one:
+    that once put every energy of a library in an all-NaN column.
+    """
+    import yaml
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    def construct_mapping(loader, node, deep=False):
+        seen: dict = {}
+        for key_node, _ in node.value:
+            key = loader.construct_object(key_node, deep=True)
+            if key in seen:
+                raise SpecError([f"line {key_node.start_mark.line + 1}: key {key!r} appears twice in the same mapping "
+                                 f"(first at line {seen[key]}); YAML would silently keep the last one, so merge or "
+                                 "delete one of the two blocks"])
+            seen[key] = key_node.start_mark.line + 1
+        return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+    Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_mapping)
+    return yaml.load(text, Loader=Loader)
+
+
 def load_spec(path: str | Path) -> Spec:
     """Read a YAML or JSON spec file and validate it."""
     path = Path(path)
@@ -521,9 +548,9 @@ def load_spec(path: str | Path) -> Spec:
         if path.suffix.lower() == ".json":
             raw = json.loads(text)
         else:
-            import yaml
-
-            raw = yaml.safe_load(text)
+            raw = _yaml_load_no_duplicates(text)
+    except SpecError:
+        raise
     except Exception as exc:  # yaml.YAMLError / json.JSONDecodeError
         hint = ""
         if "[" in text and "smarts" in text and "'[" not in text and '"[' not in text:

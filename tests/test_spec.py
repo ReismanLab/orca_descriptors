@@ -85,3 +85,22 @@ def test_output_section_is_validated():
     assert spec.output["aggregated_csv"] == "{date}_{name}_final.csv" and spec.output["check_csv"].startswith("{date}")
     with pytest.raises(SpecError, match="nbo_block_map"):
         validate_spec({**base, "descriptors": {"orca": {"redox": {"atoms": ["A"], "nbo_block_map": {"singlepoint": 0}}}}})
+
+
+def test_duplicate_top_level_key_is_refused(tmp_path):
+    """A second `numbering:` block must not silently replace the first (YAML keeps the last one)."""
+    text = (
+        "name: dup\ndata: {root: DATA/x}\natoms: {A: C}\n"
+        "numbering: {backend: first_n, energy: {source: xyz_comment, column: uma_energy_hartree}}\n"
+        "descriptors: {orca: {xyz: {atoms: [A]}}}\n"
+        "numbering: {backend: first_n}\n"
+    )
+    (tmp_path / "dup.yaml").write_text(text)
+    with pytest.raises(SpecError) as exc:
+        load_spec(tmp_path / "dup.yaml")
+    assert "key 'numbering' appears twice" in str(exc.value) and "line 6" in str(exc.value) and "line 4" in str(exc.value)
+    # nested duplicates are caught too
+    (tmp_path / "dup2.yaml").write_text(text.replace("numbering: {backend: first_n}\n", "")
+                                        .replace("descriptors:", "aggregate: {stats: [min], stats: [max]}\ndescriptors:"))
+    with pytest.raises(SpecError, match="key 'stats' appears twice"):
+        load_spec(tmp_path / "dup2.yaml")
