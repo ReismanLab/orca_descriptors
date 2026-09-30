@@ -29,10 +29,10 @@ def test_molecule_folder():
 
 def test_aggregate_frame_stats():
     df = pd.DataFrame({
-        "inchi": ["m", "m", "n"], "SCF_energy": [-10.0, -10.0, -5.0],
+        "inchikey": ["m", "m", "n"], "SCF_energy": [-10.0, -10.0, -5.0],
         "x": [1.0, 3.0, 7.0], "y": [np.nan, 2.0, np.nan], "smiles": ["s1", "s1", "s2"],
     })
-    agg = aggregate_frame(df, "inchi", "SCF_energy", carry_first=["smiles"]).set_index("inchi")
+    agg = aggregate_frame(df, "inchikey", "SCF_energy", carry_first=["smiles"]).set_index("inchikey")
     assert agg.loc["m", "x_min"] == 1.0 and agg.loc["m", "x_max"] == 3.0
     assert agg.loc["m", "x_boltz"] == pytest.approx(2.0)       # equal energies -> plain mean
     assert agg.loc["m", "x_lowE"] == 1.0                        # first minimum wins (idxmin)
@@ -43,11 +43,11 @@ def test_aggregate_frame_stats():
 
 def test_aggregate_conformers_excludes_label_columns_and_adds_folder():
     df = pd.DataFrame({
-        "path": ["DATA/x/M1/conf_1", "DATA/x/M1/conf_2"], "inchi": ["M1", "M1"],
+        "path": ["DATA/x/M1/conf_1", "DATA/x/M1/conf_2"], "inchikey": ["M1", "M1"],
         "SCF_energy": [-1.0, -1.0], "A": [1, 1], "B": [2, 2], "charge_NBO_A": [0.1, 0.3], "smiles": ["s", "s"],
     })
     agg = aggregate_conformers(df, SPEC)
-    assert list(agg.columns[:3]) == ["inchi_folder", "inchi", "smiles"]
-    assert agg.loc[0, "inchi_folder"] == "DATA/x/M1"
+    assert list(agg.columns[:3]) == ["inchikey_folder", "inchikey", "smiles"]
+    assert agg.loc[0, "inchikey_folder"] == "DATA/x/M1"
     assert "A_min" not in agg.columns and "charge_NBO_A_boltz" in agg.columns
     assert agg.loc[0, "charge_NBO_A_boltz"] == pytest.approx(0.2)

@@ -117,29 +117,32 @@ def aggregate_frame(
 def aggregate_conformers(df: pd.DataFrame, spec: Spec) -> pd.DataFrame:
     """Spec-driven wrapper around :func:`aggregate_frame`.
 
-    Adds ``inchi_folder`` (molecule folder derived from ``path``) when a ``path`` column is
+    Adds ``inchikey_folder`` (molecule folder derived from ``path``) when a ``path`` column is
     present, excludes the atom-label index columns from aggregation, and carries the
     molecule id plus ``aggregate.carry_first`` columns through.
     """
     cfg = spec.aggregate
     df = df.copy()
     group_by = cfg["group_by"]
+    if group_by not in df.columns and group_by == "inchikey" and "inchi" in df.columns:
+        # per-conformer tables written before 2026-09-30 named the InChIKey column "inchi"
+        df = df.rename(columns={"inchi": "inchikey"})
     if "path" in df.columns:
-        df["inchi_folder"] = df["path"].map(molecule_folder)
+        df["inchikey_folder"] = df["path"].map(molecule_folder)
         if group_by not in df.columns:
-            df[group_by] = df["inchi_folder"].str.rsplit("/", n=1).str[-1]
+            df[group_by] = df["inchikey_folder"].str.rsplit("/", n=1).str[-1]
     if group_by not in df.columns:
         raise KeyError(f"aggregate.group_by column {group_by!r} not found in the per-conformer table")
     carry = list(cfg.get("carry_first", []))
-    if "inchi_folder" in df.columns and "inchi_folder" not in carry:
-        carry.insert(0, "inchi_folder")
+    if "inchikey_folder" in df.columns and "inchikey_folder" not in carry:
+        carry.insert(0, "inchikey_folder")
     exclude = set(cfg.get("exclude_columns", [])) | set(spec.labels) | {"n_loaded"}
     agg = aggregate_frame(
         df, group_by=group_by, energy_column=cfg["energy_column"], temperature_K=cfg["temperature_K"],
         kB=cfg["kB_hartree_per_K"], stats=cfg["stats"], carry_first=carry, exclude_columns=exclude,
     )
-    # Match the historical column order: inchi_folder, inchi, smiles, ligand_class, then descriptors.
-    front = [c for c in ["inchi_folder", group_by] + [c for c in carry if c != "inchi_folder"] if c in agg.columns]
+    # Column order: inchikey_folder, inchikey, smiles, ligand_class, then descriptors.
+    front = [c for c in ["inchikey_folder", group_by] + [c for c in carry if c != "inchikey_folder"] if c in agg.columns]
     rest = [c for c in agg.columns if c not in front]
     return agg[front + rest]
 
@@ -162,7 +165,7 @@ def apply_filter(agg: pd.DataFrame, spec: Spec) -> tuple[pd.DataFrame, dict]:
     from desc_utils.data_extraction import filter_numeric_descriptors
 
     filtered, report = filter_numeric_descriptors(agg, **filter_kwargs_from_spec(spec))
-    meta = [c for c in ["smiles", spec.aggregate["group_by"], "inchi_folder", "ligand_class", "n_conformers",
+    meta = [c for c in ["smiles", spec.aggregate["group_by"], "inchikey_folder", "ligand_class", "n_conformers",
                         *COMPLETENESS_COLUMNS]
             if c in agg.columns and c not in filtered.columns]
     for c in meta:

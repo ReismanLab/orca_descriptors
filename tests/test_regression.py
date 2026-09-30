@@ -59,7 +59,7 @@ def test_smarts_numbering_reproduces_table(lnih2, numbering_ref, repo_root):
     assert (df["numbering_status"] == "ok").all()
     for c in LABELS:
         assert (df[c].astype(int) == ref[c].astype(int)).all(), c
-    for c in ["smiles", "inchi", "ligand_type", "ligand_class"]:
+    for c in ["smiles", "inchikey", "ligand_type", "ligand_class"]:
         assert (df[c].astype(str) == ref[c].astype(str)).all(), c
     assert (df["SCF_energy"] - ref["SCF_energy"]).abs().max() < 1e-9   # CSV round-trip of the float
 
@@ -80,28 +80,28 @@ def test_descripytor_block_reproduces_reference(lnih2, numbering_ref, repo_root)
 
 
 def test_full_pipeline_reproduces_aggregated_csv(lnih2, repo_root):
-    ref = pd.read_csv(repo_root / "tests/reference/20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv").set_index("inchi")
+    ref = pd.read_csv(repo_root / "tests/reference/20260922_LNiH2_library_001_to_download_2026_03_24_descriptors.csv").set_index("inchikey")
     num = read_numbering_table(repo_root / "tests/reference/atom_numbering_results.csv", lnih2)
     per_conf = run_extraction(lnih2, num, repo_root, progress=False)
     agg = aggregate_conformers(per_conf, lnih2)
-    new = agg.set_index("inchi").reindex(ref.index)
+    new = agg.set_index("inchikey").reindex(ref.index)
     numeric = [c for c in ref.columns if pd.api.types.is_numeric_dtype(ref[c])]
     missing = [c for c in numeric if c not in new.columns]
     assert not missing, f"{len(missing)} reference columns missing, e.g. {missing[:5]}"
     _assert_close(ref, new, numeric)
     filtered, report = apply_filter(agg, lnih2)
     assert report["final_numeric_count"] > 300
-    assert {"inchi", "inchi_folder", "smiles", "ligand_class"} <= set(filtered.columns)
+    assert {"inchikey", "inchikey_folder", "smiles", "ligand_class"} <= set(filtered.columns)
 
 
 def test_test_molecules_pipeline(repo_root):
     spec = load_spec(repo_root / "specs" / "test_molecules_at1_at2.yaml")
-    ref = pd.read_csv(repo_root / "tests/reference/20260922_test_molecules_descriptors.csv").set_index("inchi")
+    ref = pd.read_csv(repo_root / "tests/reference/20260922_test_molecules_descriptors.csv").set_index("inchikey")
     num = build_numbering_table(spec, repo_root, progress=False)
     assert (num[["at1", "at2"]].astype(int).values == [1, 2]).all()
     per_conf = run_extraction(spec, num, repo_root, progress=False)
     agg = aggregate_conformers(per_conf, spec)
-    new = agg.set_index("inchi").reindex(ref.index)
+    new = agg.set_index("inchikey").reindex(ref.index)
     numeric = [c for c in ref.columns if pd.api.types.is_numeric_dtype(ref[c])]
     missing = [c for c in numeric if c not in new.columns]
     assert not missing, f"{len(missing)} reference columns missing, e.g. {missing[:5]}"

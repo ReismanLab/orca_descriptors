@@ -72,7 +72,7 @@ DEFAULTS: dict[str, Any] = {
         "layout": "molecule/conformer",
         "conformer_glob": "conf_*",
         "geometry_file": "optimization.xyz",
-        "molecule_id_column": "inchi",
+        "molecule_id_column": "inchikey",
         # desc_utils.condense output read instead of the raw ORCA files when present; null = raw files only
         "condensed_file": "orca_condensed.json",
     },
@@ -100,7 +100,7 @@ DEFAULTS: dict[str, Any] = {
                  "nbo_block_index": 0, "spin": "alpha"},
     "orca_redox": {"prefixes": ["cm5"], "nbo_block_map": {"singlepoint": 1, "oxidation": 2, "reduction": 3}},
     "aggregate": {
-        "group_by": "inchi",
+        "group_by": "inchikey",
         "energy_column": "SCF_energy",
         "temperature_K": 298.15,
         "kB_hartree_per_K": 3.166811563e-6,
