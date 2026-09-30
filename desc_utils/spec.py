@@ -58,6 +58,13 @@ ORCA_FAMILIES = ("xyz", "charges", "nbo", "redox")
 NBO_SPIN_CHOICES = ("alpha", "beta", "both")  # od.NBOProps.SPIN_CHOICES
 
 NUMBERING_BACKENDS = ("smarts", "manual", "first_n", "molalign")
+#: Where the per-conformer energy of the numbering table comes from (see ``numbering.energy``):
+#: ``orca`` reads the SCF energy of ``<basename>`` from the ORCA outputs (property JSON or condensed file);
+#: ``xyz_comment`` reads ``<key>=<value>`` from the comment line of the geometry file (extended xyz, as
+#: written by ASE / UMA / fairchem) and converts it from ``units`` to Hartree, so that a library optimised with a
+#: machine-learned potential can be aggregated without any ORCA run.
+ENERGY_SOURCES = ("orca", "xyz_comment")
+ENERGY_UNITS = ("hartree", "eV", "kcal/mol", "kJ/mol")
 AGGREGATE_STATS = ("min", "max", "lowE", "boltz")
 
 DEFAULTS: dict[str, Any] = {
@@ -75,7 +82,9 @@ DEFAULTS: dict[str, Any] = {
         "orient": [],
         "annotators": [],
         "smiles": {"mode": "whole_molecule", "strip": []},
-        "energy": {"basename": "singlepoint", "column": "SCF_energy"},
+        # `source: orca` -> `basename` and `column`; `source: xyz_comment` -> `key`, `units` and an explicit
+        # `column` that must not be called SCF_energy, so the table always says where its energies come from.
+        "energy": {"source": "orca", "basename": "singlepoint", "column": "SCF_energy", "key": "energy", "units": "eV"},
         "smarts": {"match_selection": "first"},
     },
     "orca_xyz": {
@@ -312,8 +321,38 @@ def _validate_numbering(numbering: dict, labels: list[str], problems: list[str])
         if l not in labels:
             problems.append(f"numbering.smiles.strip: unknown label {l!r}")
     numbering["smiles"] = smiles
-    numbering["energy"] = _merge_defaults(numbering.get("energy"), DEFAULTS["numbering"]["energy"])
+    numbering["energy"] = _validate_energy(numbering.get("energy"), problems)
     return numbering
+
+
+def _validate_energy(cfg: Mapping | None, problems: list[str]) -> dict:
+    """``numbering.energy``: the ORCA SCF energy by default, or the energy of the xyz comment line.
+
+    With ``source: xyz_comment`` the column name is mandatory and may not be ``SCF_energy``: the value is
+    not an SCF energy, and a reader of the table must be able to tell (``uma_energy_hartree`` says it all).
+    Whatever the source, the column holds Hartree, which is what the Boltzmann weighting expects.
+    """
+    given = dict(cfg or {})
+    out = _merge_defaults(given, DEFAULTS["numbering"]["energy"])
+    source = out.get("source")
+    if source not in ENERGY_SOURCES:
+        problems.append(f"numbering.energy.source must be one of {ENERGY_SOURCES}, got {source!r}")
+        return out
+    if not isinstance(out.get("column"), str) or not out["column"].strip():
+        problems.append("numbering.energy.column must be a non-empty column name")
+        return out
+    if source == "xyz_comment":
+        if "column" not in given:
+            problems.append("numbering.energy.column is required with source xyz_comment: name it after the method "
+                            "that wrote the geometry, e.g. uma_energy_hartree, so the provenance is unequivocal")
+        elif out["column"] == DEFAULTS["numbering"]["energy"]["column"]:
+            problems.append(f"numbering.energy.column may not be {out['column']!r} with source xyz_comment: "
+                            "the value is not an SCF energy; use e.g. uma_energy_hartree")
+        if not isinstance(out.get("key"), str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", out["key"]):
+            problems.append(f"numbering.energy.key must be an extended-xyz key such as 'energy' or 'free_energy', got {out.get('key')!r}")
+        if out.get("units") not in ENERGY_UNITS:
+            problems.append(f"numbering.energy.units must be one of {ENERGY_UNITS}, got {out.get('units')!r}")
+    return out
 
 
 def _validate_orca(orca: dict | None, labels: set[str], problems: list[str]) -> dict | None:
@@ -453,6 +492,9 @@ def validate_spec(raw: Mapping[str, Any], path: Path | None = None) -> Spec:
         problems.append("descriptors: at least one of `orca` or `descripytor` is required")
 
     aggregate = _merge_defaults(raw.get("aggregate"), DEFAULTS["aggregate"])
+    if "energy_column" not in (raw.get("aggregate") or {}):
+        # the numbering table's energy column is what the aggregation weights with unless the spec says otherwise
+        aggregate["energy_column"] = numbering["energy"]["column"]
     bad_stats = [s for s in aggregate.get("stats", []) if s not in AGGREGATE_STATS]
     if bad_stats:
         problems.append(f"aggregate.stats: unsupported {bad_stats}; choose from {AGGREGATE_STATS}")

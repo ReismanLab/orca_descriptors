@@ -1,0 +1,64 @@
+# Geometry-only descriptors from UMA-optimised structures: no ORCA output, no condensed file.
+#
+# Every conformer folder of the small organic test set also holds `optimized_uma-s-1p1.xyz`, the
+# extended xyz written by ASE after the UMA pre-optimisation. This spec describes those geometries
+# alone: the morfeus family (SASA, %Vbur, bond lengths, angles, Sterimol, pyramidalisation) is the only
+# one that needs nothing but the xyz, and the energy of the comment line is used for the Boltzmann
+# weighting. The energy column is named after its source on purpose: the table must say that it holds
+# UMA energies (converted to Hartree), not SCF energies.
+#
+# Run:  python -m desc_utils.run all --spec specs/test_molecules_uma_only.yaml
+name: test_molecules_uma_only
+spec_version: 1
+
+data:
+  root: DATA/test_molecules
+  layout: molecule/conformer
+  conformer_glob: "conf_*"
+  geometry_file: optimized_uma-s-1p1.xyz    # the UMA geometry; morfeus caches into <conf>/xyz_optimized_uma-s-1p1.json
+  molecule_id_column: inchi
+  condensed_file: null                      # nothing reads ORCA output in this spec
+
+atoms:
+  at1: null
+  at2: null
+
+numbering:
+  backend: first_n
+  index_base: 1
+  consistency: per_molecule
+  orient: []
+  annotators: []
+  smiles: {mode: whole_molecule}
+  energy:
+    source: xyz_comment                     # `energy=<value>` of the extended-xyz comment line (ASE / UMA)
+    key: energy                             # or free_energy
+    units: eV                               # converted to Hartree in the table
+    column: uma_energy_hartree              # mandatory with xyz_comment; SCF_energy is refused
+
+descriptors:
+  orca:
+    xyz:
+      atoms: [at1, at2]
+      bonds: [[at1, at2]]
+      angles: []
+      dihedrals: []
+      quadrants: []
+      vbur_radii: [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+      use_cached_json: true
+
+aggregate:
+  group_by: inchi
+  energy_column: uma_energy_hartree         # defaults to numbering.energy.column; written out for clarity
+  temperature_K: 298.15
+  kB_hartree_per_K: 3.166811563e-6
+  stats: [min, max, lowE, boltz]
+  carry_first: [smiles, smiles_noH]
+
+filter:
+  enabled: false
+
+output:
+  numbering_csv: "{date}_{name}_atom_numbering_results.csv"
+  per_conformer_csv: "{date}_{name}_combined_descriptors.csv"
+  aggregated_csv: "{date}_{name}_descriptors.csv"

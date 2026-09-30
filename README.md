@@ -153,7 +153,8 @@ python -m desc_utils.run all --spec specs/<LIB>.yaml --jobs 4
 `--jobs N` spreads the per-conformer work (Open Babel and SMARTS numbering, morfeus geometry, ORCA and
 DescriPyTor extraction) over N processes; `--jobs 0` takes every core, the default is one. The tables
 are the same whatever N. The first run of a library is the one to parallelise: the morfeus results are
-cached in `<conf>/xyz.json` and read back on the next runs.
+cached in `<conf>/xyz.json` (`<conf>/xyz_<stem>.json` when `data.geometry_file` is not `optimization.xyz`)
+and read back on the next runs.
 
 | Spec field | Set to |
 |---|---|
@@ -163,6 +164,24 @@ cached in `<conf>/xyz.json` and read back on the next runs.
 | `numbering` | how each label is found: `smarts` stages (see the LNiH2 spec), `first_n` (labels = atoms 1..N of the xyz), or `manual` with `csv:` pointing to your own table of 1-based indices |
 | `descriptors.orca.*`, `descriptors.descripytor` | label lists / label tuples; delete the terms you do not need |
 | `filter.metal_label` | the metal label, or `null` for organic molecules |
+
+**Geometry-only descriptors from UMA structures.** The morfeus family (`descriptors.orca.xyz`: SASA,
+%Vbur, bond lengths, angles, dihedrals, Sterimol, pyramidalisation, quadrants) needs nothing but an xyz
+file, so a library pre-optimised with UMA can be described before, or without, any ORCA job and without
+step 4 (no `orca_condensed.json`). `specs/test_molecules_uma_only.yaml` is the template: point
+`data.geometry_file` at the xyz UMA wrote (`optimized_uma-s-1p1.xyz`, an extended xyz whose force columns
+are ignored), keep `descriptors.orca.xyz` as the only family, and take the energy for the Boltzmann
+weighting from the comment line of that file:
+
+```yaml
+numbering:
+  energy: {source: xyz_comment, key: energy, units: eV, column: uma_energy_hartree}
+```
+
+`column` is mandatory here and may not be `SCF_energy`: the value is a UMA energy converted to Hartree, and
+the table must say so. The other families (`charges`, `nbo`, `redox`, `descripytor`) read ORCA output and
+cannot run on an xyz; when none of them is requested the tables carry no `orca_job_status`, no
+`all_conformers_completed` flag, and nothing is listed as "ORCA job missing".
 
 The run never stops for a bad conformer. One that could not be numbered, or whose ORCA job is
 running, failed or absent, is left out or NaN in the tables, the molecule gets
@@ -347,12 +366,12 @@ A spec has these sections (defaults in `desc_utils/spec.py::DEFAULTS`):
 
 | Section | Content |
 |---|---|
-| `data` | `root` folder, `layout: molecule/conformer`, `conformer_glob`, `geometry_file`, `molecule_id_column`. |
+| `data` | `root` folder, `layout: molecule/conformer`, `conformer_glob`, `geometry_file` (the xyz every stage reads: numbering, morfeus, comment-line energy), `molecule_id_column`, `condensed_file` (`null` = raw ORCA files only). |
 | `atoms` | Ordered map `label -> expected element` (`null` = any). Labels are the only way descriptors refer to atoms. |
-| `numbering` | `backend` (`smarts`, `manual`, `first_n`, `molalign`), `index_base`, per-backend block, optional `orient` rules, `annotators`, `smiles` mode, `energy` source. |
+| `numbering` | `backend` (`smarts`, `manual`, `first_n`, `molalign`), `index_base`, per-backend block, optional `orient` rules, `annotators`, `smiles` mode, `energy` (`source: orca`, the SCF energy of `basename`, column `SCF_energy`; or `source: xyz_comment`, the `key=` value of the extended-xyz comment line in `units`, converted to Hartree, with a mandatory `column` name that may not be `SCF_energy`). |
 | `descriptors.orca` | Four families with label lists: `xyz` (atoms, bonds, angles, dihedrals, quadrants, `vbur_radii`), `charges`, `nbo` (`homo_lumo_rank_range`, `nbo_block_index`, `spin`), `redox` (Fukui `prefixes`, `nbo_block_map`). |
 | `descriptors.descripytor` | DescriPyTor "Schema B" keys with label tuples: `charges`, `charge_diff`, `sterimol`, `bond_length`, `bond_angle`, `stretching_vibration`, `bending_vibration`, `dipole`, plus thresholds, `radii`, `drop_atoms`. |
-| `aggregate` | `group_by`, `energy_column`, `temperature_K`, `kB_hartree_per_K`, `stats`, `carry_first`. |
+| `aggregate` | `group_by`, `energy_column` (defaults to `numbering.energy.column`), `temperature_K`, `kB_hartree_per_K`, `stats`, `carry_first`. |
 | `filter` | Every option of `filter_numeric_descriptors`, plus `metal_label`. |
 | `output` | File names of the three stage outputs and of `check_csv`, the list of conformers to look at; `{date}` and `{name}` are filled in at run time. |
 
@@ -399,8 +418,9 @@ The result is `<date>_<name>_combined_descriptors.csv`, one row per conformer, m
 
 `aggregate` groups conformers by molecule (`group_by: inchi`) and writes, for every numeric descriptor,
 `<name>_min`, `<name>_max`, `<name>_lowE` (lowest-energy conformer) and `<name>_boltz`, the Boltzmann
-average at `temperature_K` with weights `exp(-ΔE / kB T)` computed from `energy_column` (the SCF energy
-of the `singlepoint` step, no thermal correction). `n_conformers` and the `carry_first` columns are
+average at `temperature_K` with weights `exp(-ΔE / kB T)` computed from `energy_column` (by default the
+column of `numbering.energy`: the SCF energy of the `singlepoint` step, no thermal correction, or the
+comment-line energy of the geometry file for a geometry-only run; always Hartree). `n_conformers` and the `carry_first` columns are
 kept. This complete table is the default output. Optionally, with `filter.enabled: true` in the spec or
 `aggregate --filter`, `filter_numeric_descriptors` then removes: non-numeric and all-NaN columns, NBO orbitals whose
 Boltzmann occupancy is below `occupancy_boltz_threshold`, Rydberg orbitals (except on `metal_label`),

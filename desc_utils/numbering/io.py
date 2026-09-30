@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -95,6 +96,37 @@ def smiles_for_mol(mol, mode: str = "whole_molecule", strip_indices: Iterable[in
         if frag.GetNumAtoms() > 1:
             return _to_smiles(frag, remove_hs)
     return _to_smiles(rw, remove_hs)
+
+
+#: 1 Hartree in each unit accepted by ``numbering.energy.units`` (CODATA 2018).
+HARTREE_IN = {"hartree": 1.0, "eV": 27.211386245988, "kcal/mol": 627.5094740631, "kJ/mol": 2625.4996394799}
+
+
+def to_hartree(value: float, units: str) -> float:
+    """Convert an energy from ``units`` (``hartree``, ``eV``, ``kcal/mol``, ``kJ/mol``) to Hartree."""
+    try:
+        return float(value) / HARTREE_IN[units]
+    except KeyError:
+        raise ValueError(f"unknown energy units {units!r}; expected one of {list(HARTREE_IN)}") from None
+
+
+def xyz_comment_energy(conf_dir: str | Path, geometry_file: str = "optimization.xyz", key: str = "energy",
+                       units: str = "eV") -> float:
+    """``<key>=<value>`` of the comment line of the geometry file, converted from ``units`` to Hartree.
+
+    This is the extended-xyz header ASE writes (``energy=-2104.109 free_energy=... pbc="F F F"``), so a
+    geometry optimised with UMA or any other ASE calculator carries its own energy. Only the first frame is
+    read. Raises ``ValueError`` when the key is absent or not a number.
+    """
+    path = Path(conf_dir) / geometry_file
+    with open(path, encoding="utf-8") as fh:
+        fh.readline()
+        comment = fh.readline()
+    # `energy=` must not match inside `free_energy=`: no word character may precede the key
+    m = re.search(rf"(?<![A-Za-z0-9_]){re.escape(key)}=\"?([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\"?(?=\s|$)", comment)
+    if m is None:
+        raise ValueError(f"{path.name}: no '{key}=<number>' in the comment line: {comment.strip()[:120]!r}")
+    return to_hartree(float(m.group(1)), units)
 
 
 def scf_energy(conf_dir: str | Path, basename: str = "singlepoint",

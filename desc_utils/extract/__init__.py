@@ -22,6 +22,24 @@ from desc_utils.parallel import parallel_map, resolve_jobs
 from desc_utils.spec import Spec
 
 ALL_FAMILIES = ("orca.xyz", "orca.charges", "orca.nbo", "orca.redox", "descripytor")
+#: Families that read ORCA output (property JSON, NBO, condensed file). ``orca.xyz`` is not one of them: it
+#: only needs the geometry file, so a library optimised with UMA can be described without any ORCA job.
+ORCA_OUTPUT_FAMILIES = ("orca.charges", "orca.nbo", "orca.redox", "descripytor")
+
+
+def needs_orca_output(spec: Spec, families: Iterable[str] | None = None) -> bool:
+    """Whether the requested families (default: every family of the spec) read ORCA output at all.
+
+    When they do not (geometry-only run on UMA structures), the ORCA job bookkeeping is skipped: no
+    ``orca_job_status`` column, no "ORCA job missing" entry in the check report, no completeness flag.
+    """
+    present = set()
+    if spec.orca:
+        present.update(f"orca.{k}" for k in spec.orca)
+    if spec.descripytor:
+        present.add("descripytor")
+    wanted = set(families) if families is not None else present
+    return bool(present & wanted & set(ORCA_OUTPUT_FAMILIES))
 
 
 def _meta_columns(spec: Spec, df_num: pd.DataFrame) -> list[str]:
@@ -173,7 +191,8 @@ def run_extraction(spec: Spec, df_num: pd.DataFrame, repo_root: Path, families: 
     ``families`` defaults to every family present in the spec. The numbering table's
     metadata columns (path, molecule id, energy, smiles, atom indices, ...) are carried
     into the output so the aggregation stage needs nothing else, together with the ORCA job
-    status of every conformer (:func:`job_status_columns`).
+    status of every conformer (:func:`job_status_columns`) whenever a requested family reads ORCA
+    output (:func:`needs_orca_output`); a geometry-only run carries no job status.
 
     ``jobs > 1`` (``0`` = every core) spreads the conformers over that many processes, each running
     every engine on its conformer; the library-wide NBO rank consolidation is then applied once to the
@@ -190,7 +209,8 @@ def run_extraction(spec: Spec, df_num: pd.DataFrame, repo_root: Path, families: 
     df_num = df_num.reset_index(drop=True).copy()
     df_num["path"] = df_num["path"].map(lambda p: conf_key(p, repo_root))  # one join key for every engine
     out = df_num[_meta_columns(spec, df_num)].copy()
-    out = out.merge(job_status_columns(list(out["path"]), spec, repo_root), on="path", how="left")
+    if needs_orca_output(spec, wanted):
+        out = out.merge(job_status_columns(list(out["path"]), spec, repo_root), on="path", how="left")
 
     # Every conformer keeps its metadata row (so the check report can list it), but only the
     # cleanly numbered ones are handed to the engines: a failed row has <NA> where an atom index

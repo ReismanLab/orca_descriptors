@@ -76,28 +76,47 @@ class PropertiesJOB:
 class PropertiesXYZ:
     """Properties from XYZ file using Morfeus"""
 
-    def __init__(self, path, overwrite_results=False):
+    DEFAULT_GEOMETRY_FILE = 'optimization.xyz'
+
+    @staticmethod
+    def cache_name(geometry_file=DEFAULT_GEOMETRY_FILE):
+        """Name of the morfeus cache next to the geometry: ``xyz.json`` for ``optimization.xyz`` (legacy),
+        ``xyz_<stem>.json`` for any other geometry file, so that two geometries of the same conformer folder
+        (the ORCA one and e.g. ``optimized_uma-s-1p1.xyz``) never share a cache."""
+        if geometry_file == PropertiesXYZ.DEFAULT_GEOMETRY_FILE:
+            return 'xyz.json'
+        return f"xyz_{os.path.splitext(os.path.basename(geometry_file))[0]}.json"
+
+    def __init__(self, path, overwrite_results=False, geometry_file=DEFAULT_GEOMETRY_FILE):
         """this class reads an xyz file from a given path and extracts properties using Morfeus
         Args:
-            path (str): path to the folder containing optimization.xyz
-            overwrite_results (bool): whether to overwrite existing results in xyz.json or to load them if they exist. Default is False (load existing results if available).
+            path (str): path to the folder containing the geometry file
+            overwrite_results (bool): whether to overwrite existing results in the cache file or to load them if they exist. Default is False (load existing results if available).
+            geometry_file (str): name of the xyz file in ``path`` (default ``optimization.xyz``, the ORCA geometry;
+                any single-frame xyz works, extra columns after x y z such as the forces of an extended xyz are ignored).
         The class is initialized by reading the xyz file and storing the number of atoms, elements, and coordinates
         and reading a json file with results from DFT calculations.
         """
         if not path.endswith('/'):
             path = path + '/'
         self.path = path
-        with open(path + 'optimization.xyz', 'r') as file:
+        self.geometry_file = geometry_file
+        self.xyz_path = path + geometry_file
+        self.cache_file = self.cache_name(geometry_file)
+        with open(self.xyz_path, 'r') as file:
             lines = file.readlines()
         self.n_atoms = int(lines[0].strip())
-        self.elements = [line.split()[0] for line in lines[2:] if line.strip()]
-        self.coordinates = [[float(x) for x in line.split()[1:4]] for line in lines[2:] if line.strip()]
+        body = [line for line in lines[2:2 + self.n_atoms] if line.strip()]
+        self.elements = [line.split()[0] for line in body]
+        self.coordinates = [[float(x) for x in line.split()[1:4]] for line in body]
+        if len(self.elements) != self.n_atoms:
+            raise ValueError(f"{self.xyz_path}: header announces {self.n_atoms} atoms, {len(self.elements)} read")
 
-        if 'xyz.json' in os.listdir(path) and not overwrite_results:
-            print(f"Loading existing results from {path + 'xyz.json'}.")
-            self.results = json.load(open(path + 'xyz.json'))
+        if self.cache_file in os.listdir(path) and not overwrite_results:
+            print(f"Loading existing results from {path + self.cache_file}.")
+            self.results = json.load(open(path + self.cache_file))
         else:
-            print("No xyz.json file found in the specified path or overwrite_results is True. Results dictionary will be empty.")
+            print(f"No {self.cache_file} file found in the specified path or overwrite_results is True. Results dictionary will be empty.")
             self.results = {}
 
         # add path to results for reference
@@ -129,9 +148,9 @@ class PropertiesXYZ:
         self.quadrant_excluded_atoms = None
 
     def reset_results(self):
-        """Reset the results dictionary to an empty dictionary -- and remove the xyz.json file if it exists."""
+        """Reset the results dictionary to an empty dictionary -- and remove the cache file if it exists."""
         self.results = {}
-        json_path = self.path + 'xyz.json'
+        json_path = self.path + self.cache_file
         if os.path.exists(json_path):
             os.remove(json_path)
 
@@ -380,7 +399,7 @@ class PropertiesXYZ:
 
         elif self.sterimol_scan is not None:
             mol = db.dbstep(
-                self.path + 'optimization.xyz',
+                self.xyz_path,
                 atom1=bond_list[0],
                 atom2=bond_list[1],
                 commandline=True,
@@ -405,7 +424,7 @@ class PropertiesXYZ:
 
         else:
             mol = db.dbstep(
-                self.path + 'optimization.xyz',
+                self.xyz_path,
                 atom1=bond_list[0],
                 atom2=bond_list[1],
                 commandline=True,
@@ -569,11 +588,13 @@ class PropertiesXYZ:
 
 
     ## Save results to json ##
-    def save_results_to_json(self, filename='xyz.json'):
+    def save_results_to_json(self, filename=None):
         """Save the results dictionary to a JSON file.
         Args:
-            filename (str): name of the JSON file to save the results to (default is 'xyz.json')
+            filename (str): name of the JSON file to save the results to (default: the cache file of this
+                geometry, ``xyz.json`` for ``optimization.xyz``, see :meth:`cache_name`)
         """
+        filename = filename or self.cache_file
         sorted_results = dict(sorted(self.results.items()))
         self.results = sorted_results
         with open(self.path + filename, 'w') as json_file:

@@ -61,12 +61,13 @@ def filter_nbo_rank_columns(df: pd.DataFrame, rank_range: Iterable[int] | None, 
 
 
 def extract_xyz(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path, overwrite_json: bool = False,
-                progress: bool = True) -> pd.DataFrame:
+                progress: bool = True, geometry_file: str = "optimization.xyz") -> pd.DataFrame:
+    """The morfeus family on ``<conf>/<geometry_file>`` (``data.geometry_file`` of the spec)."""
     res = de.get_xyz_descriptors(
         _with_repo_paths(df_num, repo_root), cfg["atoms"], cfg["bonds"], cfg["angles"], cfg["dihedrals"],
         quadrants=cfg["quadrants"] or None,
         overwrite_json=overwrite_json or not cfg.get("use_cached_json", True),
-        vbur_radii=cfg.get("vbur_radii"), progress=progress,
+        vbur_radii=cfg.get("vbur_radii"), progress=progress, geometry_file=geometry_file,
     )
     return _to_frame(res, repo_root)
 
@@ -136,7 +137,8 @@ def orca_family_frames(df_num: pd.DataFrame, spec: Spec, repo_root: Path, famili
         if progress:
             print(f"[orca] {fam}: {len(df_num)} conformers")
         if fam == "xyz":
-            frames[fam] = extract_xyz(df_num, cfg, repo_root, overwrite_json=overwrite_xyz_json, progress=progress)
+            frames[fam] = extract_xyz(df_num, cfg, repo_root, overwrite_json=overwrite_xyz_json, progress=progress,
+                                      geometry_file=spec.data.get("geometry_file", "optimization.xyz"))
         elif fam == "nbo":
             frames[fam] = extract_nbo(df_num, cfg, repo_root, condensed_file=condensed_file, postprocess=postprocess)
         else:

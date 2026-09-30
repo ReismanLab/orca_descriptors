@@ -21,7 +21,7 @@ from desc_utils.numbering.base import (
     STATUS_ELEMENT_MISMATCH, STATUS_FAILED, STATUS_INCOMPLETE, STATUS_INCONSISTENT, STATUS_OK,
     ConformerContext, NoMatch, NumberingBackend, NumberingRow, make_backend, validate_elements,
 )
-from desc_utils.numbering.io import get_sdf_from_xyz, load_mol, scf_energy, smiles_for_mol
+from desc_utils.numbering.io import get_sdf_from_xyz, load_mol, scf_energy, smiles_for_mol, xyz_comment_energy
 from desc_utils.numbering.ligand_classes import ANNOTATORS
 from desc_utils.parallel import parallel_map
 from desc_utils.spec import Spec
@@ -143,7 +143,11 @@ def _record(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, regene
     row, extra = _number_one(ctx, spec, backend, regenerate_sdf)
     rec = {"xyz_name": ctx.xyz_name, "path": ctx.rel_path, spec.data["molecule_id_column"]: ctx.molecule_id}
     try:
-        rec[energy_cfg["column"]] = scf_energy(ctx.conf_dir, energy_cfg["basename"], spec.data.get("condensed_file"))
+        if energy_cfg.get("source", "orca") == "xyz_comment":
+            rec[energy_cfg["column"]] = xyz_comment_energy(ctx.conf_dir, spec.data["geometry_file"],
+                                                           energy_cfg["key"], energy_cfg["units"])
+        else:
+            rec[energy_cfg["column"]] = scf_energy(ctx.conf_dir, energy_cfg["basename"], spec.data.get("condensed_file"))
     except Exception as exc:
         rec[energy_cfg["column"]] = np.nan
         row.notes.append(f"energy: {type(exc).__name__}: {str(exc)[:80]}")

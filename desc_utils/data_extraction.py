@@ -272,11 +272,16 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
 
 
 def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, overwrite_json=False, vbur_radii=None,
-                        progress=True):
+                        progress=True, geometry_file=od.PropertiesXYZ.DEFAULT_GEOMETRY_FILE):
+    """Morfeus descriptors of ``geometry_file`` in every conformer folder of ``df`` (``optimization.xyz`` by default).
+
+    Any single-frame xyz works, so a library optimised with UMA (or any ASE calculator) can be described
+    from its xyz alone. The results are cached next to the geometry (``PropertiesXYZ.cache_name``).
+    """
     results_dict = {}
     repo_root = Path(__file__).resolve().parent.parent
     for row in tqdm(df.itertuples(), total=len(df), disable=not progress):
-        P = od.PropertiesXYZ(path=df.loc[row.Index, "path"], overwrite_results=overwrite_json)
+        P = od.PropertiesXYZ(path=df.loc[row.Index, "path"], overwrite_results=overwrite_json, geometry_file=geometry_file)
         if vbur_radii is not None:
             P.radius_list = [float(r) for r in vbur_radii]
         
@@ -286,7 +291,7 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
             + [f"Angle_{x[0]}_{x[1]}_{x[2]}" for x in angles] + [f"Dihed_{'_'.join(d)}" for d in dihedrals]
         cache_ok = P.results is not None and len(P.results) > 1 and set(expected_keys) <= set(P.results)
         if len(P.results) > 1 and not overwrite_json and not cache_ok:
-            print(f"xyz.json in {df.loc[row.Index, 'path']} lacks columns for the current spec; recomputing.")
+            print(f"{P.cache_file} in {df.loc[row.Index, 'path']} lacks columns for the current spec; recomputing.")
         if cache_ok and not overwrite_json:
             if P.results is not None:
                 P.results["path"] = conf_key(df.loc[row.Index, "path"], repo_root)
