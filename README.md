@@ -126,7 +126,7 @@ For each ligand the job (`launch_workflow.sh`) creates `<InChIKey>/`, runs CREST
 clustered conformers into `conf_N/`, optimises each with UMA, renders `calcParam.inp` from the template,
 then submits `slurm-calcParam.sh` in every `conf_N/` that passes the energy window. Each ORCA job records
 its own outcome when it ends, and an aggregation job queued behind them rebuilds the batch summary
-`<LIB>_metadata.json`.
+`<LIB>_metadata.json` (`aggregate_metadata.py`).
 
 Running `submit_all_smiles.py` again is how a batch is extended: ligands whose record says `complete` or
 `in_progress` are skipped, so adding a line to `smiles.txt` costs one allocation. `--force` resubmits
@@ -144,6 +144,7 @@ been computed yet, and the molecule is flagged in the summary.
 python submit_all_smiles.py --dry-run                                                             # per ligand: new, in_progress, incomplete or complete, with the reason
 python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/check_jobs.py $LIB      # per conformer, from squeue and the ORCA outputs
 python3 -m json.tool <InChIKey>/metadata.json                                                     # the full record of one ligand
+python3 aggregate_metadata.py --root . --csv metadata_summary.csv                                 # rebuild <LIB>_metadata.json now, plus a one-row-per-ligand CSV
 python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/list_molecules.py $LIB  # -> molecules.csv: InChIKey, number of conformers
 ```
 
@@ -161,6 +162,10 @@ The state is derived from `metadata.json`, which holds `steps.<build|crest|uma|o
 exited 0 *and* printed `ORCA TERMINATED NORMALLY`. The states come from what was written down, not from
 `squeue`: a per-ligand job killed at walltime leaves its stage at `running` and the ligand at
 `in_progress`; `check_jobs.py` shows whether anything is really queued, and `--force` resubmits it.
+The batch summary `<LIB>_metadata.json` lists every ligand with `flagged`, `issues` (a stage or conformer not
+finished, DFT configured with no conformer, a rendered input changed since the results) and `mismatched_fields`
+(settings that differ from the majority of the batch, whose values are under `consistency`); the aggregation
+job prints the flagged ligands in `aggregate_<jobid>.out`.
 `check_jobs.py` statuses: `QUEUED` and `RUNNING` come from `squeue`; `OK`; `FAILED` with the reason (time
 limit, out of memory, ORCA error); `CHECK` when one `calcParam.out` holds several runs; `NOT STARTED`.
 Resubmit the `FAILED` conformers before step 4, or carry on: the pipeline records the state of every job
@@ -172,10 +177,8 @@ and settings, the UMA model, `fmax` and the energy of every conformer, the ORCA 
 `level_of_theory` values, the DFT energy window and `calc_param_md5`, the MD5 of the rendered
 `calcParam.inp`. To reproduce a library, copy its `workflow_inputs.yaml` and `calcParam.inp.tmpl` next to
 a new `smiles.txt`: a rendered input whose MD5 differs from a recorded one is reported as a mismatch
-before anything is submitted. Two things are outside the record for now: the CREST command line is built
-by `gaussian_scripts.py` in the group `scripts/` folder, which is not in this repository, and
-`aggregate_metadata.py`, which writes `<LIB>_metadata.json`, is not in the repository yet, so the
-per-ligand files are the record until it is.
+before anything is submitted. One thing is outside the record: the CREST command line is built by
+`gaussian_scripts.py` in the group `scripts/` folder, which is not in this repository.
 
 Whatever the procedure, it must leave, somewhere on the cluster, one folder per conformer holding
 the output of an ORCA 6.1 compound job run with `calcParam.inp`:
@@ -316,7 +319,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | `WARNING: ... workflow_inputs.yaml now disagrees with what was actually used` | a setting changed since the batch (or this ligand) was started | answer `n` and restore the setting to keep the batch consistent, or `y` / `--yes` knowingly; the summary flags the molecule |
 | the job log ends with `HF_TOKEN is not set` | the UMA stage needs the Hugging Face token | `export HF_TOKEN=...` in the shell that runs `submit_all_smiles.py`, then resubmit |
 | the job log ends with `ERROR: no conf_* directories found` | the UMA stage produced no conformer folders | check the `uma` step in `metadata.json` and the job log; `crest_clustered.xyz` must exist in `<InChIKey>/` |
-| `aggregate_<jobid>.err` says `can't open file ... aggregate_metadata.py` | the batch-summary script is not in the repository yet | nothing to do for the calculations; use the per-ligand `metadata.json` files |
+| `<LIB>_metadata.json` is missing or stale | the aggregation job runs once per ligand, after its ORCA jobs; a killed per-ligand job never queues it | `python3 aggregate_metadata.py --root .` in the batch directory (standard library only) |
 | `all_conformers_completed` is `False` | a conformer of that molecule is `running`, `failed` or `missing` in `orca_job_status`; its late descriptors (NMR, redox, Fukui) are NaN and left out of the averages | finish or resubmit the job, step 4 again (rebuilds that file), 5.1, then `all` |
 | `all_conformers_completed` is empty and `orca_job_status` is `unknown` | the condensed files predate the job status (before 2026-09-23) | step 4 on the cluster rebuilds them, then 5.1; or leave it, the descriptors are unaffected |
 | `orca_job_status` is `failed` with `terminated normally, then a later run failed` | the folder was resubmitted after a successful run and the second run died | `tail calcParam.out`; if the first run's outputs are intact the descriptors are fine, otherwise resubmit |
@@ -343,7 +346,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | [specs](specs) | One YAML spec per molecule family. `lnih2_pyox.yaml` (LNiH2 / PyOx ligand library) and `test_molecules_at1_at2.yaml` (small organic test set) are the shipped examples. |
 | [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
-| [submission_scripts_v3](submission_scripts_v3) | The submission workflow of step 3, copied into every batch directory: `workflow_inputs.yaml` (every chosen setting), `submit_all_smiles.py` (one job per SMILES, skips finished ligands, checks the settings against the records), `launch_workflow.sh` (build, CREST, UMA and ORCA submission for one ligand), the stage scripts (`ligand_only_create_folder.py`, `crest.py`, `uma_opt_confs.py`, `launch_orca_all.py`), `calcParam.inp.tmpl` and `calc_param_template.py` (ORCA input rendered from the yaml), `slurm-calcParam.sh` (one ORCA job, records its outcome), `metadata_utils.py`, `record_step.py`, `mark_orca_done.py`, `check_inputs.py` (the `metadata.json` provenance and status record), `submit_aggregate.py` and `slurm-aggregate.sh` (batch summary; need `aggregate_metadata.py`, not in the repository yet). |
+| [submission_scripts_v3](submission_scripts_v3) | The submission workflow of step 3, copied into every batch directory: `workflow_inputs.yaml` (every chosen setting), `submit_all_smiles.py` (one job per SMILES, skips finished ligands, checks the settings against the records), `launch_workflow.sh` (build, CREST, UMA and ORCA submission for one ligand), the stage scripts (`ligand_only_create_folder.py`, `crest.py`, `uma_opt_confs.py`, `launch_orca_all.py`), `calcParam.inp.tmpl` and `calc_param_template.py` (ORCA input rendered from the yaml), `slurm-calcParam.sh` (one ORCA job, records its outcome), `metadata_utils.py`, `record_step.py`, `mark_orca_done.py`, `check_inputs.py` (the `metadata.json` provenance and status record), `submit_aggregate.py`, `slurm-aggregate.sh` and `aggregate_metadata.py` (batch summary `<LIB>_metadata.json`: majority settings, flagged ligands). |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | Cluster tools for any library: `check_jobs.py` (queued / running / done / failed state of every ORCA job), `list_molecules.py` (InChIKey and conformer count), `slurm-condense.sh` (condense a whole library on a compute node); `calcParam.inp`, the fixed compound input of the LNiH2 library; and the older manual launcher (`launch_orca_all.py`, `slurm-calcParam.sh`), superseded by step 3. |
 | [tests](tests) | Unit tests, and regression tests against the reference CSVs in `tests/reference/` (run when the LNiH2 library is under `DATA/`). |
 | [notebooks](notebooks) | Exploratory notebooks (`make_descriptor_descripytor.ipynb` ran the pipeline before the CLI existed; ligand separation, substructure numbering, descriptor correlations). Not maintained with the code. |
