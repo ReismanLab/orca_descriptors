@@ -86,6 +86,33 @@ are single-threaded, so give those methods `slurm: {cpus_per_task: 1}` rather th
 `post_optimization.slurm` and the method's `slurm` overrides both apply, the method's taking precedence. A method can override the profile, e.g.
 `crest_gfn2: {searcher: crest, params: {...}, slurm: {time: "48:00:00"}}`.
 
+### GOAT (ORCA) needs tasks, not cpus-per-task
+
+CREST, xtb and ETKDG are OpenMP-threaded single processes, so they want `cpus_per_task`. ORCA is not:
+`%pal nprocs N end` makes it launch N **MPI ranks**, and its OpenMPI counts available slots from SLURM
+tasks. Measured on this cluster with orca/6.1.0 and a 4-rank single point: `--ntasks=4 --cpus-per-task=1`
+terminates normally, `--ntasks=1 --cpus-per-task=4` dies at the first `mpirun`.
+
+```yaml
+  goat_xtb:
+    searcher: goat
+    params:
+      method: XTB
+      orca_cmd: /central/software9/external/orca/orca_6_1_0_linux_x86-64_shared_openmpi418_avx2/orca
+      nprocs: 4                                  # required here, see below
+      goat_block: {MaxEn: 3.0}
+    slurm: {ntasks: 4, cpus_per_task: 1, nodes: 1}
+```
+
+Pin `nprocs` explicitly for GOAT. It defaults to `SLURM_CPUS_PER_TASK`, which is *1* in this allocation
+shape, so leaving it out gives ORCA a single rank and runs serial on a 4-task allocation without saying
+so. `nodes: 1` keeps the ranks on one node; multi-node ORCA needs a working hostfile and is a separate
+problem. The ORCA module is the `openmpi418` build while the modulefile loads openmpi/4.1.6 -- harmless,
+since OpenMPI is ABI-compatible within 4.1.x, but do not "fix" it by loading openmpi/5.0.1.
+
+Because the two searchers want different allocation shapes, prefer `mode: split` once GOAT is in play:
+in `chained` mode the UMA post-optimisation inherits GOAT's `cpus_per_task: 1` and refines on one thread.
+
 ### Creating or updating the shared environment (maintainer only)
 
 One person owns the environment. A conda env that several people can `pip install` into drifts and
