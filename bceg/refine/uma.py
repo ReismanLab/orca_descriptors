@@ -1,0 +1,87 @@
+"""Post-search geometry optimisation with UMA (fairchem) through ASE."""
+
+from __future__ import annotations
+
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+
+import numpy as np
+
+from bceg.external import resolve_threads
+from bceg.layout import check_name
+from bceg.refine.base import RefineResult, Refiner
+from bceg.structure import Structure
+from bceg.xyz import HARTREE_TO_EV, Conformer
+
+
+def _version(pkg: str) -> str:
+    try:
+        return version(pkg)
+    except PackageNotFoundError:
+        return "unknown"
+
+
+class UMA(Refiner):
+    name = "uma"
+    defaults = {
+        "model": "uma-s-1p2",
+        "task": "omol",
+        "optimizer": "LBFGS",  # LBFGS | BFGS | FIRE
+        "fmax": 0.05,  # eV/Angstrom
+        "max_steps": 500,
+        "keep_unconverged": True,  # unconverged conformers are kept and flagged converged=False
+        "lot": None,  # label override; defaults to the model name
+        "device": "cpu",  # "cuda" sends the step (and, chained, its whole job) to the gpu profile
+        "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
+    }
+    resource_keys = {"device", "threads"}
+
+    def __init__(self, **params) -> None:
+        super().__init__(**params)
+        self._calc = None
+
+    @property
+    def lot(self) -> str:
+        return check_name(self.params["lot"] or self.params["model"], "level of theory")
+
+    def resource_class(self) -> str:
+        return "cpu" if self.params["device"] == "cpu" else "gpu"
+
+    def calculator(self):
+        if self._calc is None:
+            import torch
+            from fairchem.core import FAIRChemCalculator, pretrained_mlip
+
+            # torch sizes its thread pool from the node's core count, not from the cgroup SLURM put us
+            # in, so an 8-core allocation on a 64-core node would oversubscribe eightfold. This runs
+            # in-process, so run()'s OMP_NUM_THREADS never applies to it.
+            torch.set_num_threads(resolve_threads(self.params["threads"]))
+            predictor = pretrained_mlip.get_predict_unit(self.params["model"], device=self.params["device"])
+            self._calc = FAIRChemCalculator(predictor, task_name=self.params["task"])
+        return self._calc
+
+    def run(self, structure: Structure, conformers: list[Conformer], workdir: Path) -> RefineResult:
+        from ase import Atoms, optimize
+
+        opt_cls = getattr(optimize, self.params["optimizer"])
+        calc = self.calculator()
+        out, n_unconverged = [], 0
+        for i, conf in enumerate(conformers):
+            atoms = Atoms(symbols=structure.elements, positions=conf.coords)
+            atoms.info.update(charge=structure.charge, spin=structure.multiplicity)
+            atoms.calc = calc
+            opt = opt_cls(atoms, logfile=str(workdir / f"opt_{i}.log"))
+            opt.run(fmax=self.params["fmax"], steps=self.params["max_steps"])
+            fmax = float(np.sqrt((atoms.get_forces() ** 2).sum(axis=1)).max())
+            converged = fmax <= self.params["fmax"]
+            n_unconverged += not converged
+            if not converged and not self.params["keep_unconverged"]:
+                continue
+            energy = atoms.get_potential_energy() / HARTREE_TO_EV
+            out.append(Conformer(atoms.get_positions(), energy,
+                                 {"converged": converged, "steps": opt.nsteps, "fmax": round(fmax, 5), "source_index": i}))
+        return RefineResult(
+            out,
+            versions={"fairchem-core": _version("fairchem-core"), "ase": _version("ase")},
+            details={"n_input": len(conformers), "n_unconverged": n_unconverged},
+        )
