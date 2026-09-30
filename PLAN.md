@@ -33,6 +33,10 @@ ORCA stage is rewritten as a package module with a CLI, borrowing bceg's design 
 | Status | a `status` command printing a table per stage, not `--dry-run`. |
 | SLURM | job arrays for the ORCA jobs (one array per submission, throttled); resource profiles in the config. |
 | Molecule identity | InChIKey of the canonical input SMILES, the same key on both sides; the registry carries the submitted SMILES and bceg's `molecules.csv` row. |
+| One submission | one command runs bceg and then ORCA (`orca: on`), or bceg alone (`orca: off`); the same command on the same library later, with `orca: on`, queues ORCA over the finished ensembles. The switch is not a result-determining setting, so turning it on is never refused. |
+| Replicates and ORCA | ORCA runs only on replicate 1; a library whose ensembles have several replicates is accepted but only `raw_1_<lot>.xyz` is refined. Refining several replicates would duplicate ORCA jobs for no new information; to be designed later if needed. |
+| Charge and multiplicity | read from the ensemble's `params.json` (bceg's `structure`), never typed into the ORCA config. An override would be a separate library with an explicit field; not implemented now. |
+| `check_jobs.py` | kept as the squeue-based cross-check of `status`. |
 
 ## Architecture
 
@@ -42,6 +46,8 @@ bceg submit ...                         (B-CEG-MCD, env bceg)
   DATA_bceg/molecules.csv
 
 python -m desc_utils.submit submit <config>          (orca_descriptors, env gp_env)
+  1. bceg submit <bceg config> --smiles ... -t ... -m ...   run through `conda run -n bceg` from the source block; skipped if source.run_bceg is false
+  2. orca array queued --dependency=afterany on the bceg job ids (or immediately when the ensembles exist); skipped if orca: off
   <LIB>/_jobs/<timestamp>/config.yaml, calcParam.inp, orca.sbatch, tasks.jsonl, slurm_logs/
   <LIB>/molecule_registry.json                       InChIKey -> submitted SMILES, bceg source, params sha256
   <LIB>/<InChIKey>/metadata.json                     per-molecule record (as today, ORCA part only)
@@ -62,18 +68,20 @@ theory, replicate, and the `sha256` of `params.json` / `params_<lot>.json`.
 library_dir: /groups/ReismanLab/DATA/orca/<LIB>          # absolute
 source:
   kind: bceg                                             # or xyz: {file: ensemble.xyz} for one molecule
-  results_dir: /groups/ReismanLab/DATA/bceg
+  config: /path/to/bceg_config.yaml                      # bceg's own config (methods, transformations, slurm); replicates: 1 there
+  results_dir: /groups/ReismanLab/DATA/bceg              # = bceg's results_dir
   transformation: NiH2
   method: crest_gfn2
-  lot: uma-s-1p2                                         # which raw_<i>_<lot>.xyz to take
-  replicate: 1
-  smiles: ligands.txt                                    # subset of molecules.csv to submit; default: all with a finished ensemble
+  lot: uma-s-1p2                                         # which raw_1_<lot>.xyz to take (replicate 1 only)
+  smiles: ligands.txt                                    # the input list, passed to bceg and used to select molecules here
+  run_bceg: true                                         # false: ensembles already exist, do not call bceg
+  bceg_env: bceg                                         # conda env holding the bceg command
+orca: on                                                 # off: ensembles only; run the same command later with on
 dft:
   ewin_kcal_mol: 5.0                                     # on the energies of the ensemble comment lines (Hartree)
   calc_param_template: calcParam.inp.tmpl                # relative to this file; default: the repository's
   level_of_theory: {...}                                 # as today, extra_basis included
-  charge: 0
-  spin_multiplicity: 1                                   # must equal bceg's structure multiplicity; checked
+  # no charge / spin_multiplicity here: both come from the ensemble's params.json
 slurm:
   setup: [source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh, conda activate gp_env, module load orca/6.1.0]
   orca: {time: "160:00:00", mem_per_cpu: 4G, ntasks: 16, nodes: 1}
@@ -107,12 +115,20 @@ Steps 1–2 run in the array task rather than at submission so `submit` stays fa
 4. Later: `pip install -e .` of orca_descriptors into the shared `gp_env` (pyproject.toml), so the
    command is `orcadesc submit` and the git commit is the installed version.
 
-## Open questions
+## Settled questions (2026-09-30)
 
-- One command or two: run bceg and the ORCA stage as two submissions (ORCA picks up finished ensembles on
-  each re-run), or have `submit` also queue the ORCA array `afterany` the bceg arrays? Proposal: two, first.
-- Replicates > 1: one ORCA library per replicate (`<LIB>_rep2`), or `conf_N` numbered across replicates
-  with `replicate` recorded per conformer? Proposal: one library per replicate.
-- `charge`: bceg's `Structure` carries charge and multiplicity per transformation; take both from the
-  ensemble's `params.json` rather than from the ORCA config, and only allow an override with a new library?
-- Keep `check_jobs.py` (squeue-based) as the independent cross-check of `status`? Proposal: yes.
+- One submission: `submit` calls bceg then queues ORCA `afterany` its arrays; `orca: off` stops after
+  bceg; re-running with `orca: on` refines the finished ensembles. Frozen per submission like the rest.
+- Replicates: ORCA on replicate 1 only, for now.
+- Charge and multiplicity: from the ensemble's `params.json`; not a config field.
+- `check_jobs.py` stays.
+
+## Notes for the implementation
+
+- The ORCA array task runs in `gp_env`; only `submit` needs bceg, and it reaches it through
+  `conda run -n <bceg_env> bceg submit ...`, so the two environments never mix.
+- `afterany` on bceg arrays: the ORCA task must re-check that the ensemble and its `run_1*.json` say
+  `done` before splitting; a molecule whose ensemble failed is recorded `ensemble_missing` and skipped,
+  and the next `submit` picks it up once bceg succeeds.
+- `orca: on/off`, `run_bceg`, `bceg_env` and the `slurm` block are recorded but not compared; `source.*`
+  (except `run_bceg`, `bceg_env`) and `dft.*` are compared: changing them is refused.
