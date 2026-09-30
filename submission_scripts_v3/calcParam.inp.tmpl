@@ -1,0 +1,227 @@
+%maxcore 2000
+%pal
+    nprocs 16
+end
+
+%Compound
+
+# ------Settings -------
+# Values below are rendered from workflow_inputs.yaml's dft.level_of_theory
+# block (plus crest.charge / crest.spin_multiplicity, so CREST and DFT can
+# never silently disagree on what species is being computed) by
+# calc_param_template.py -- edit workflow_inputs.yaml, not this file, to
+# change a method/basis/solvent choice. This file controls STRUCTURE (which
+# Compound steps exist and how they feed into each other); the substituted
+# values control WHAT each step computes.
+Variable conf_search = $conf_search;
+Variable opt_geom = $opt_geom;
+Variable freq_calc = $freq_calc;
+Variable nmr_calc = $nmr_calc;
+Variable vertical_redox = $vertical_redox;
+
+# ------ General Variables ------
+Variable input_xyz = "input.xyz";
+Variable multiplicity = $multiplicity;
+Variable charge = $charge;
+
+# ------ GOAT optimization ------
+Variable goat_method = "$goat_method";
+Variable var_goat = "GOAT";
+Variable goat_solvent = "";
+
+# ------ DFT Optimization + Freq of Lowest En ------
+Variable opt_method = "$opt_method";
+Variable Ni_extra_basis = "";
+Variable opt_solvent = "$opt_solvent";
+Variable geom_constraints = "";
+
+# -- Single Point variables -- 
+Variable svp_method = "$svp_method";
+Variable property_solvent = "$property_solvent";
+Variable nmr_method = "$nmr_method";
+
+Variable nbo_run = "$nbo_run"; # NBOEXE and GENEXE must be set (external to Orca)
+
+# -------- vertical oxidation/reduction multiplicity and charges ------
+Variable ox_chrg = charge + 1;
+Variable ox_mult = multiplicity + 1;
+Variable red_chrg = charge - 1;
+Variable red_mult = multiplicity + 1;
+
+Variable opt_xyz;
+Variable scf_guess = "PModel";
+
+
+if (conf_search) then
+    # ------------------------------------
+    # GOAT optimization
+    # ------------------------------------
+
+    NewStep
+    %base "conf_search"
+    ! &{var_goat} &{goat_method} &{goat_solvent} 
+    * xyzfile &{charge} &{multiplicity} &{input_xyz}
+    Step_end
+
+    input_xyz = "conf_search.globalminimum.xyz";
+EndIf
+
+if (opt_geom) then
+    # ------------------------------------
+    # Optimize geometry
+    # ------------------------------------
+
+    NewStep
+    %base "optimization"
+
+    ! &{opt_method} &{opt_solvent} Opt TightSCF PModel
+
+    %scf
+        maxiter 300
+    end
+
+    %geom
+        Constraints
+        &{geom_constraints}
+        end
+    end
+
+    *xyzfile &{charge} &{multiplicity} &{input_xyz}
+
+    StepEnd
+
+    opt_xyz = "optimization.xyz";
+    scf_guess = "MORead";
+
+else
+    opt_xyz = input_xyz;
+
+EndIf
+
+if (freq_calc) then
+    # ------------------------------------
+    # Frequency calculation
+    # ------------------------------------
+
+    NewStep
+    %base "frequency"
+
+    ! &{opt_method} &{opt_solvent} Freq TightSCF
+
+    %scf
+        guess &{scf_guess}
+        maxiter 300
+    end
+
+    %output
+        jsonpropfile true
+        jsongbwfile true
+    end
+
+    *xyzfile &{charge} &{multiplicity} &{opt_xyz}
+
+    StepEnd
+
+    scf_guess = "MORead";
+endif
+
+# ------------------------------------
+# but different functional
+# ------------------------------------
+
+NewStep
+%base "singlepoint"
+
+! &{svp_method} &{property_solvent} TightSCF &{nbo_run} FMOPop HIRSHFELD CHELPG ADLD
+
+%scf
+    guess &{scf_guess}
+    maxiter 300
+end
+
+%output
+    jsonpropfile true
+    jsongbwfile true
+end
+
+%elprop
+    Polar true
+    PolarAtom true
+    Dipole true
+    DipoleAtom true
+    Quadrupole true
+    QuadrupoleAtom true
+end
+
+*xyzfile &{charge} &{multiplicity} &{opt_xyz}
+
+StepEnd
+scf_guess = "MORead";
+
+if (nmr_calc) then
+
+    # ------------------------------------
+    # NMR calculation, uses GIAO by default
+    # ------------------------------------
+
+    NewStep
+
+    %base "nmr"
+
+    ! &{nmr_method} &{property_solvent} TightSCF NMR
+
+    %scf guess MORead end
+
+    %output
+    jsonpropfile true
+    jsongbwfile true
+    end
+
+    *xyzfile &{charge} &{multiplicity} &{opt_xyz}
+
+
+    StepEnd
+endif
+
+if (vertical_redox) then
+    # ------------------------------------------------------------------------
+    # Vertical (no optimization) oxidation
+    # ------------------------------------------------------------------------
+
+    NewStep
+
+    %base "oxidation"
+
+    ! &{svp_method} &{property_solvent} TightSCF &{nbo_run} HIRSHFELD CHELPG
+
+    %output
+    jsonpropfile true
+    jsongbwfile true
+    end
+
+    *xyzfile &{ox_chrg} &{ox_mult} optimization.xyz
+
+    StepEnd
+
+
+    # ------------------------------------------------------------------------
+    # Vertical (no optimization) reduction
+    # ------------------------------------------------------------------------
+
+    NewStep
+
+    %base "reduction"
+
+    ! &{svp_method} &{property_solvent} TightSCF &{nbo_run} HIRSHFELD CHELPG
+
+    %output
+    jsonpropfile true
+    jsongbwfile true
+    end
+
+    *xyzfile &{red_chrg} &{red_mult} optimization.xyz
+
+    StepEnd
+EndIf
+
+EndRun
