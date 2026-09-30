@@ -16,7 +16,7 @@ data:
   layout: molecule/conformer            # <root>/<molecule_id>/<conformer>/
   conformer_glob: "conf_*"
   geometry_file: optimization.xyz
-  molecule_id_column: inchi
+  molecule_id_column: inchikey
 
 atoms:                                  # order = column order in the numbering table
   H1: H
@@ -92,7 +92,7 @@ descriptors:
     drop_atoms: []
 
 aggregate:
-  group_by: inchi
+  group_by: inchikey
   energy_column: SCF_energy
   temperature_K: 298.15
   kB_hartree_per_K: 3.166811563e-6

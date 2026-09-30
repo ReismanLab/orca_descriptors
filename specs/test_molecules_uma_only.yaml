@@ -16,7 +16,7 @@ data:
   layout: molecule/conformer
   conformer_glob: "conf_*"
   geometry_file: optimized_uma-s-1p1.xyz    # the UMA geometry; morfeus caches into <conf>/xyz_optimized_uma-s-1p1.json
-  molecule_id_column: inchi
+  molecule_id_column: inchikey
   condensed_file: null                      # nothing reads ORCA output in this spec
 
 atoms:
@@ -48,7 +48,7 @@ descriptors:
       use_cached_json: true
 
 aggregate:
-  group_by: inchi
+  group_by: inchikey
   energy_column: uma_energy_hartree         # defaults to numbering.energy.column; written out for clarity
   temperature_K: 298.15
   kB_hartree_per_K: 3.166811563e-6

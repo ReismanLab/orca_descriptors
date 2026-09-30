@@ -121,6 +121,15 @@ def main():
             continue
         inchi_key = Chem.rdinchi.MolToInchiKey(mol)
 
+        # Folder name -> submitted SMILES, for every valid line (skipped
+        # ligands too, which back-fills batches older than the registry).
+        if not args.dry_run:
+            metadata_utils.register_molecule(inchi_key, {
+                "smiles": ligand,
+                "smiles_line": i,
+                "canonical_smiles": Chem.MolToSmiles(mol),
+            })
+
         state, reason = metadata_utils.run_state(inchi_key)
         if state in SKIP_STATES and not args.force:
             print(f"[{i}] {ligand} ({inchi_key}): {state} -- {reason}; skipping"

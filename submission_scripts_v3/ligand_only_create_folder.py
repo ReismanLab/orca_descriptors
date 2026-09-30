@@ -4,6 +4,7 @@ from rdkit.Chem import rdChemReactions
 import argparse
 import os
 import sys
+import time
 import metadata_utils
 
 
@@ -39,12 +40,30 @@ mol = Chem.MolFromSmiles(ligand)
 if not mol:
     raise ValueError("Invalid SMILES string provided.")
 
+mol_noH = mol
 mol = Chem.AddHs(mol)
-AllChem.EmbedMolecule(mol)
-inchi_key = Chem.rdinchi.MolToInchiKey(Chem.MolFromSmiles(ligand))
+inchi_key = Chem.rdinchi.MolToInchiKey(mol_noH)
 
 print(f"InChIKey: {inchi_key}")
+registry_entry = {
+    "smiles": ligand,
+    "canonical_smiles": Chem.MolToSmiles(mol_noH),
+    "inchi": Chem.MolToInchi(mol_noH),
+    "formal_charge": Chem.GetFormalCharge(mol_noH),
+    "rdkit_version": Chem.rdBase.rdkitVersion,
+}
+
 if inchi_key not in os.listdir("."):
+    AllChem.EmbedMolecule(mol)
+    # The molecule as it went into mol.xyz: explicit hydrogens and the embedded
+    # 3D coordinates. Chem.MolFromMolBlock(block, removeHs=False) gives it back.
+    # V3000 keeps the coordinates to full precision; V2000 rounds them to 1e-4.
+    registry_entry.update({
+        "mol_block": Chem.MolToMolBlock(mol, forceV3000=True),
+        "has_3d_coordinates": mol.GetNumConformers() > 0,
+        "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+    metadata_utils.register_molecule(inchi_key, registry_entry)
     os.mkdir(inchi_key)
     os.chdir(inchi_key)
 
@@ -53,6 +72,13 @@ else:
     # of the pipeline (crest.py, uma_opt_confs.py, launch_orca_all.py) each
     # resume from what is already there, so this is a skip, not a failure.
     # Exit 0 so launch_workflow.sh's `set -e` doesn't abort the re-run.
+    # Still register: a different SMILES spelling of the same molecule is
+    # recorded as an alias. Batches built before the registry existed get an
+    # entry without the embedded coordinates (the molecule, not the geometry,
+    # is what is known).
+    if "mol_block" not in (metadata_utils.load_registry().get(inchi_key) or {}):
+        registry_entry.update({"mol_block": Chem.MolToMolBlock(mol, forceV3000=True), "has_3d_coordinates": False})
+    metadata_utils.register_molecule(inchi_key, registry_entry)
     print(f"Directory {inchi_key} already exists, skipping generation.")
     sys.exit(0)
 

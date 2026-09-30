@@ -31,8 +31,9 @@ Variable goat_solvent = "";
 
 # ------ DFT Optimization + Freq of Lowest En ------
 Variable opt_method = "$opt_method";
-Variable Ni_extra_basis = "";
 Variable opt_solvent = "$opt_solvent";
+# extra_basis (workflow_inputs.yaml) is rendered as a per-element basis block
+# inside the optimization and frequency steps below; empty when not set.
 Variable geom_constraints = "";
 
 # -- Single Point variables -- 
@@ -79,7 +80,7 @@ if (opt_geom) then
     %scf
         maxiter 300
     end
-
+$extra_basis_block
     %geom
         Constraints
         &{geom_constraints}
@@ -112,7 +113,7 @@ if (freq_calc) then
         guess &{scf_guess}
         maxiter 300
     end
-
+$extra_basis_block
     %output
         jsonpropfile true
         jsongbwfile true

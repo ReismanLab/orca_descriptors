@@ -259,6 +259,10 @@ def read_numbering_table(path: str | Path, spec: Spec, require_ok: bool = True, 
     it keeps the metadata of every conformer for the check report and filters the rows itself.
     """
     df = pd.read_csv(path)
+    id_col = spec.data["molecule_id_column"]
+    if id_col not in df.columns and id_col == "inchikey" and "inchi" in df.columns:
+        # numbering tables written before 2026-09-30 named the InChIKey column "inchi"
+        df = df.rename(columns={"inchi": "inchikey"})
     missing = [l for l in spec.labels if l not in df.columns]
     if missing:
         raise KeyError(f"{path}: missing label columns {missing}; the spec declares {spec.labels}")

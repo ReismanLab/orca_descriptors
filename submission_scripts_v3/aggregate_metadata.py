@@ -101,6 +101,8 @@ CONSISTENCY_FIELDS = [
     "dft.level_of_theory.vertical_redox",
     "dft.level_of_theory.conf_search",
     "dft.level_of_theory.goat_method",
+    "dft.compound_steps.optimization.extra_basis",
+    "dft.compound_steps.frequency.extra_basis",
     "uma.model_name",
     "uma.optimizer",
     "uma.fmax",

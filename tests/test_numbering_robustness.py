@@ -19,7 +19,7 @@ def spec():
 def _table():
     return pd.DataFrame({
         "path": ["DATA/A/M1/conf_1/", "DATA/A/M1/conf_2/", "DATA/A/M2/conf_1/", "DATA/A/M3/conf_1/"],
-        "inchi": ["M1", "M1", "M2", "M3"],
+        "inchikey": ["M1", "M1", "M2", "M3"],
         "H1": pd.array([18, 18, pd.NA, 7], dtype="Int64"),
         "C1": pd.array([1, 1, pd.NA, 1], dtype="Int64"),
         "C2": pd.array([2, 2, pd.NA, 2], dtype="Int64"),
@@ -36,7 +36,7 @@ def test_usable_rows_drops_failed_and_casts_to_int(spec):
     assert int(out.loc[0, "H1"]) == 18
     # without the status requirement the inconsistent row (which has indices) is kept, the <NA> one is not
     loose = usable_rows(_table(), spec, require_ok=False, quiet=True)
-    assert list(loose["inchi"]) == ["M1", "M1", "M3"]
+    assert list(loose["inchikey"]) == ["M1", "M1", "M3"]
 
 
 def test_usable_rows_needs_label_columns(spec):
@@ -61,8 +61,8 @@ def test_run_extraction_skips_failed_rows_without_engines(spec, monkeypatch):
     out = ex.run_extraction(spec, _table(), REPO, families=["orca.xyz"], progress=False)
     assert len(seen["rows"]) == 2
     assert len(out) == 4
-    assert out.loc[out["inchi"] == "M2", "Bond_C1_H1"].isna().all()
-    assert out.loc[out["inchi"] == "M1", "Bond_C1_H1"].notna().all()
+    assert out.loc[out["inchikey"] == "M2", "Bond_C1_H1"].isna().all()
+    assert out.loc[out["inchikey"] == "M1", "Bond_C1_H1"].notna().all()
     assert list(out["numbering_status"]) == ["ok", "ok", "failed", "inconsistent"]
 
 

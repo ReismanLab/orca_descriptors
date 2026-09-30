@@ -62,6 +62,10 @@ dft:
     property_solvent: "CPCM(THF)"        # implicit solvent for single-point/NMR/redox properties
     nmr_method: "b3lyp 6-31g(d)"      # functional/basis for NMR
     nbo_run: "NBO NPA"                   # NBO/NPA population analysis settings
+    extra_basis: {}                      # per-element basis overrides for the optimization and frequency steps,
+                                         # rendered as a %basis block: e.g. {Ni: def2-tzvp} puts full def2-TZVP on
+                                         # Ni while opt_method uses def2-tzvp(-f) (the LNiH2 library setting).
+                                         # {} = none. Recorded per step in metadata.json's dft.compound_steps.
 
 slurm:
   # Resources for the main launch_workflow.sh job (build + crest + uma + orca_submit stages).
@@ -83,3 +87,5 @@ slurm:
 environment:
   conda_env: nickel_oa
   omol_env_path: /resnick/groups/ReismanLab/JCS/omol_env
+  orca_descriptors_repo: /groups/ReismanLab/orca_descriptors   # clone whose desc_utils.condense each ORCA job runs at the end
+                                                               # (writes conf_N/orca_condensed.json; standard library only)

@@ -171,12 +171,12 @@ def test_completeness_flag():
 
 def test_aggregate_carries_completeness_and_does_not_aggregate_counts():
     df = pd.DataFrame({
-        "path": ["DATA/x/M1/conf_1", "DATA/x/M1/conf_2", "DATA/x/M2/conf_1"], "inchi": ["M1", "M1", "M2"],
+        "path": ["DATA/x/M1/conf_1", "DATA/x/M1/conf_2", "DATA/x/M2/conf_1"], "inchikey": ["M1", "M1", "M2"],
         "SCF_energy": [-1.0, -1.0, -2.0], "A": [1, 1, 1], "B": [2, 2, 2], "charge_NBO_A": [0.1, 0.3, 0.5],
         "smiles": ["s", "s", "t"], "orca_job_status": ["completed", "failed", "completed"],
         "n_conformer_folders": [2, 2, 3],
     })
-    agg = aggregate_conformers(df, SPEC).set_index("inchi")
+    agg = aggregate_conformers(df, SPEC).set_index("inchikey")
     assert list(agg.loc["M1", ["n_conformers", "n_conformers_completed", "n_conformer_folders"]]) == [2, 1, 2]
     assert agg.loc["M1", "all_conformers_completed"] is False or agg.loc["M1", "all_conformers_completed"] == False  # noqa: E712
     assert list(agg.loc["M2", ["n_conformers", "n_conformers_completed", "n_conformer_folders"]]) == [1, 1, 3]
@@ -208,7 +208,7 @@ def test_read_numbering_table_unfiltered_keeps_bad_rows_for_the_check(tmp_path):
     from desc_utils.extract import conformers_to_check
     from desc_utils.numbering import read_numbering_table, usable_rows
     csv = tmp_path / "num.csv"
-    pd.DataFrame({"path": ["L/M/conf_1/", "L/M/conf_2/"], "inchi": ["M", "M"], "SCF_energy": [-1.0, -1.0],
+    pd.DataFrame({"path": ["L/M/conf_1/", "L/M/conf_2/"], "inchikey": ["M", "M"], "SCF_energy": [-1.0, -1.0],
                   "A": [1, np.nan], "B": [2, np.nan], "numbering_status": ["ok", "failed"],
                   "numbering_notes": ["", "stage 'core': no SMARTS match"]}).to_csv(csv, index=False)
     every = read_numbering_table(csv, SPEC, usable=False)
