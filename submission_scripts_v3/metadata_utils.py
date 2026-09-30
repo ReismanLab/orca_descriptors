@@ -11,6 +11,8 @@ import copy
 import fcntl
 import json
 import os
+import sys
+import time
 
 # Terminal outcomes that mean a stage / conformer finished its work. Defined
 # here rather than in aggregate_metadata.py so the summary's notion of "this
@@ -20,6 +22,13 @@ OK_STEP_STATUSES = {"completed", "skipped"}
 OK_CONFORMER_STATUSES = {"completed", "skipped_energy_filter"}
 PENDING_STEP_STATUSES = {"running"}
 PENDING_CONFORMER_STATUSES = {"submitted"}
+
+# Batch-level map InChIKey (= folder name) -> the molecule it stands for. An
+# InChIKey is a hash and cannot be turned back into a SMILES, so this file is
+# the only way from a folder back to what was submitted. Written by
+# submit_all_smiles.py (submitted SMILES, line) and by
+# ligand_only_create_folder.py (the RDKit molecule that became the first xyz).
+REGISTRY_FILENAME = "molecule_registry.json"
 
 
 def _default_path(inchikey_dir):
@@ -113,6 +122,44 @@ def run_state(inchikey_dir, path=None):
         return "incomplete", f"conformer(s) not completed: {', '.join(bad)}"
 
     return "complete", f"{len(conformers)} conformer(s) done"
+
+
+def registry_path(batch_root="."):
+    return os.path.join(batch_root, REGISTRY_FILENAME)
+
+
+def load_registry(batch_root="."):
+    """{inchikey: entry} for the batch, {} if no registry yet."""
+    return load_metadata(batch_root, registry_path(batch_root))
+
+
+def register_molecule(inchikey, entry, batch_root="."):
+    """Merge `entry` into the batch's molecule_registry.json under `inchikey`.
+
+    `registered_at` is stamped the first time a key appears and never
+    rewritten. The first submitted SMILES is kept as `smiles`; a different
+    string later submitted under the same InChIKey is appended to
+    `also_submitted_as`, and a WARNING is printed when the two are not even
+    the same canonical SMILES (a real collision, e.g. tautomers).
+    """
+    existing = load_registry(batch_root).get(inchikey) or {}
+    entry = dict(entry)
+    if not existing:
+        entry.setdefault("registered_at", time.strftime("%Y-%m-%dT%H:%M:%S"))
+    new_smiles = entry.get("smiles")
+    old_smiles = existing.get("smiles")
+    if old_smiles and new_smiles and new_smiles != old_smiles:
+        entry["smiles"] = old_smiles
+        aliases = set(existing.get("also_submitted_as") or []) | {new_smiles}
+        entry["also_submitted_as"] = sorted(aliases)
+        old_can, new_can = existing.get("canonical_smiles"), entry.get("canonical_smiles")
+        if old_can and new_can and old_can != new_can:
+            print(f"WARNING: {inchikey} was first submitted as {old_smiles!r} "
+                  f"({old_can}) and now as {new_smiles!r} ({new_can}); keeping the "
+                  f"first, recording the second under also_submitted_as", file=sys.stderr)
+        elif new_can:
+            entry["canonical_smiles"] = old_can or new_can
+    return update_metadata(batch_root, {inchikey: entry}, path=registry_path(batch_root))
 
 
 def load_metadata(inchikey_dir, path=None):

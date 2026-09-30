@@ -144,6 +144,7 @@ been computed yet, and the molecule is flagged in the summary.
 python submit_all_smiles.py --dry-run                                                             # per ligand: new, in_progress, incomplete or complete, with the reason
 python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/check_jobs.py $LIB      # per conformer, from squeue and the ORCA outputs
 python3 -m json.tool <InChIKey>/metadata.json                                                     # the full record of one ligand
+python3 lookup_molecule.py --list                                                                 # InChIKey -> submitted SMILES (molecule_registry.json); --smiles, --inchikey, --csv
 python3 aggregate_metadata.py --root . --csv metadata_summary.csv                                 # rebuild <LIB>_metadata.json now, plus a one-row-per-ligand CSV
 python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/list_molecules.py $LIB  # -> molecules.csv: InChIKey, number of conformers
 ```
@@ -175,7 +176,13 @@ and flags the molecules whose conformers are not all finished (step 5.2).
 SMILES, InChIKey and formal charge, the RDKit version and xtb level of the embedding, the CREST version
 and settings, the UMA model, `fmax` and the energy of every conformer, the ORCA module, the
 `level_of_theory` values, the DFT energy window and `calc_param_md5`, the MD5 of the rendered
-`calcParam.inp`. To reproduce a library, copy its `workflow_inputs.yaml` and `calcParam.inp.tmpl` next to
+`calcParam.inp`. The folders are named by InChIKey, a hash that cannot be turned back into a molecule, so the
+batch directory also holds `molecule_registry.json`: for every InChIKey, the SMILES as submitted and its line in
+`smiles.txt` (written by `submit_all_smiles.py`), the canonical SMILES, the InChI, and the RDKit molecule that
+became the first xyz, with explicit hydrogens and the embedded 3D coordinates, as a mol block (written by the
+build stage; `Chem.MolFromMolBlock(block, removeHs=False)` gives the molecule back). `lookup_molecule.py`
+queries it by InChIKey or by any spelling of a SMILES, and writes a flat CSV. Re-running `submit_all_smiles.py`
+on a batch older than the registry fills it in. To reproduce a library, copy its `workflow_inputs.yaml` and `calcParam.inp.tmpl` next to
 a new `smiles.txt`: a rendered input whose MD5 differs from a recorded one is reported as a mismatch
 before anything is submitted. One thing is outside the record: the CREST command line is built by
 `gaussian_scripts.py` in the group `scripts/` folder, which is not in this repository.
@@ -348,7 +355,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | [specs](specs) | One YAML spec per molecule family. `lnih2_pyox.yaml` (LNiH2 / PyOx ligand library) and `test_molecules_at1_at2.yaml` (small organic test set) are the shipped examples. |
 | [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
-| [submission_scripts_v3](submission_scripts_v3) | The submission workflow of step 3, copied into every batch directory: `workflow_inputs.yaml` (every chosen setting), `submit_all_smiles.py` (one job per SMILES, skips finished ligands, checks the settings against the records), `launch_workflow.sh` (build, CREST, UMA and ORCA submission for one ligand), the stage scripts (`ligand_only_create_folder.py`, `crest.py`, `uma_opt_confs.py`, `launch_orca_all.py`), `calcParam.inp.tmpl` and `calc_param_template.py` (ORCA input rendered from the yaml), `slurm-calcParam.sh` (one ORCA job, records its outcome and condenses its output), `metadata_utils.py`, `record_step.py`, `mark_orca_done.py`, `check_inputs.py` (the `metadata.json` provenance and status record), `submit_aggregate.py`, `slurm-aggregate.sh` and `aggregate_metadata.py` (batch summary `<LIB>_metadata.json`: majority settings, flagged ligands). |
+| [submission_scripts_v3](submission_scripts_v3) | The submission workflow of step 3, copied into every batch directory: `workflow_inputs.yaml` (every chosen setting), `submit_all_smiles.py` (one job per SMILES, skips finished ligands, checks the settings against the records), `launch_workflow.sh` (build, CREST, UMA and ORCA submission for one ligand), the stage scripts (`ligand_only_create_folder.py`, `crest.py`, `uma_opt_confs.py`, `launch_orca_all.py`), `calcParam.inp.tmpl` and `calc_param_template.py` (ORCA input rendered from the yaml), `slurm-calcParam.sh` (one ORCA job, records its outcome and condenses its output), `metadata_utils.py`, `record_step.py`, `mark_orca_done.py`, `check_inputs.py` (the `metadata.json` provenance and status record), `lookup_molecule.py` (InChIKey to submitted SMILES and RDKit molecule, from `molecule_registry.json`), `submit_aggregate.py`, `slurm-aggregate.sh` and `aggregate_metadata.py` (batch summary `<LIB>_metadata.json`: majority settings, flagged ligands). |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | Cluster tools for any library: `check_jobs.py` (queued / running / done / failed state of every ORCA job), `list_molecules.py` (InChIKey and conformer count), `slurm-condense.sh` (condense a whole library on a compute node); `calcParam.inp`, the fixed compound input of the LNiH2 library; and the older manual launcher (`launch_orca_all.py`, `slurm-calcParam.sh`), superseded by step 3. |
 | [tests](tests) | Unit tests, and regression tests against the reference CSVs in `tests/reference/` (run when the LNiH2 library is under `DATA/`). |
 | [notebooks](notebooks) | Exploratory notebooks (`make_descriptor_descripytor.ipynb` ran the pipeline before the CLI existed; ligand separation, substructure numbering, descriptor correlations). Not maintained with the code. |
