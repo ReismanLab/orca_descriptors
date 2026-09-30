@@ -102,7 +102,7 @@ ORCA job looks two levels up for `mark_orca_done.py`. Copy them, do not point at
 | `conformer_gen` | xtb pre-optimisation of the RDKit structure: `optimize`, `xtb_gfn_level` |
 | `crest` | `charge` and `spin_multiplicity` (also used for the ORCA input, so CREST and DFT can never disagree), CREST's own energy window `ewin_kcal_mol`, `n_conf`, `quick`, `norotmd`, `noreftopo`, `cores` |
 | `uma` | `model_name` (`uma-s-1p1`), `fmax` (eV/Å), `task_name` (`omol`) |
-| `dft` | `ewin_kcal_mol`: only UMA-ranked conformers within this window of the minimum get an ORCA job; `calc_param_template`; `level_of_theory`: which compound steps run (`opt_geom`, `freq_calc`, `nmr_calc`, `vertical_redox`, `conf_search`) and the method, basis and solvent of each (`opt_method`, `opt_solvent`, `svp_method`, `property_solvent`, `nmr_method`, `nbo_run`) |
+| `dft` | `ewin_kcal_mol`: only UMA-ranked conformers within this window of the minimum get an ORCA job; `calc_param_template`; `level_of_theory`: which compound steps run (`opt_geom`, `freq_calc`, `nmr_calc`, `vertical_redox`, `conf_search`) and the method, basis and solvent of each (`opt_method`, `opt_solvent`, `svp_method`, `property_solvent`, `nmr_method`, `nbo_run`); `extra_basis`, per-element basis overrides for the optimization and frequency steps (`{Ni: def2-tzvp}` for the LNiH2 setting, `{}` for none) |
 | `slurm` | `main_job` (the per-ligand job: build, CREST, UMA) and `orca_job` (each ORCA job): `time`, `mem_per_cpu`, `ntasks_per_node`; passed as `sbatch` flags, they override the `#SBATCH` lines of the scripts |
 | `environment` | `conda_env` (RDKit, xtb, CREST, PyYAML), `omol_env_path` (the UMA / fairchem environment) and `orca_descriptors_repo` (the clone whose `desc_utils.condense` every ORCA job runs at the end) |
 
@@ -110,8 +110,7 @@ The shipped values are a starting point for organic ligands (M06 / 6-31G(d) opti
 single point, CPCM(THF)), not the settings of the existing LNiH2 library, which are in the table of
 [0. ORCA calculations](#0-orca-calculations). The `level_of_theory` values are substituted into
 `calcParam.inp.tmpl` when the ORCA jobs are created; the template itself fixes which steps exist and how
-they chain, so edit it only to change the structure of the compound job (for example an extra basis on a
-metal, which the template does not carry).
+they chain, so edit it only to change the structure of the compound job.
 
 **3.2 Submit.**
 
@@ -175,8 +174,9 @@ and flags the molecules whose conformers are not all finished (step 5.2).
 **3.4 What is recorded, and how to reproduce a library.** Besides the statuses, `metadata.json` keeps the
 SMILES, InChIKey and formal charge, the RDKit version and xtb level of the embedding, the CREST version
 and settings, the UMA model, `fmax` and the energy of every conformer, the ORCA module, the
-`level_of_theory` values, the DFT energy window and `calc_param_md5`, the MD5 of the rendered
-`calcParam.inp`. The folders are named by InChIKey, a hash that cannot be turned back into a molecule, so the
+`level_of_theory` values, the level of theory of every compound step as it actually runs (`dft.compound_steps`:
+method, solvent, extra basis, charge and multiplicity per step), the DFT energy window and `calc_param_md5`, the MD5
+of the rendered `calcParam.inp`. The folders are named by InChIKey, a hash that cannot be turned back into a molecule, so the
 batch directory also holds `molecule_registry.json`: for every InChIKey, the SMILES as submitted and its line in
 `smiles.txt` (written by `submit_all_smiles.py`), the canonical SMILES, the InChI, and the RDKit molecule that
 became the first xyz, with explicit hydrogens and the embedded 3D coordinates, as a mol block (written by the
@@ -394,8 +394,8 @@ Every conformer is computed with an ORCA 6.1 compound job, `calcParam.inp`. The 
 per ligand from [submission_scripts_v3/calcParam.inp.tmpl](submission_scripts_v3/calcParam.inp.tmpl) and the
 `dft.level_of_theory` block of `workflow_inputs.yaml`, then submits `slurm-calcParam.sh` in every `conf_N/`.
 [scripts-for-orca-computations/calcParam.inp](scripts-for-orca-computations/calcParam.inp) is the fixed input
-the LNiH2 library was computed with; its level of theory is the table below, and it also puts `def2-TZVP` on
-Ni in the optimization and frequency steps, which the template does not. The steps and the files read
+the LNiH2 library was computed with; its level of theory is the table below, including full `def2-TZVP` on Ni in
+the optimization and frequency steps (`extra_basis: {Ni: def2-tzvp}` in the YAML). The steps and the files read
 downstream are:
 
 | Step (`%base`) | Level of theory | Purpose | Files used by the pipeline |

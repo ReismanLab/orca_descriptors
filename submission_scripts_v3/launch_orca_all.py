@@ -95,6 +95,9 @@ dft_record = {
     "calc_param_template": template_path,
     "calc_param_md5": current_md5,
     "level_of_theory": level_of_theory,
+    # what each compound step actually runs (method, solvent, extra basis,
+    # charge, multiplicity), so differences between steps are on record
+    "compound_steps": cpt.compound_steps(cfg),
 }
 
 # On a resume this block is normally identical to what's already recorded and
