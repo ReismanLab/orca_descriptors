@@ -5,25 +5,29 @@ implemented yet; this file records the design and the decisions so the work can 
 
 ## Goal
 
-Stop maintaining two implementations of SMILES → embedding → CREST → UMA. On the cluster both projects
-live in `/groups/ReismanLab`:
+Stop maintaining two implementations of SMILES → embedding → CREST → UMA, and do it inside one
+repository and one environment (decision 2026-09-30: bceg is part of orca_descriptors, not an external
+package it calls):
 
-- **B-CEG-MCD** (`bceg`, `/groups/ReismanLab/B-CEG-MCD`, shared env `bceg`) generates conformer
+- **`bceg/`** (imported from B-CEG-MCD `src/bceg` with `git subtree`, history kept) generates conformer
   ensembles: transformation, search (CREST, GOAT, ...), UMA post-optimisation, replicates,
-  `params.json` hyper-parameter logs, `molecules.csv`.
-- **orca_descriptors** (`/groups/ReismanLab/orca_descriptors`, shared env `gp_env`) takes an ensemble,
-  runs one ORCA compound job per conformer, condenses the outputs and computes the descriptors.
+  `params.json` hyper-parameter logs, `molecules.csv`. B-CEG-MCD stays the benchmarking project;
+  the package code is maintained here from now on.
+- **`desc_utils/`** takes an ensemble, runs one ORCA compound job per conformer (`desc_utils.submit`),
+  condenses the outputs and computes the descriptors.
 
-The `build`, `crest` and `uma` stages of `submission_scripts_v3/` are replaced by bceg's output. The
-ORCA stage is rewritten as a package module with a CLI, borrowing bceg's design where it is better.
+Both run from the shared clone `/groups/ReismanLab/orca_descriptors` in `gp_env`, which therefore
+gains bceg's dependencies (fairchem-core, ase; crest and xtb as conda packages). The `build`, `crest`
+and `uma` stages of `submission_scripts_v3/` are replaced by `bceg`. The ORCA stage is rewritten as a
+package module with a CLI, borrowing bceg's design where it is better.
 
 ## Decisions (project owner, 2026-09-30)
 
 | topic | decision |
 |---|---|
 | Split | bceg: ensembles. orca_descriptors: ORCA jobs, condense, descriptors. |
-| Environment | `gp_env` for everything on the orca_descriptors side (rdkit, pyyaml, pandas already in it), not `nickel_oa`. |
-| Code location | run from the shared clone (later: installed into `gp_env`), never copied into the library; the git commit is recorded. |
+| Environment | one env, `gp_env`, for bceg and the ORCA stage (rdkit, pyyaml, pandas already in it; add fairchem-core, ase, crest, xtb), not `nickel_oa` and not a separate `bceg` env. |
+| Code location | `bceg/` and `desc_utils/` in this repository, run from the shared clone (later: installed into `gp_env`), never copied into the library; the git commit is recorded. |
 | Settings | one config file per library; `submit` freezes the resolved copy and the rendered `calcParam.inp` under `<LIB>/_jobs/<timestamp>/`, and the jobs read that snapshot. |
 | Changed settings | refused with a diff (bceg's rule). Different settings mean a different library directory. No interactive confirmation. |
 | Conformer folders | `conf_N/` are created at the ORCA stage only, from the ensemble xyz; bceg keeps its multi-conformer `raw_<i>_<lot>.xyz`. |
@@ -46,7 +50,7 @@ bceg submit ...                         (B-CEG-MCD, env bceg)
   DATA_bceg/molecules.csv
 
 python -m desc_utils.submit submit <config>          (orca_descriptors, env gp_env)
-  1. bceg submit <bceg config> --smiles ... -t ... -m ...   run through `conda run -n bceg` from the source block; skipped if source.run_bceg is false
+  1. bceg's submit (imported: bceg.cli / bceg.slurm) with the bceg config of the source block; skipped if source.run_bceg is false
   2. orca array queued --dependency=afterany on the bceg job ids (or immediately when the ensembles exist); skipped if orca: off
   <LIB>/_jobs/<timestamp>/config.yaml, calcParam.inp, orca.sbatch, tasks.jsonl, slurm_logs/
   <LIB>/molecule_registry.json                       InChIKey -> submitted SMILES, bceg source, params sha256
@@ -75,7 +79,6 @@ source:
   lot: uma-s-1p2                                         # which raw_1_<lot>.xyz to take (replicate 1 only)
   smiles: ligands.txt                                    # the input list, passed to bceg and used to select molecules here
   run_bceg: true                                         # false: ensembles already exist, do not call bceg
-  bceg_env: bceg                                         # conda env holding the bceg command
 orca: on                                                 # off: ensembles only; run the same command later with on
 dft:
   ewin_kcal_mol: 5.0                                     # on the energies of the ensemble comment lines (Hartree)
@@ -104,6 +107,11 @@ Steps 1–2 run in the array task rather than at submission so `submit` stays fa
 
 ## Steps
 
+0. Import `bceg` (done, subtree merge `cfaddb0`: `bceg/`, `tests/bceg/`, `configs/bceg_example.yaml`,
+   `inputs/example_NN_ligands.txt`, `docs/bceg_*.md`). In `gp_env` 57 of its 60 tests pass; the 3 failures
+   are environmental and identical in the B-CEG-MCD clone (two need `xtb` on PATH, one depends on the
+   RDKit version's hydride SMILES). Still to do: fold `docs/bceg_SUBMITTING.md` into the README, add
+   fairchem-core, ase, crest, xtb to `gp_env.yml`, and delete `docs/bceg_README.md` once merged.
 1. `desc_utils/submit/`: config loader with freeze, bceg source reader (ensemble file, `molecules.csv`,
    `params*.json`), registry, metadata records (port `metadata_utils`, `record_step`, `mark_orca_done`),
    template renderer (port `calc_param_template`), array generation, `submit` / `status` / `run-task` CLI.
@@ -125,10 +133,10 @@ Steps 1–2 run in the array task rather than at submission so `submit` stays fa
 
 ## Notes for the implementation
 
-- The ORCA array task runs in `gp_env`; only `submit` needs bceg, and it reaches it through
-  `conda run -n <bceg_env> bceg submit ...`, so the two environments never mix.
+- `submit` imports `bceg` directly (`bceg.tasks.expand`, `bceg.slurm.write_jobs`) and runs in `gp_env`
+  like the ORCA array tasks; bceg's sbatch `setup` lines activate `gp_env` too.
 - `afterany` on bceg arrays: the ORCA task must re-check that the ensemble and its `run_1*.json` say
   `done` before splitting; a molecule whose ensemble failed is recorded `ensemble_missing` and skipped,
   and the next `submit` picks it up once bceg succeeds.
-- `orca: on/off`, `run_bceg`, `bceg_env` and the `slurm` block are recorded but not compared; `source.*`
-  (except `run_bceg`, `bceg_env`) and `dft.*` are compared: changing them is refused.
+- `orca: on/off`, `run_bceg` and the `slurm` block are recorded but not compared; `source.*`
+  (except `run_bceg`) and `dft.*` are compared: changing them is refused.
