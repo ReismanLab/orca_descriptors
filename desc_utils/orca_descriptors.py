@@ -329,12 +329,16 @@ class PropertiesXYZ:
             )
             return
 
-        pyramidalization = Pyramidalization(
-            self.coordinates,
-            at_idx,
-            elements=self.elements,
-            method="connectivity",
-        )
+        # The three neighbours found above are handed to morfeus as they are. Letting morfeus redo the
+        # search (method="connectivity", Pyykko radii x 1.2) uses a tighter cutoff than compute_connectivity
+        # (x 1.25): a bond in the gap, e.g. a 2.22 A Ni-N contact of a UMA geometry, passed the check
+        # here and then raised "2 neighbors. 3 expected." inside morfeus, killing the whole run.
+        try:
+            pyramidalization = Pyramidalization(self.coordinates, at_idx, neighbor_indices=neighbors)
+        except Exception as exc:
+            logging.warning("pyramidalization of %s (atom %s, neighbours %s) failed in %s: %s; left NaN",
+                            atom_label, at_idx, neighbors, self.xyz_path, exc)
+            return
         self.results[f'Pyr_{atom_label}'] = pyramidalization.P
         self.results[f'Pyr_angle_{atom_label}'] = pyramidalization.P_angle
 

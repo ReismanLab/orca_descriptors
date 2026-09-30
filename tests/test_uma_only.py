@@ -175,3 +175,49 @@ def test_orca_bookkeeping_kept_when_an_orca_family_is_requested():
     spec = validate_spec(raw)
     assert needs_orca_output(spec) and needs_orca_output(spec, ["orca.charges"])
     assert not needs_orca_output(spec, ["orca.xyz"])
+
+
+# --------------------------------------------------------------------------- pyramidalization connectivity
+
+# Pyridine-type N bound to Ni as UMA places it: the Ni-N distance (2.22 A) lies between the reader's cutoff
+# (covalent radii x 1.25 = 2.44 A) and morfeus' own (Pyykko x 1.2 = 2.17 A). Letting morfeus redo the
+# neighbour search raised "2 neighbors. 3 expected." and aborted the whole extraction.
+BORDERLINE_XYZ = """4
+N with two C at 1.33 A and one Ni at 2.22 A, slightly pyramidal
+N    0.000000   0.000000   0.000000
+C    1.330000   0.000000   0.000000
+C   -0.665000   1.151800   0.000000
+Ni  -1.100000  -1.905300   0.300000
+"""
+
+
+def test_pyramidalization_uses_the_readers_neighbours(tmp_path):
+    import numpy as np
+    from morfeus.utils import get_connectivity_matrix
+    import desc_utils.orca_descriptors as od
+
+    (tmp_path / "g.xyz").write_text(BORDERLINE_XYZ)
+    P = od.PropertiesXYZ(str(tmp_path), geometry_file="g.xyz")
+    P.define_atom_list({"N1": 1})
+    assert sorted(P.atom_connectivity[1]) == [2, 3, 4]
+    morfeus_n = int(get_connectivity_matrix(np.array(P.coordinates), elements=P.elements,
+                                            radii_type="pyykko", scale_factor=1.2)[0].sum())
+    assert morfeus_n == 2                      # the disagreement that used to raise
+    P.get_pyramidalizations()
+    assert np.isfinite(P.results["Pyr_N1"]) and P.results["Pyr_N1"] > 0
+    assert np.isfinite(P.results["Pyr_angle_N1"])
+
+
+def test_pyramidalization_failure_leaves_nan_instead_of_raising(tmp_path, monkeypatch):
+    import desc_utils.orca_descriptors as od
+
+    (tmp_path / "g.xyz").write_text(BORDERLINE_XYZ)
+    P = od.PropertiesXYZ(str(tmp_path), geometry_file="g.xyz")
+    P.define_atom_list({"N1": 1})
+
+    def boom(*a, **k):
+        raise RuntimeError("morfeus said no")
+
+    monkeypatch.setattr(od, "Pyramidalization", boom)
+    P.get_pyramidalizations()                  # must not raise
+    assert "Pyr_N1" not in P.results           # -> NaN column for this conformer in the table
