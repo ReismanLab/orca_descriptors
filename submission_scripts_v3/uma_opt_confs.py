@@ -18,6 +18,15 @@ parser.add_argument("--fmax", type=float, required=True,
 parser.add_argument("--task-name", type=str, required=True)
 args = parser.parse_args()
 
+# The optimised geometry is named after the model that produced it, so two
+# libraries run with different UMA models can be told apart on disk, and so
+# the UMA-only descriptor spec (data.geometry_file: optimized_<model>.xyz)
+# matches without editing. Runs before 2026-09-30 wrote a fixed name
+# whatever the model; those files are renamed on resume (check_inputs.py
+# has already refused, or the operator confirmed, any change of model since).
+uma_xyz = f"optimized_{args.model_name}.xyz"
+LEGACY_UMA_XYZ = "optimized_uma-s-1.xyz"
+
 ligand    = args.lig
 inchi_key = Chem.rdinchi.MolToInchiKey(Chem.MolFromSmiles(ligand))
 
@@ -42,7 +51,11 @@ calc = FAIRChemCalculator(predict_unit=predict_unit, task_name=args.task_name)
 for f in conformers:
    folder = f.split('.')[0]
    if folder in os.listdir('.'):
-       if 'optimized_uma-s-1.xyz' in os.listdir(folder):
+       legacy = os.path.join(folder, LEGACY_UMA_XYZ)
+       if uma_xyz != LEGACY_UMA_XYZ and os.path.exists(legacy) and not os.path.exists(os.path.join(folder, uma_xyz)):
+           print(f"{legacy}: renaming to {uma_xyz} (fixed name of runs before 2026-09-30)")
+           os.rename(legacy, os.path.join(folder, uma_xyz))
+       if uma_xyz in os.listdir(folder):
            continue
    else:
        os.mkdir(folder)
@@ -58,12 +71,12 @@ for f in conformers:
    dyn.run(fmax=args.fmax)
 
    # Save the optimized structure
-   write(f"{folder}/optimized_uma-s-1.xyz", atoms)
+   write(f"{folder}/{uma_xyz}", atoms)
 
 conf_energies = {}
 for f in conformers:
     folder = f.split('.')[0]
-    energy_file = os.path.join(folder, "optimized_uma-s-1.xyz")
+    energy_file = os.path.join(folder, uma_xyz)
     energy = None
     if os.path.exists(energy_file):
         with open(energy_file) as ef:
@@ -83,6 +96,7 @@ metadata_utils.update_metadata(".", {
         "task_name": args.task_name,
         "optimizer": "ASE BFGS",
         "fmax": args.fmax,
+        "geometry_file": uma_xyz,
         "conformer_energies_eV": conf_energies,
     },
 })

@@ -35,6 +35,24 @@ mark() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Condense the outputs into orca_condensed.json so only that file (plus the
+# geometry) has to leave the cluster (README step 4). Standard-library Python
+# only: the clone needs no environment. ORCA_DESCRIPTORS_REPO comes from
+# workflow_inputs.yaml (environment.orca_descriptors_repo) through
+# launch_orca_all.py's sbatch --export. The step must never fail the job.
+# ---------------------------------------------------------------------------
+REPO="${ORCA_DESCRIPTORS_REPO:-/groups/ReismanLab/orca_descriptors}"
+
+condense() {
+    if [ -d "$REPO/desc_utils" ]; then
+        PYTHONPATH="$REPO" python -m desc_utils.condense --conf-dir "$PWD" --quiet \
+            || echo "WARNING: condense failed in $PWD" >&2
+    else
+        echo "WARNING: $REPO/desc_utils not found; orca_condensed.json not written (run README step 4)" >&2
+    fi
+}
+
 # --signal=B:TERM@600 (above) delivers SIGTERM to this script 10 minutes before
 # the walltime expires. Catch it so a job that runs out of time is recorded as
 # "timeout" instead of being left at "submitted" indefinitely.
@@ -42,6 +60,7 @@ on_term() {
     trap - TERM
     kill "$orca_pid" 2>/dev/null
     mark --status timeout --exit-code 143
+    condense
     exit 143
 }
 trap on_term TERM
@@ -54,4 +73,5 @@ wait "$orca_pid"
 rc=$?
 
 mark --exit-code "$rc"
+condense
 exit "$rc"

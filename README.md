@@ -104,7 +104,7 @@ ORCA job looks two levels up for `mark_orca_done.py`. Copy them, do not point at
 | `uma` | `model_name` (`uma-s-1p1`), `fmax` (eV/Å), `task_name` (`omol`) |
 | `dft` | `ewin_kcal_mol`: only UMA-ranked conformers within this window of the minimum get an ORCA job; `calc_param_template`; `level_of_theory`: which compound steps run (`opt_geom`, `freq_calc`, `nmr_calc`, `vertical_redox`, `conf_search`) and the method, basis and solvent of each (`opt_method`, `opt_solvent`, `svp_method`, `property_solvent`, `nmr_method`, `nbo_run`) |
 | `slurm` | `main_job` (the per-ligand job: build, CREST, UMA) and `orca_job` (each ORCA job): `time`, `mem_per_cpu`, `ntasks_per_node`; passed as `sbatch` flags, they override the `#SBATCH` lines of the scripts |
-| `environment` | `conda_env` (RDKit, xtb, CREST, PyYAML) and `omol_env_path` (the UMA / fairchem environment) |
+| `environment` | `conda_env` (RDKit, xtb, CREST, PyYAML), `omol_env_path` (the UMA / fairchem environment) and `orca_descriptors_repo` (the clone whose `desc_utils.condense` every ORCA job runs at the end) |
 
 The shipped values are a starting point for organic ligands (M06 / 6-31G(d) optimisation, B3LYP
 single point, CPCM(THF)), not the settings of the existing LNiH2 library, which are in the table of
@@ -125,7 +125,7 @@ python submit_all_smiles.py               # writes launch_workflow_<i>.sh per li
 For each ligand the job (`launch_workflow.sh`) creates `<InChIKey>/`, runs CREST there, splits the
 clustered conformers into `conf_N/`, optimises each with UMA, renders `calcParam.inp` from the template,
 then submits `slurm-calcParam.sh` in every `conf_N/` that passes the energy window. Each ORCA job records
-its own outcome when it ends, and an aggregation job queued behind them rebuilds the batch summary
+its own outcome and condenses its output into `orca_condensed.json` (step 4) when it ends, and an aggregation job queued behind them rebuilds the batch summary
 `<LIB>_metadata.json` (`aggregate_metadata.py`).
 
 Running `submit_all_smiles.py` again is how a batch is extended: ligands whose record says `complete` or
@@ -204,9 +204,10 @@ state of the ORCA job (`job.status`: `completed`, `running` or `failed`). The `j
 log counts them: `completed N` alone means the library is done. Re-running the same command rebuilds
 the files of the unfinished jobs and skips the completed ones, so it can be repeated after every
 resubmission or new batch. A `failed` line names a conformer with nothing to condense yet (no
-singlepoint), see [If something goes wrong](#if-something-goes-wrong). The `slurm-calcParam.sh` of
-`submission_scripts_v3/` does not condense, so the step is needed for every library submitted with step 3; the older
-`scripts-for-orca-computations/slurm-calcParam.sh` condenses at the end of every job, and the step can then be skipped.
+singlepoint), see [If something goes wrong](#if-something-goes-wrong). Jobs submitted with step 3 condense at
+the end of every ORCA job (`slurm-calcParam.sh`, using the clone named in `environment.orca_descriptors_repo`), so
+for such a library this step is only needed for the conformers whose job died before the end or whose file the
+check rejects; re-running it skips the completed files.
 
 ### 5. Laptop: copy the condensed files, extract and compile the descriptors
 
@@ -252,9 +253,10 @@ and read back on the next runs.
 **Geometry-only descriptors from UMA structures.** The morfeus family (`descriptors.orca.xyz`: SASA,
 %Vbur, bond lengths, angles, dihedrals, Sterimol, pyramidalisation, quadrants) needs nothing but an xyz
 file, so a library pre-optimised with UMA can be described before, or without, any ORCA job and without
-step 4 (no `orca_condensed.json`). `specs/test_molecules_uma_only.yaml` is the template: point
-`data.geometry_file` at the xyz UMA wrote (`optimized_uma-s-1.xyz` for a library from step 3, whatever the
-`uma.model_name`; `optimized_uma-s-1p1.xyz` in the shipped spec; an extended xyz whose force columns are ignored), keep `descriptors.orca.xyz` as the only family, and take the energy for the Boltzmann
+step 4 (no `orca_condensed.json`); add `--include='optimized_*.xyz'` to the rsync of step 5.1 so the UMA geometries
+travel. `specs/test_molecules_uma_only.yaml` is the template: point `data.geometry_file` at the xyz UMA wrote,
+`optimized_<uma.model_name>.xyz` (`optimized_uma-s-1p1.xyz` with the shipped settings, as in the spec; an extended
+xyz whose force columns are ignored), keep `descriptors.orca.xyz` as the only family, and take the energy for the Boltzmann
 weighting from the comment line of that file:
 
 ```yaml
@@ -346,7 +348,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | [specs](specs) | One YAML spec per molecule family. `lnih2_pyox.yaml` (LNiH2 / PyOx ligand library) and `test_molecules_at1_at2.yaml` (small organic test set) are the shipped examples. |
 | [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
-| [submission_scripts_v3](submission_scripts_v3) | The submission workflow of step 3, copied into every batch directory: `workflow_inputs.yaml` (every chosen setting), `submit_all_smiles.py` (one job per SMILES, skips finished ligands, checks the settings against the records), `launch_workflow.sh` (build, CREST, UMA and ORCA submission for one ligand), the stage scripts (`ligand_only_create_folder.py`, `crest.py`, `uma_opt_confs.py`, `launch_orca_all.py`), `calcParam.inp.tmpl` and `calc_param_template.py` (ORCA input rendered from the yaml), `slurm-calcParam.sh` (one ORCA job, records its outcome), `metadata_utils.py`, `record_step.py`, `mark_orca_done.py`, `check_inputs.py` (the `metadata.json` provenance and status record), `submit_aggregate.py`, `slurm-aggregate.sh` and `aggregate_metadata.py` (batch summary `<LIB>_metadata.json`: majority settings, flagged ligands). |
+| [submission_scripts_v3](submission_scripts_v3) | The submission workflow of step 3, copied into every batch directory: `workflow_inputs.yaml` (every chosen setting), `submit_all_smiles.py` (one job per SMILES, skips finished ligands, checks the settings against the records), `launch_workflow.sh` (build, CREST, UMA and ORCA submission for one ligand), the stage scripts (`ligand_only_create_folder.py`, `crest.py`, `uma_opt_confs.py`, `launch_orca_all.py`), `calcParam.inp.tmpl` and `calc_param_template.py` (ORCA input rendered from the yaml), `slurm-calcParam.sh` (one ORCA job, records its outcome and condenses its output), `metadata_utils.py`, `record_step.py`, `mark_orca_done.py`, `check_inputs.py` (the `metadata.json` provenance and status record), `submit_aggregate.py`, `slurm-aggregate.sh` and `aggregate_metadata.py` (batch summary `<LIB>_metadata.json`: majority settings, flagged ligands). |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | Cluster tools for any library: `check_jobs.py` (queued / running / done / failed state of every ORCA job), `list_molecules.py` (InChIKey and conformer count), `slurm-condense.sh` (condense a whole library on a compute node); `calcParam.inp`, the fixed compound input of the LNiH2 library; and the older manual launcher (`launch_orca_all.py`, `slurm-calcParam.sh`), superseded by step 3. |
 | [tests](tests) | Unit tests, and regression tests against the reference CSVs in `tests/reference/` (run when the LNiH2 library is under `DATA/`). |
 | [notebooks](notebooks) | Exploratory notebooks (`make_descriptor_descripytor.ipynb` ran the pipeline before the CLI existed; ligand separation, substructure numbering, descriptor correlations). Not maintained with the code. |

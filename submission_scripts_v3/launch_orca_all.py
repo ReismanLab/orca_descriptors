@@ -52,6 +52,14 @@ inchi_key = Chem.rdinchi.MolToInchiKey(Chem.MolFromSmiles(ligand))
 
 cfg = wi.load_inputs()
 sbatch_overrides = sbatch_resource_overrides(cfg)
+# The geometry uma_opt_confs.py wrote: optimized_<uma.model_name>.xyz.
+uma_xyz = f"optimized_{wi.get(cfg, 'uma.model_name')}.xyz"
+# Clone of orca_descriptors whose desc_utils.condense each ORCA job runs at
+# the end (README step 4). Handed to slurm-calcParam.sh through the job
+# environment, since #SBATCH scripts cannot read workflow_inputs.yaml.
+repo_path = wi.get(cfg, "environment.orca_descriptors_repo", default=None)
+if repo_path:
+    sbatch_overrides.append(f"--export=ALL,ORCA_DESCRIPTORS_REPO={repo_path}")
 # Resolve the template path against the batch directory (our CWD right now)
 # before chdir-ing into the ligand's own directory below.
 template_path = os.path.abspath(args.calc_param_template)
@@ -112,11 +120,11 @@ metadata_utils.update_metadata(".", {"dft": dft_record})
 # get the conformer energy from UMA to only select conformers withn 8kcal/mol of he min energy conformer 
 energies = {}
 for f in conformers:
-   energy = subprocess.run(f"grep 'energy' {f}/optimized_uma-s-1.xyz | grep -o 'energy=[^ ]*' | cut -d= -f2 | tail -1", capture_output=True, text=True, check=True, shell=True).stdout
+   energy = subprocess.run(f"grep 'energy' {f}/{uma_xyz} | grep -o 'energy=[^ ]*' | cut -d= -f2 | tail -1", capture_output=True, text=True, check=True, shell=True).stdout
    try:
        energies[f] = float(energy)
    except ValueError:
-       print(f"could not read energy of {f}/optimized_uma-s-1.xyz, should check that folder")
+       print(f"could not read energy of {f}/{uma_xyz}, should check that folder")
        energies[f] = np.nan
 
 min_e = min(energies.values())
@@ -154,7 +162,7 @@ for f in conformers:
        subprocess.run(["cp", "../calcParam.inp", "calcParam.inp"], check=True)
        subprocess.run(["cp", "../../slurm-calcParam.sh", "slurm-calcParam.sh"], check=True)
        # step needed to convert the uma output to a readable xyz file
-       subprocess.run("cut -c 1-57 optimized_uma-s-1.xyz > input.xyz", shell=True, check=True)
+       subprocess.run(f"cut -c 1-57 {uma_xyz} > input.xyz", shell=True, check=True)
        sbatch_cmd = ["sbatch"] + sbatch_overrides + ["slurm-calcParam.sh"]
        sbatch_result = subprocess.run(sbatch_cmd, check=True, capture_output=True, text=True)
        print(sbatch_result.stdout)

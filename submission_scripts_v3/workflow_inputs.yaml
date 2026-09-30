@@ -83,3 +83,5 @@ slurm:
 environment:
   conda_env: nickel_oa
   omol_env_path: /resnick/groups/ReismanLab/JCS/omol_env
+  orca_descriptors_repo: /groups/ReismanLab/orca_descriptors   # clone whose desc_utils.condense each ORCA job runs at the end
+                                                               # (writes conf_N/orca_condensed.json; standard library only)
