@@ -57,8 +57,9 @@ if inchi_key not in os.listdir("."):
     AllChem.EmbedMolecule(mol)
     # The molecule as it went into mol.xyz: explicit hydrogens and the embedded
     # 3D coordinates. Chem.MolFromMolBlock(block, removeHs=False) gives it back.
+    # V3000 keeps the coordinates to full precision; V2000 rounds them to 1e-4.
     registry_entry.update({
-        "mol_block": Chem.MolToMolBlock(mol),
+        "mol_block": Chem.MolToMolBlock(mol, forceV3000=True),
         "has_3d_coordinates": mol.GetNumConformers() > 0,
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })
@@ -76,7 +77,7 @@ else:
     # entry without the embedded coordinates (the molecule, not the geometry,
     # is what is known).
     if "mol_block" not in (metadata_utils.load_registry().get(inchi_key) or {}):
-        registry_entry.update({"mol_block": Chem.MolToMolBlock(mol), "has_3d_coordinates": False})
+        registry_entry.update({"mol_block": Chem.MolToMolBlock(mol, forceV3000=True), "has_3d_coordinates": False})
     metadata_utils.register_molecule(inchi_key, registry_entry)
     print(f"Directory {inchi_key} already exists, skipping generation.")
     sys.exit(0)
