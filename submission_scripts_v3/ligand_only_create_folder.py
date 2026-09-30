@@ -6,10 +6,24 @@ import os
 import sys
 import metadata_utils
 
+
+def str2bool(value):
+    """argparse converter for the true/false text launch_workflow.sh passes
+    (read out of workflow_inputs.yaml by get_input.py). `type=bool` would
+    call bool("false"), which is True: every non-empty string is truthy."""
+    v = str(value).strip().lower()
+    if v in ("true", "1", "yes", "y"):
+        return True
+    if v in ("false", "0", "no", "n", ""):
+        return False
+    raise argparse.ArgumentTypeError(f"expected true/false, got {value!r}")
+
+
 parser = argparse.ArgumentParser(description="Generate 3D coordinates from SMILES and save to XYZ format.")
 parser.add_argument("--lig", type=str, help="SMILES string of the molecule")
 parser.add_argument("--out", type=str, default="output.xyz", help="Output XYZ file name")
-parser.add_argument("--optimize", type=bool, default=False, help="Optimize the 3D structure using xtb")
+parser.add_argument("--optimize", type=str2bool, default=False,
+                    help="Optimize the 3D structure using xtb (true/false)")
 # previously hardcoded as `--gfn 2` in the os.system() call below; now chosen
 # via workflow_inputs.yaml's conformer_gen.xtb_gfn_level
 parser.add_argument("--xtb-gfn-level", type=int, default=2, help="xtb --gfn <N> level for the pre-optimization")
@@ -58,6 +72,10 @@ if optimize:
     os.system(f"mv xtbopt.xyz {output}")
     os.system("rm mol.xyz")
     os.system("rm xtbopt.log wbo xtbrestart xtbtopo.mol .xtboptok charges")
+else:
+    # crest.py reads <output> (output.xyz) whether or not xtb ran, so the raw
+    # RDKit geometry has to end up under that name too.
+    os.rename("mol.xyz", output)
 
 metadata_utils.update_metadata(".", {
     "smiles": ligand,
