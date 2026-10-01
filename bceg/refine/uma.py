@@ -56,7 +56,22 @@ class UMA(Refiner):
             # in, so an 8-core allocation on a 64-core node would oversubscribe eightfold. This runs
             # in-process, so run()'s OMP_NUM_THREADS never applies to it.
             torch.set_num_threads(resolve_threads(self.params["threads"]))
-            predictor = pretrained_mlip.get_predict_unit(self.params["model"], device=self.params["device"])
+            try:
+                predictor = pretrained_mlip.get_predict_unit(self.params["model"], device=self.params["device"])
+            except Exception as exc:  # huggingface_hub raises its own hierarchy; the cause is in the message
+                name = type(exc).__name__
+                if "huggingface" in repr(type(exc)).lower() or "hf_hub" in str(exc).lower() or "Hub" in str(exc):
+                    raise RuntimeError(
+                        f"UMA weights for {self.params['model']!r} are not in the Hugging Face cache and the node "
+                        f"could not download them ({name}). Compute nodes have no usable internet access: fetch the "
+                        f"weights once on a login node with the same HF_HUB_CACHE, then run the jobs offline:\n"
+                        f"    export HF_HUB_CACHE=<shared cache>   # e.g. /groups/ReismanLab/hf_cache/hub\n"
+                        f"    huggingface-cli login                 # once per user, the weights are gated\n"
+                        f"    python -c \"from fairchem.core import pretrained_mlip; "
+                        f"pretrained_mlip.get_predict_unit('{self.params['model']}', device='cpu')\"\n"
+                        f"and put `export HF_HUB_CACHE=<shared cache>` and `export HF_HUB_OFFLINE=1` in slurm.setup."
+                    ) from exc
+                raise
             self._calc = FAIRChemCalculator(predictor, task_name=self.params["task"])
         return self._calc
 

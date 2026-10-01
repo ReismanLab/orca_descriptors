@@ -80,6 +80,8 @@ slurm:
   setup:                                          # start of every job (prepare, ORCA, and bceg's unless its slurm block has its own setup)
     - source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
     - conda activate gp_env
+    - export HF_HUB_CACHE=/groups/ReismanLab/hf_cache/hub   # UMA weights, fetched once on a login node (README step 2)
+    - export HF_HUB_OFFLINE=1                              # compute nodes never try the network
     - module load orca/6.1.0
     - export NBOBIN=/resnick/groups/ReismanLab/nbo7/bin
     - export NBOEXE=$NBOBIN/nbo7.i8.exe
