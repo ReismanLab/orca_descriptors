@@ -132,7 +132,11 @@ AND the termination banner is present, else `failed`; `timeout` when SLURM's TER
 4. (done 2026-10-01) `pyproject.toml`: distribution `orca-descriptors`, packages `desc_utils*` and `bceg*`,
    console scripts `orcadesc` and `bceg`, extras `descriptors`, `cluster`, `dev`; `gp_env_cluster.yml`
    ends with `-e .` so the shared env installs the shared clone editable.
-5. Next: first run on the cluster (sbatch flags, module names, fairchem / molassembler install, NBO
+5. (2026-10-01) One file per library: `source.config` takes the bceg settings inline (path still accepted);
+   inline defaults: `inputs` = `source.smiles`, `replicates` 1, `results_dir` = `<library_dir>/ensembles`,
+   bceg `slurm.setup` = the library's. Compared settings narrowed to the refined transformation, method,
+   post-optimisation and `replicates`; paths and both slurm blocks recorded only.
+6. Next: first run on the cluster (sbatch flags, module names, fairchem / molassembler install, NBO
    variables), then delete `submission_scripts_v3/` and fold `docs/bceg_*.md` into the README.
 
 ## Settled questions (2026-09-30)

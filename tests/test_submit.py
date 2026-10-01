@@ -311,3 +311,72 @@ def test_molecule_state_rules():
     assert records.molecule_state(base | {"conformers": {"conf_1": {"status": "timeout"}}})[0] == "incomplete"
     assert records.molecule_state(base | {"conformers": {"conf_1": {"status": "completed"},
                                                          "conf_2": {"status": "skipped_energy_filter"}}})[0] == "complete"
+
+
+# --------------------------------------------------------------------------- one-file config (inline bceg)
+def _inline_cfg(tree, **overrides) -> Path:
+    bceg_block = {
+        "transformations": {"none": {"multiplicity": 1}},
+        "methods": {"etkdg": {"searcher": "rdkit_etkdg", "params": {"n_confs": 3}},
+                    "other": {"searcher": "rdkit_etkdg", "params": {"n_confs": 50}}},
+        "post_optimization": {"refiner": "uma", "params": {"model": LOT}},
+        "slurm": {"cpu": {"time": "01:00:00"}},
+    }
+    raw = {
+        "library_dir": "LIB_inline",
+        "source": {"kind": "bceg", "config": bceg_block, "transformation": "none", "method": "etkdg",
+                   "smiles": "ligands.txt", "run_bceg": False, "results_dir": "DATA_bceg"},
+        "dft": {"ewin_kcal_mol": 5.0, "level_of_theory": LEVEL_OF_THEORY},
+        "slurm": {"setup": ["echo setup"], "orca": {"time": "01:00:00", "mem_per_cpu": "4G", "ntasks": 2}},
+        "condense": False,
+    }
+    for k, v in overrides.items():
+        raw[k] = v
+    path = tree["root"] / "lib_inline.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    return path
+
+
+def test_inline_bceg_config(tree, fake_sbatch):
+    cfg = Config.load(_inline_cfg(tree))
+    b = cfg.source["config"]
+    assert isinstance(b, dict) and b["replicates"] == 1 and b["inputs"] == str(tree["root"] / "ligands.txt")
+    assert b["slurm"]["setup"] == ["echo setup"] and b["slurm"]["cpu"] == {"time": "01:00:00"}   # setup inherited
+    assert b["transformations"]["none"]["script"] is None and cfg.source["results_dir"] == str(tree["results"])
+    compared = cfg.compared()["source"]
+    assert compared["bceg"]["method"] == {"searcher": "rdkit_etkdg", "params": {"n_confs": 3}}
+    assert compared["bceg"]["replicates"] == 1 and "other" not in str(compared) and "results_dir" not in compared
+    assert cfg.recorded()["source_paths"]["results_dir"] == str(tree["results"])
+    # the inline config drives the source like a file would
+    source = make_source(cfg.source)
+    ens = source.ensemble(InputMolecule.from_smiles("CCO"))
+    assert ens.done and len(ens.conformers) == 3 and ens.charge == 0
+    # full submit on it, then prepare straight from the frozen copy
+    assert main(["submit", str(cfg.path)]) == 0
+    frozen = Config.load(next((tree["root"] / "LIB_inline" / "_jobs").iterdir()) / "config.yaml")
+    assert isinstance(frozen.source["config"], dict)
+    assert prepare_molecule(frozen, tree["keys"]["CCO"], "CCO") == "prepared"
+
+
+def test_inline_defaults_results_dir_into_library(tree):
+    path = _inline_cfg(tree)
+    raw = yaml.safe_load(path.read_text())
+    del raw["source"]["results_dir"]
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    cfg = Config.load(path)
+    assert cfg.source["results_dir"] == str(tree["root"] / "LIB_inline" / "ensembles")
+    assert cfg.source["config"]["results_dir"] == cfg.source["results_dir"]
+
+
+def test_unrelated_bceg_method_may_change_but_selected_one_may_not(tree, fake_sbatch, capsys):
+    path = _inline_cfg(tree)
+    assert main(["submit", str(path)]) == 0
+    raw = yaml.safe_load(path.read_text())
+    raw["source"]["config"]["methods"]["other"]["params"]["n_confs"] = 7      # not the method this library refines
+    raw["source"]["config"]["slurm"]["cpu"]["time"] = "48:00:00"               # bceg resources: recorded only
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    assert main(["submit", str(path), "--dry-run"]) == 0
+    raw["source"]["config"]["methods"]["etkdg"]["params"]["n_confs"] = 4       # the refined ensemble's parameters
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    assert main(["submit", str(path), "--dry-run"]) == 2
+    assert "source.bceg.method.params.n_confs: 3 -> 4" in capsys.readouterr().err

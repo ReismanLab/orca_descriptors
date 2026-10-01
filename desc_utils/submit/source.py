@@ -57,12 +57,16 @@ class BcegSource:
 
     def __init__(self, source: dict) -> None:
         self.source = source
-        raw = bceg_read_raw(source["config"])
+        cfg = source["config"]
+        if isinstance(cfg, dict):          # bceg settings inline in the library config (already normalised)
+            raw, nominal_path = dict(cfg), Path(source["smiles"]).parent / "config.yaml"
+        else:                               # a separate bceg YAML
+            raw, nominal_path = bceg_read_raw(cfg), Path(cfg).resolve()
         raw = bceg_select(raw, smiles=source["smiles"], transformations=[source["transformation"]],
                           methods=[source["method"]])
         raw["results_dir"] = source["results_dir"]
         self.raw = raw
-        self.bcfg = BcegConfig.from_raw(raw, Path(source["config"]).resolve())
+        self.bcfg = BcegConfig.from_raw(raw, nominal_path)
         self.transformation = self.bcfg.transformations[source["transformation"]]
         self.method = source["method"]
         self.lot = source.get("lot")

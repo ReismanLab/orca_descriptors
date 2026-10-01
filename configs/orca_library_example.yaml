@@ -1,25 +1,60 @@
-# One ORCA library: conformer ensembles from bceg, one ORCA compound job per conformer.
+# One ORCA library in one file: the conformer ensembles (bceg) and the ORCA compound jobs.
 # Relative paths are relative to this file. `submit` freezes the resolved copy under
 # <library_dir>/_jobs/<timestamp>/ and the cluster jobs read that snapshot.
 #
-#   python -m desc_utils.submit submit configs/orca_library_example.yaml --dry-run
-#   python -m desc_utils.submit submit configs/orca_library_example.yaml
-#   python -m desc_utils.submit status configs/orca_library_example.yaml
+#   orcadesc submit <LIB>.yaml --dry-run
+#   orcadesc submit <LIB>.yaml
+#   orcadesc status <LIB>.yaml
 #
-# `source` and `dft` define the results and are written to <library_dir>/params.json on the first
-# submit; changing them later is refused. A different level of theory is a different library_dir.
+# What defines the results is written to <library_dir>/params.json on the first submit and refused if it
+# changes later: source.transformation / method / lot, the bceg settings of that transformation, method
+# and post-optimisation, and the dft block. A different level of theory is a different library_dir.
+# orca on/off, run_bceg, the paths and both slurm blocks may change freely.
 
-library_dir: ../DATA/orca/example_library        # absolute path on the cluster, e.g. /groups/ReismanLab/DATA/orca/<LIB>
+library_dir: ../DATA/orca/example_library        # absolute on the cluster, e.g. /groups/ReismanLab/DATA/orca/<LIB>
 
 source:
   kind: bceg
-  config: bceg_example.yaml                       # bceg's config: transformations, methods, post-optimisation, its slurm block
-  transformation: NiH2                            # one of the transformations of that config
-  method: crest_gfn2                              # one of its methods; the ensemble refined here is raw_1_<lot>.xyz
-  lot: null                                       # null = the post-optimisation level of the bceg config (uma-s-1p2)
-  smiles: ../inputs/example_NN_ligands.txt        # the input list, given to bceg and used to select molecules here
+  smiles: ../inputs/example_NN_ligands.txt        # one SMILES per line, optional name after it; # starts a comment
+  transformation: NiH2                            # which transformation and method below give the ensembles to refine
+  method: crest_gfn2
+  lot: null                                       # null = the post-optimisation level below (uma-s-1p2); the file refined is raw_1_<lot>.xyz
   run_bceg: true                                  # false: the ensembles exist already, do not call bceg
-  # results_dir: defaults to the bceg config's results_dir
+  # results_dir: defaults to <library_dir>/ensembles  (bceg layout: <results_dir>/<transformation>/<InChIKey>/<method>/)
+
+  # ---- the bceg settings (docs/bceg_README.md, docs/bceg_SUBMITTING.md). `config: /path/to/bceg.yaml` is accepted instead.
+  config:
+    replicates: 1                                 # ORCA refines replicate 1 only
+    transformations:                              # depth-1 folders of the ensembles; a transformation turns the SMILES into the structure computed
+      none: {multiplicity: 1}
+      NiH2: {script: ni_x2.py, params: {x: H}, multiplicity: 1}     # N,N ligand -> L-NiH2 (script shipped with bceg)
+      NiF2: {script: ni_x2.py, params: {x: F}, multiplicity: 1}
+    methods:                                      # the method name IS the parameter set: changing a parameter of an existing method is refused, rename it
+      crest_gfn2:
+        searcher: crest
+        params:
+          workhorse: gfn2                         # threads: default = the job's cpus_per_task
+          toml_extra: {cregen: {ewin: 6.0}}       # CREST's own energy window, kcal/mol
+      goat_xtb:
+        searcher: goat
+        params: {method: XTB, orca_cmd: /central/software9/external/orca/orca_6_1_0_linux_x86-64_shared_openmpi418_avx2/orca, nprocs: 4, goat_block: {MaxEn: 6.0}}
+        slurm: {ntasks: 4, cpus_per_task: 1, nodes: 1}   # ORCA wants MPI ranks (ntasks), not cpus_per_task
+      molassembler:
+        searcher: molassembler
+        params: {n_confs: 100}
+        slurm: {cpus_per_task: 1}
+      rdkit_etkdg:
+        searcher: rdkit_etkdg
+        params: {n_confs: 300}
+    post_optimization:                            # every raw_1.xyz -> raw_1_<lot>.xyz
+      refiner: uma
+      params: {model: uma-s-1p2, task: omol, optimizer: LBFGS, fmax: 0.05, max_steps: 500, device: cpu}
+    slurm:                                        # bceg's jobs; `setup` defaults to the library's slurm.setup below
+      mode: chained                               # each job: search then post-optimisation
+      tasks_per_job: 1
+      array_throttle: 50
+      cpu: {partition: CHANGE_ME, time: "24:00:00", cpus_per_task: 8, mem: 16G}
+      # gpu: {partition: CHANGE_ME, time: "12:00:00", cpus_per_task: 8, mem: 32G, gres: "gpu:1"}   # only for device: cuda
 
 orca: on                                          # off: ensembles only; run the same command later with on
 
@@ -42,7 +77,7 @@ dft:
     extra_basis: {Ni: def2-tzvp}                  # full def2-TZVP on Ni in the optimization and frequency steps; {} for none
 
 slurm:
-  setup:                                          # run at the start of every prepare and ORCA job (bare shell on the node)
+  setup:                                          # start of every job (prepare, ORCA, and bceg's unless its slurm block has its own setup)
     - source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
     - conda activate gp_env
     - module load orca/6.1.0

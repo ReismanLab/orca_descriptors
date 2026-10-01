@@ -4,12 +4,19 @@ Relative paths are resolved against the config file. ``submit`` freezes the reso
 template it rendered from and the git commit of this clone) under ``<LIB>/_jobs/<timestamp>/``; every
 cluster task reads that snapshot, so editing the YAML while jobs are queued changes nothing.
 
+The bceg settings (transformations, methods, post-optimisation, bceg's SLURM block) live in the same
+file, as the ``source.config`` mapping; ``source.config`` may also be the path of a separate bceg YAML.
+Inline, the input list is ``source.smiles``, ``replicates`` defaults to 1, bceg's ``slurm.setup`` defaults
+to the library's, and the ensembles go to ``<library_dir>/ensembles`` unless ``results_dir`` says otherwise.
+
 Two kinds of settings, as in bceg's ``params.json``:
 
-- **compared** (``source`` except ``run_bceg``, ``dft``, the template text): define the results. The first
-  ``submit`` writes them to ``<LIB>/params.json``; a later submit with different values is refused with a
-  diff. Different settings mean a different library directory.
-- **recorded** (``orca`` on/off, ``run_bceg``, ``slurm``, ``condense``): kept for reference, never compared.
+- **compared**: what defines the results. ``source.kind``, ``transformation``, ``method``, ``lot``, the bceg
+  settings of that transformation, method and post-optimisation (and ``replicates``), the ``dft`` block and
+  the template text. The first ``submit`` writes them to ``<LIB>/params.json``; a later submit with
+  different values is refused with a diff. Different settings mean a different library directory.
+- **recorded** (``orca`` on/off, ``run_bceg``, paths, both ``slurm`` blocks, ``condense``): kept for
+  reference, never compared.
 """
 
 from __future__ import annotations
@@ -24,7 +31,11 @@ from typing import Any
 
 import yaml
 
+from bceg.config import TOP_LEVEL_KEYS as BCEG_TOP_LEVEL_KEYS
+from bceg.config import _script_path, _transformation_spec
+from bceg.config import read_raw as bceg_read_raw
 from bceg.provenance import make_params
+from bceg.transforms import IDENTITY
 
 TOP_KEYS = {"library_dir", "source", "orca", "dft", "slurm", "condense", "_pipeline"}
 SOURCE_KINDS = {"bceg", "xyz"}
@@ -56,6 +67,29 @@ def _check_keys(section: dict, allowed: set, where: str) -> None:
         raise ValueError(f"{where}: unknown keys {sorted(unknown)}; allowed: {sorted(allowed)}")
 
 
+def inline_bceg_raw(block: dict, base_dir: Path, library_dir: Path, smiles: str, default_setup: list) -> dict:
+    """Normalise a bceg config written inline in the library config into the dict ``bceg.config.Config.from_raw``
+    expects (what ``bceg.config.read_raw`` does for a file): absolute paths, resolved transformation scripts.
+    Defaults: ``inputs`` = the library's SMILES list, ``replicates`` = 1, ``results_dir`` =
+    ``<library_dir>/ensembles``, ``slurm.setup`` = the library's."""
+    raw = copy.deepcopy(block or {})
+    _check_keys(raw, BCEG_TOP_LEVEL_KEYS, "source.config (inline bceg config)")
+    raw["inputs"] = smiles
+    raw["results_dir"] = str((base_dir / raw["results_dir"]).resolve()) if raw.get("results_dir") \
+        else str(Path(library_dir) / "ensembles")
+    raw.setdefault("replicates", 1)
+    transformations = {}
+    for name, spec in (raw.get("transformations") or {IDENTITY: None}).items():
+        spec = _transformation_spec(spec)
+        spec["script"] = _script_path(spec.get("script"), base_dir)
+        transformations[name] = spec
+    raw["transformations"] = transformations
+    slurm = dict(raw.get("slurm") or {})
+    slurm.setdefault("setup", list(default_setup))
+    raw["slurm"] = slurm
+    return raw
+
+
 def read_raw(path: str | Path) -> dict:
     """Read a library config and make every path in it absolute; fill the defaults."""
     path = Path(path).resolve()
@@ -80,14 +114,19 @@ def read_raw(path: str | Path) -> dict:
         for key in ("config", "transformation", "method", "smiles"):
             if key not in source:
                 raise ValueError(f"{path}: source.{key} is required for kind: bceg")
-        source["config"] = rel(source["config"])
         source["smiles"] = rel(source["smiles"])
-        if source.get("results_dir") is None:
-            # bceg's own results_dir, resolved against bceg's config file
-            from bceg.config import read_raw as bceg_read_raw
-            source["results_dir"] = bceg_read_raw(source["config"])["results_dir"]
+        setup = list(((raw.get("slurm") or {}).get("setup")) or [])
+        if isinstance(source["config"], dict):
+            # the bceg settings written in this file
+            source["config"] = inline_bceg_raw(source["config"], path.parent, Path(raw["library_dir"]),
+                                               source["smiles"], setup)
+            source["results_dir"] = rel(source["results_dir"]) if source.get("results_dir") else source["config"]["results_dir"]
+            source["config"]["results_dir"] = source["results_dir"]
         else:
-            source["results_dir"] = rel(source["results_dir"])
+            # a separate bceg YAML; its own results_dir unless the library says otherwise
+            source["config"] = rel(source["config"])
+            source["results_dir"] = rel(source["results_dir"]) if source.get("results_dir") \
+                else bceg_read_raw(source["config"])["results_dir"]
         source.setdefault("run_bceg", True)
         source.setdefault("lot", None)
     else:
@@ -198,15 +237,41 @@ class Config:
     def template_sha256(self) -> str:
         return hashlib.sha256(self.template_path.read_bytes()).hexdigest()
 
+    def bceg_raw(self) -> dict | None:
+        """bceg's resolved config dict (inline or read from the file), None for an xyz source."""
+        if self.source["kind"] != "bceg":
+            return None
+        cfg = self.source["config"]
+        if isinstance(cfg, dict):
+            return copy.deepcopy(cfg)
+        raw = bceg_read_raw(cfg)
+        raw["results_dir"] = self.source["results_dir"]
+        return raw
+
     def compared(self) -> dict:
-        source = {k: v for k, v in self.source.items() if k != "run_bceg"}
+        s = self.source
+        source = {k: s[k] for k in ("kind", "transformation", "method", "lot", "file", "charge", "multiplicity") if k in s}
+        braw = self.bceg_raw()
+        if braw is not None:
+            # only the bceg settings this library's ensembles depend on
+            source["bceg"] = {
+                "replicates": braw.get("replicates"),
+                "transformation": braw["transformations"].get(s["transformation"]),
+                "method": (braw.get("methods") or {}).get(s["method"]),
+                "post_optimization": braw.get("post_optimization", {"refiner": "uma"}),
+            }
         dft = dict(self.dft)
         dft["calc_param_template"] = {"path": str(self.template_path), "sha256": self.template_sha256()}
         return {"source": source, "dft": dft}
 
     def recorded(self) -> dict:
-        return {"orca": self.raw["orca"], "run_bceg": self.source.get("run_bceg", False),
-                "slurm": self.slurm, "condense": self.condense}
+        s = self.source
+        paths = {k: s.get(k) for k in ("results_dir", "smiles") if k in s}
+        if isinstance(s.get("config"), str):
+            paths["config"] = s["config"]
+        braw = self.bceg_raw()
+        return {"orca": self.raw["orca"], "run_bceg": s.get("run_bceg", False), "source_paths": paths,
+                "bceg_slurm": (braw or {}).get("slurm"), "slurm": self.slurm, "condense": self.condense}
 
     def params(self) -> dict:
         """bceg-style params document: ``sha256`` + ``compared`` + ``recorded``."""
