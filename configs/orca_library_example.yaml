@@ -42,7 +42,7 @@ conformer_search:
 
 # ---- 4. post-optimisation: every conformer -> raw_1_<lot>.xyz (docs/stages/4_post_optimization.md)
 post_optimization:                               # `post_optimization: null` = none, ORCA then refines the search output
-  refiner: uma
+  refiner: uma                                   # or gxtb (g-xTB, CPU: params {level, executable}) or aimnet2 (params like uma: model, fmax, device)
   params: {model: uma-s-1p2, task: omol, optimizer: LBFGS, fmax: 0.05, max_steps: 500, device: cpu}
 
 # ---- 5. pruning: which conformers get an ORCA job (docs/stages/5_pruning.md)

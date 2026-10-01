@@ -42,6 +42,10 @@ dependencies:
       # --- bceg: UMA post-optimisation (fairchem + ASE) and molassembler ---
       - fairchem-core           # UMA models (uma-s-1p2); weights are gated: `huggingface-cli login` once per user
       - ase
+      # --- bceg: AIMNet2 post-optimisation (refiner `aimnet2`); weights: `aimnet download aimnet2` into AIMNET_CACHE_DIR.
+      #     Resolved 2026-10-01 with `uv pip compile --python-platform x86_64-manylinux_2_28`: aimnet 0.2.0 adds only
+      #     h5py, warp-lang and nvalchemi-toolkit-ops next to the torch / fairchem-core / LoQI set already here.
+      - "aimnet[ase]"
       - scine-molassembler==3.0.1
       - scine-utilities==10.1.0 # same SCINE release as molassembler 3.0.1
       # --- bceg: LoQI diffusion conformer generator (organics only); needs rdkit >= 2026.3.1, torch >= 2.8 ---

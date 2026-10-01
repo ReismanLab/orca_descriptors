@@ -151,10 +151,25 @@ AND the termination banner is present, else `failed`; `timeout` when SLURM's TER
    and parameter per stage, with `tests/test_stage_docs.py` failing on an undocumented key. The compared
    layout of `params.json` changed: libraries created before need `rm $LIB/params.json` (or a new
    `library_dir`) before their next submit.
-8. Later (owner, 2026-10-01): more refiners for `post_optimization`: g-xTB (subprocess driver like
-   `bceg/xtb.py`) and AIMNet2 (ASE calculator like the UMA class, `aimnet` package in
-   `gp_env_cluster.yml`). Contained: a `Refiner` subclass registered in `bceg.refine.REFINERS` plus its
-   table in `docs/stages/4_post_optimization.md`.
+8. (done 2026-10-01) Two more refiners for `post_optimization`, each a `Refiner` subclass registered in
+   `bceg.refine.REFINERS` with its table in `docs/stages/4_post_optimization.md` (the stage-doc test now
+   covers every registered refiner's defaults):
+   - `gxtb` (`bceg/refine/gxtb.py`): g-xTB is distributed as a modified `xtb` 6.7.1 binary switched on by
+     `--gxtb`, so the driver is `bceg/xtb.py`'s pattern with that flag: one subprocess per conformer in
+     `conf_<i>/`, `TOTAL ENERGY` parsed, `--uhf` only for open shells (the flag forces an unrestricted
+     run), `xtblast.xyz` for unconverged conformers, the standard xtb's "unknown option" warning turned
+     into an error. CPU only (no `device`); resource keys `executable`, `threads`; `details.executable`
+     records the path because both builds report 6.7.1. Default `lot: gxtb`.
+   - `aimnet2` (`bceg/refine/aimnet2.py`): `aimnet.calculators.AIMNet2Calculator(model, device)` loaded
+     once, wrapped per molecule in `AIMNet2ASE(charge, mult)`; same parameters and gpu routing as UMA
+     (`device: cuda` -> `resource_class() == "gpu"`); a closed-shell model with multiplicity > 1 is
+     refused (the package would silently ignore it); download failures point to `AIMNET_CACHE_DIR` and
+     `aimnet download`. The ASE loop moved to `bceg/refine/ase_opt.py`, shared with UMA.
+   - Dependency: `aimnet[ase]` in `gp_env_cluster.yml` and the `cluster` extra. Checked before anything
+     was built with `uv pip compile --python-platform x86_64-manylinux_2_28 --python-version 3.11` on
+     the yml's pip list: aimnet 0.2.0 resolves with the same torch 2.13.0 / fairchem-core 2.23.0 /
+     ase 3.29.0 / LoQI set, adding only h5py, warp-lang and nvalchemi-toolkit-ops. The shared env has
+     not been rebuilt yet; neither refiner has run on the cluster.
 
 ## Settled questions (2026-09-30)
 

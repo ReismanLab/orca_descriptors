@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-
-import numpy as np
 
 from bceg.external import resolve_threads
 from bceg.layout import check_name
+from bceg.refine.ase_opt import optimize_conformers, package_version
 from bceg.refine.base import RefineResult, Refiner
 from bceg.structure import Structure
-from bceg.xyz import HARTREE_TO_EV, Conformer
+from bceg.xyz import Conformer
 
 
 def load_env_runtime() -> None:
@@ -51,13 +49,6 @@ def point_fairchem_cache(cache_dir: str | None) -> None:
         sys.modules["fairchem.core._config"].CACHE_DIR = cache_dir
     if "fairchem.core.calculate.pretrained_mlip" in sys.modules:
         sys.modules["fairchem.core.calculate.pretrained_mlip"].CACHE_DIR = cache_dir
-
-
-def _version(pkg: str) -> str:
-    try:
-        return version(pkg)
-    except PackageNotFoundError:
-        return "unknown"
 
 
 class UMA(Refiner):
@@ -119,27 +110,9 @@ class UMA(Refiner):
         return self._calc
 
     def run(self, structure: Structure, conformers: list[Conformer], workdir: Path) -> RefineResult:
-        from ase import Atoms, optimize
-
-        opt_cls = getattr(optimize, self.params["optimizer"])
-        calc = self.calculator()
-        out, n_unconverged = [], 0
-        for i, conf in enumerate(conformers):
-            atoms = Atoms(symbols=structure.elements, positions=conf.coords)
-            atoms.info.update(charge=structure.charge, spin=structure.multiplicity)
-            atoms.calc = calc
-            opt = opt_cls(atoms, logfile=str(workdir / f"opt_{i}.log"))
-            opt.run(fmax=self.params["fmax"], steps=self.params["max_steps"])
-            fmax = float(np.sqrt((atoms.get_forces() ** 2).sum(axis=1)).max())
-            converged = fmax <= self.params["fmax"]
-            n_unconverged += not converged
-            if not converged and not self.params["keep_unconverged"]:
-                continue
-            energy = atoms.get_potential_energy() / HARTREE_TO_EV
-            out.append(Conformer(atoms.get_positions(), energy,
-                                 {"converged": converged, "steps": opt.nsteps, "fmax": round(fmax, 5), "source_index": i}))
-        return RefineResult(
-            out,
-            versions={"fairchem-core": _version("fairchem-core"), "ase": _version("ase")},
-            details={"n_input": len(conformers), "n_unconverged": n_unconverged},
+        return optimize_conformers(
+            self.calculator(), structure, conformers, workdir,
+            optimizer=self.params["optimizer"], fmax=self.params["fmax"], max_steps=self.params["max_steps"],
+            keep_unconverged=self.params["keep_unconverged"],
+            versions={"fairchem-core": package_version("fairchem-core"), "ase": package_version("ase")},
         )

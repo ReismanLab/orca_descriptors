@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from bceg.refine import REFINERS
 from bceg.refine.uma import UMA
 from bceg.search import SEARCHERS
 from bceg.search.base import START_DEFAULTS
@@ -26,15 +27,17 @@ def _tokens(name: str) -> set[str]:
 
 
 START_KEYS = set(START_DEFAULTS)
-# the bceg test-suite registers stand-in searchers (tests/bceg/conftest.py); only shipped ones are documented
+# the bceg test-suite registers stand-in searchers and refiners (tests/bceg/conftest.py); only shipped ones are documented
 SHIPPED = {name: cls for name, cls in SEARCHERS.items() if not cls.__module__.startswith("tests")}
+SHIPPED_REFINERS = {name: cls for name, cls in REFINERS.items() if not cls.__module__.startswith("tests")}
 CASES = [
     ("1_transformation.md", config.TRANSFORMATION_KEYS | {"none", "ni_x2.py", "x", "not_applicable"}),
     ("2_pre_refinement.md", config.PRE_REFINEMENT_KEYS | set(config.XTB_PARAMS) | START_KEYS
      | set(config.PRE_REFINEMENT_METHODS) | (set(UMA.defaults) - {"lot", "keep_unconverged"})),
     ("3_conformer_search.md", config.SEARCH_KEYS | set(SHIPPED)
      | {k for s in SHIPPED.values() for k in s.defaults if k not in START_KEYS}),
-    ("4_post_optimization.md", config.POST_OPT_KEYS | set(UMA.defaults) | {"null", "uma"}),
+    ("4_post_optimization.md", config.POST_OPT_KEYS | set(SHIPPED_REFINERS) | {"null"}
+     | {k for r in SHIPPED_REFINERS.values() for k in r.defaults}),
     ("5_pruning.md", config.PRUNING_KEYS | {"prepared", "skipped_energy_filter", "skipped_no_energy", "null"}),
     ("6_dft.md", template.ALL_KEYS | {"orca", "dft.calc_param_template", "dft.level_of_theory", "slurm.orca",
                                       "slurm.orca_cmd", "condense", "optimization", "frequency", "singlepoint",

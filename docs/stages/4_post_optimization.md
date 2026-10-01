@@ -11,9 +11,14 @@ search, right after it.
 
 | Key | Default | Meaning | Hashed |
 |---|---|---|---|
-| `refiner` | `uma` | the only refiner today; g-xTB and AIMNet2 are planned (a refiner is a class in `bceg/refine/` registered in `REFINERS`, see the end of this page) | yes |
+| `refiner` | `uma` | `uma` (fairchem UMA through ASE), `gxtb` (g-xTB, one `xtb --gxtb` run per conformer, CPU) or `aimnet2` (AIMNet2 through ASE); a refiner is a class in `bceg/refine/` registered in `REFINERS`, see the end of this page | yes |
 | `params` | `{}` | the refiner's parameters, below | yes, except the resource keys |
 | `slurm` | `{}` | overrides of `slurm.ensembles.cpu`/`.gpu` for this step (split mode) or merged under the search's overrides (chained mode) | no |
+
+Recorded per run for every refiner (`run_1_<lot>.json`): `n_conformers`, `details.n_input`,
+`details.n_unconverged`, `versions`, wall time and core-hours. Each conformer's comment line carries
+`converged=True|False` and `source_index` (its index in `raw_1.xyz`). Charge and multiplicity come from
+the transformation (stage 1).
 
 ## `uma`: fairchem UMA through ASE
 
@@ -29,9 +34,7 @@ search, right after it.
 | `device` | `cpu` | resource: `cpu` or `cuda`; `cuda` sends the step (and, chained, its whole job) to `slurm.ensembles.gpu` |
 | `threads` | job's CPUs | resource: torch threads (`SLURM_CPUS_PER_TASK`) |
 
-Recorded per run (`run_1_<lot>.json`): `n_conformers`, `details.n_input`, `details.n_unconverged`,
-`versions` (`fairchem-core`, `ase`), wall time and core-hours. Charge and multiplicity come from the
-transformation (stage 1).
+`versions`: `fairchem-core`, `ase`. Per conformer: `steps`, `fmax` (residual force).
 
 ```yaml
 post_optimization:
@@ -52,6 +55,76 @@ slurm:
     gpu: {partition: gpu, time: "02:00:00", gres: "gpu:1", cpus_per_task: 4, mem: 16G}
 ```
 
+## `gxtb`: g-xTB (Grimme group), CPU
+
+[g-xTB](https://github.com/grimme-lab/g-xTB) approximates ωB97M-V/def2-TZVPPD for Z = 1–103. It is
+shipped as a statically linked build of `xtb` (6.7.1 with a modified tblite) that runs the method when
+`--gxtb` is given; there is no separate program and no parameter file. Unpack the Linux binary from the
+repository's `binaries/` folder somewhere the compute nodes mount and either put that folder first on
+PATH in `slurm.setup` or set `executable` to the binary. The standard `xtb` (conda, `module load xtb`)
+does not know `--gxtb`: the refiner recognises its "unknown option" warning and fails the step instead
+of accepting a GFN2-xTB result.
+
+Each conformer is optimised by its own `xtb start.xyz --gxtb --opt <level> --chrg <charge>` run in a
+subfolder `conf_<i>/` of the job's scratch (`xtb.out` kept there until the job ends); `--uhf` is passed
+only for open shells (with the flag g-xTB always runs unrestricted). The energy is the `TOTAL ENERGY`
+of the output; a conformer whose optimisation stops before convergence is taken from `xtblast.xyz`.
+
+| `params` | Default | Meaning |
+|---|---|---|
+| `level` | `normal` | xtb `--opt` level: `crude`, `sloppy`, `loose`, `lax`, `normal`, `tight`, `vtight`, `extreme` |
+| `cycles` | xtb's default | optimiser cycles per conformer (xtb `--cycles`) |
+| `keep_unconverged` | `true` | keep conformers that did not converge within the cycles (flagged `converged: false`); `false` drops them |
+| `lot` | `gxtb` | label used in the file names (`raw_1_gxtb.xyz`) |
+| `executable` | `xtb` | resource: the g-xTB build of xtb, a name on PATH or an absolute path |
+| `threads` | job's CPUs | resource: OpenMP threads of each xtb run (`SLURM_CPUS_PER_TASK`); the conformers run one after the other |
+
+`versions`: `xtb` (the `--version` line; the g-xTB build reports 6.7.1 like the standard one, so
+`details.executable`, the resolved path, is what tells them apart). Per conformer: `cycles` when the
+optimisation converged. The refiner has no `device`: g-xTB runs on CPUs only.
+
+```yaml
+post_optimization:
+  refiner: gxtb
+  params: {level: tight, executable: /groups/ReismanLab/gxtb/bin/xtb}
+```
+
+## `aimnet2`: AIMNet2 through ASE
+
+[AIMNet2](https://github.com/isayevlab/aimnetcentral) (package `aimnet`, in `gp_env_cluster.yml`)
+covers organic and element-organic molecules; a conformer with an element the model was not trained
+on fails the step (`Some species are not implemented`). The closed-shell models ignore the
+multiplicity, so a transformation with `multiplicity` > 1 is refused unless the model is an open-shell
+one (`aimnet2-nse`).
+
+| `params` | Default | Meaning |
+|---|---|---|
+| `model` | `aimnet2` | registry alias: `aimnet2` (ωB97M-D3), `aimnet2-2025` (B97-3c, better intermolecular interactions), `aimnet2-nse` (open shell), `aimnet2-pd` (Pd), `aimnet2-rxn` (reactive) |
+| `optimizer` | `LBFGS` | ASE optimiser: `LBFGS`, `BFGS`, `FIRE` |
+| `fmax` | `0.05` | convergence criterion on the forces, eV/Angstrom |
+| `max_steps` | `500` | optimiser steps per conformer |
+| `keep_unconverged` | `true` | keep conformers that did not reach `fmax` (flagged `converged: false`); `false` drops them |
+| `lot` | model name | label used in the file names (`raw_1_<lot>.xyz`) |
+| `device` | `cpu` | resource: `cpu` or `cuda`; `cuda` sends the step (and, chained, its whole job) to `slurm.ensembles.gpu` |
+| `threads` | job's CPUs | resource: torch threads (`SLURM_CPUS_PER_TASK`) |
+
+`versions`: `aimnet`, `ase`. Per conformer: `steps`, `fmax` (residual force).
+
+The weights are downloaded on first use into `AIMNET_CACHE_DIR` (default `~/.cache/aimnet`). Compute
+nodes have no internet access: fetch them once on a login node into a shared cache and export the same
+variable in `slurm.setup`:
+
+```bash
+export AIMNET_CACHE_DIR=/groups/ReismanLab/aimnet_cache
+aimnet download aimnet2            # or aimnet2-nse, ...; `aimnet download --all` for every model
+```
+
+```yaml
+post_optimization:
+  refiner: aimnet2
+  params: {model: aimnet2, fmax: 0.05, max_steps: 500, device: cuda}
+```
+
 ## `null`: no post-optimisation
 
 ```yaml
@@ -65,11 +138,12 @@ RDKit with `ff_optimize`) or none (molassembler, LoQI, RDKit without force field
 ## Status
 
 `post_opt` in `orcadesc status`: `n/a` without a refiner, `queued` while the search has not finished,
-`running`, `done`, `failed` (the error from `run_1_<lot>.json` is in `reason`; a missing UMA weight
-cache or an SSL error at download time are the usual causes, see the README's troubleshooting table).
-`n_conf` then counts the post-optimised conformers.
+`running`, `done`, `failed` (the error from `run_1_<lot>.json` is in `reason`; a missing weight cache
+(UMA, AIMNet2), an SSL error at download time or a standard `xtb` where the g-xTB build was expected
+are the usual causes, see the README's troubleshooting table). `n_conf` then counts the post-optimised
+conformers.
 
-## Adding a refiner (planned: g-xTB, AIMNet2)
+## Adding a refiner
 
 A refiner is a subclass of `bceg.refine.base.Refiner` in `bceg/refine/`: `name`, `defaults` (every
 parameter with its default), `resource_keys` (the ones not hashed: device, threads, executable), a
@@ -77,6 +151,6 @@ parameter with its default), `resource_keys` (the ones not hashed: device, threa
 `RefineResult` with the conformers, their energies in Hartree and the program versions. Registering the
 class in `REFINERS` (`bceg/refine/__init__.py`) makes it a valid `post_optimization.refiner`; the
 config, hashing and status need no change. Add its parameter table to this page (the test suite
-checks that every default is documented). g-xTB would follow `bceg/xtb.py` (one subprocess per
-conformer, CPU); AIMNet2 would follow the UMA class (ASE calculator, `device` routed to the gpu
-profile) and needs its package in `gp_env_cluster.yml`.
+checks that every default of every registered refiner is documented). `gxtb` is the model for a
+program called per conformer, `uma` and `aimnet2` (both through `bceg/refine/ase_opt.py`) for an ASE
+calculator whose `device` is routed to the gpu profile.

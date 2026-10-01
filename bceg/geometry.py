@@ -102,13 +102,14 @@ def metal_geometry(mol: Chem.Mol, coords: np.ndarray) -> dict[str, dict]:
 
 def _uma_preoptimizer(params: dict):
     """The UMA refiner used for ``start_preopt: uma`` (built once per call of make_start_geometry)."""
-    from bceg.refine.uma import UMA, _version
+    from bceg.refine.ase_opt import package_version
+    from bceg.refine.uma import UMA
 
     allowed = set(UMA.defaults) - {"lot", "keep_unconverged"}
     unknown = set(params["start_preopt_params"]) - allowed
     if unknown:
         raise ValueError(f"start_preopt_params: unknown UMA parameter(s) {sorted(unknown)}; allowed: {sorted(allowed)}")
-    return UMA(**params["start_preopt_params"]), "fairchem-core", _version("fairchem-core")
+    return UMA(**params["start_preopt_params"]), "fairchem-core", package_version("fairchem-core")
 
 
 def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: dict) -> tuple[np.ndarray, dict]:

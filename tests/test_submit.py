@@ -662,3 +662,21 @@ def test_running_bceg_task_is_not_resubmitted(tree):
     # and status shows it running
     row = status_table(cfg).set_index("inchikey").loc[key]
     assert row["search"] == "running" and row["post_opt"] == "queued"
+
+
+def test_library_config_with_the_gxtb_and_aimnet2_refiners(tree):
+    """`post_optimization: {refiner: gxtb}` gives lot `gxtb`; aimnet2 on cuda is routed to the gpu profile."""
+    cfg = Config.load(_rewrite(tree, post_optimization={"refiner": "gxtb"}))
+    assert cfg.lot == "gxtb"
+    post = cfg.compared()["post_optimization"]
+    assert post["refiner"] == "gxtb" and post["lot"] == "gxtb"
+    assert post["params"] == {"level": "normal", "cycles": None, "keep_unconverged": True, "lot": "gxtb"}  # no executable / threads
+    assert cfg.bceg_raw()["post_optimization"] == {"refiner": "gxtb", "params": {}, "slurm": {}}
+    ens = Ensembles(cfg).ensemble(InputMolecule.from_smiles("CCO"))
+    assert not ens.done and "run_1_gxtb.json" in ens.reason             # the tree only has uma ensembles
+
+    cfg = Config.load(_rewrite(tree, post_optimization={"refiner": "aimnet2", "params": {"model": "aimnet2-2025", "device": "cuda"}}))
+    assert cfg.lot == "aimnet2-2025" and cfg.bceg_config().refiner.resource_class() == "gpu"
+    assert "device" not in cfg.compared()["post_optimization"]["params"]
+    with pytest.raises(ValueError, match="post_optimization.refiner"):
+        Config.load(_rewrite(tree, post_optimization={"refiner": "g-xtb"}))
