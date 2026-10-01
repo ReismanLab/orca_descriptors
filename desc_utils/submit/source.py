@@ -136,16 +136,34 @@ class BcegSource:
         return out
 
     # ------------------------------------------------------------------ running bceg
-    def pending_tasks(self) -> tuple[list, list[str]]:
-        """bceg tasks still to run for this selection, and params-mismatch messages (read-only)."""
-        from bceg.tasks import expand
-        return expand(self.bcfg, self.molecules(), write_params=False)
+    def _running(self, task) -> bool:
+        """True when bceg's own record says this replicate's search or refinement is running right now.
 
-    def submit(self, jobdir: Path, no_sbatch: bool = False) -> list[str]:
+        bceg's skip rule only recognises a finished step, so a resubmission while a job is still running
+        would start the same search again (two CREST runs of one molecule, last writer wins). A record
+        left at "running" by a job killed before it wrote its end is released by --force.
+        """
+        md = method_dir(self.results_dir, task.transformation, task.inchikey, task.method)
+        for rec_path in (md.run_record(task.replicate), md.run_record(task.replicate, self.lot) if self.lot else None):
+            if rec_path is not None and (read_record(rec_path) or {}).get("status") == "running":
+                return True
+        return False
+
+    def pending_tasks(self, force: bool = False) -> tuple[list, list[str]]:
+        """bceg tasks still to run for this selection, and params-mismatch messages (read-only).
+        Tasks whose record says "running" are left out unless ``force``."""
+        from bceg.tasks import expand
+        tasks, problems = expand(self.bcfg, self.molecules(), write_params=False)
+        if not force:
+            tasks = [t for t in tasks if not self._running(t)]
+        return tasks, problems
+
+    def submit(self, jobdir: Path, no_sbatch: bool = False, force: bool = False) -> list[str]:
         """Run bceg's submit for this selection; return the SLURM job ids it started.
 
         Freezes bceg's resolved config under ``jobdir/bceg/`` exactly like ``bceg submit`` does, so
-        the two stages of one submission share one ``_jobs/<timestamp>`` folder.
+        the two stages of one submission share one ``_jobs/<timestamp>`` folder. Tasks whose bceg
+        record says "running" are not resubmitted unless ``force``.
         """
         from bceg.slurm import write_jobs
         from bceg.tasks import expand
@@ -154,6 +172,12 @@ class BcegSource:
         tasks, problems = expand(self.bcfg, molecules, write_params=False)
         if problems:
             raise ParamsMismatch("bceg hyper-parameters differ from the existing logs:\n" + "\n\n".join(problems))
+        if not force:
+            running = [t for t in tasks if self._running(t)]
+            if running:
+                print(f"bceg: {len(running)} task(s) recorded running are left alone (use --force to resubmit them): "
+                      + ", ".join(f"{t.inchikey}" for t in running))
+            tasks = [t for t in tasks if not self._running(t)]
         if not tasks:
             print("bceg: nothing pending for this selection.")
             return []
@@ -162,7 +186,8 @@ class BcegSource:
         bceg_write_raw(self.raw, bceg_dir / "config.yaml")
         cfg = BcegConfig.load(bceg_dir / "config.yaml")
         update_index(cfg.results_dir, molecules)
-        tasks, _ = expand(cfg, molecules, write_params=True)
+        keep = {t.id for t in tasks}
+        tasks = [t for t in expand(cfg, molecules, write_params=True)[0] if t.id in keep]
         write_jobs(cfg, tasks, bceg_dir)
         print(f"bceg: {len(tasks)} task(s); job scripts in {bceg_dir}")
         if no_sbatch:

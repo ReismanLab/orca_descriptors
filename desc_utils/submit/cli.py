@@ -46,7 +46,7 @@ def cmd_submit(args) -> int:
     tasks: list = []
     problems: list = []
     if cfg.source.get("run_bceg"):
-        tasks, problems = source.pending_tasks()
+        tasks, problems = source.pending_tasks(force=args.force)
     bceg_pending = {getattr(t, "inchikey", None) for t in tasks}
     selected, skipped = [], []
     for i, mol in enumerate(molecules):
@@ -90,7 +90,7 @@ def cmd_submit(args) -> int:
     bceg_ids: list[str] = []
     if cfg.source.get("run_bceg"):
         try:
-            bceg_ids = source.submit(jobdir, no_sbatch=args.no_sbatch)
+            bceg_ids = source.submit(jobdir, no_sbatch=args.no_sbatch, force=args.force)
         except (RuntimeError, ParamsMismatch) as exc:
             print(f"bceg submission failed: {exc}\nNothing was queued; the ORCA stage was not submitted. "
                   f"Fix the cause and run the same command again ({jobdir} can be deleted).", file=sys.stderr)

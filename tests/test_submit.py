@@ -453,3 +453,23 @@ def test_queued_molecule_is_requeued_when_bceg_runs_again_for_it(tree, fake_sbat
     monkeypatch.setattr(BcegSource, "pending_tasks", lambda self: ([], []))
     assert main(["submit", str(path), "--dry-run"]) == 0
     assert "0 molecule(s) to prepare" in capsys.readouterr().out
+
+
+def test_running_bceg_task_is_not_resubmitted(tree):
+    """A replicate whose bceg record says running is left alone by pending_tasks (unless force)."""
+    cfg = Config.load(_inline_cfg(tree))
+    raw = yaml.safe_load(cfg.path.read_text())
+    raw["source"]["run_bceg"] = True
+    cfg.path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    cfg = Config.load(cfg.path)
+    source = make_source(cfg.source)
+    key = tree["keys"]["c1ccccc1"]   # benzene: no ensemble yet -> a pending chain task
+    md = method_dir(tree["results"], "none", key, "etkdg")
+    md.path.mkdir(parents=True, exist_ok=True)
+    before, _ = source.pending_tasks()
+    assert key in {t.inchikey for t in before}
+    write_record(md.run_record(1), {"status": "running"})
+    after, _ = source.pending_tasks()
+    assert key not in {t.inchikey for t in after} and len(after) == len(before) - 1
+    forced, _ = source.pending_tasks(force=True)
+    assert key in {t.inchikey for t in forced}
