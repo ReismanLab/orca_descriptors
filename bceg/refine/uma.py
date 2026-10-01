@@ -26,11 +26,27 @@ def load_env_runtime() -> None:
 
 
 def weights_cache_dir() -> str | None:
-    """Where the UMA checkpoints live. fairchem ignores HF_HUB_CACHE and uses its own ~/.cache/fairchem
-    unless a cache_dir is passed; we pass FAIRCHEM_CACHE_DIR, else HF_HUB_CACHE, so one shared, offline
-    cache serves every user's jobs. None = fairchem's default."""
+    """Where the UMA checkpoints live: FAIRCHEM_CACHE_DIR, else HF_HUB_CACHE, else fairchem's default
+    (~/.cache/fairchem). One shared, offline cache then serves every user's jobs."""
     import os
     return os.environ.get("FAIRCHEM_CACHE_DIR") or os.environ.get("HF_HUB_CACHE") or None
+
+
+def point_fairchem_cache(cache_dir: str | None) -> None:
+    """Make fairchem download / look up its checkpoints in ``cache_dir``.
+
+    fairchem ignores HF_HUB_CACHE: ``pretrained_checkpoint_path_from_name`` passes the module constant
+    ``CACHE_DIR`` (~/.cache/fairchem) to ``hf_hub_download``, and ``get_predict_unit`` does not forward
+    its own ``cache_dir`` argument to it (only to the reference-energy files). Rebinding the constant
+    at run time is the one hook that covers both.
+    """
+    if not cache_dir:
+        return
+    import fairchem.core._config as fc_config
+    from fairchem.core.calculate import pretrained_mlip
+
+    fc_config.CACHE_DIR = cache_dir
+    pretrained_mlip.CACHE_DIR = cache_dir
 
 
 def _version(pkg: str) -> str:
@@ -78,6 +94,7 @@ class UMA(Refiner):
             # in-process, so run()'s OMP_NUM_THREADS never applies to it.
             torch.set_num_threads(resolve_threads(self.params["threads"]))
             cache_dir = weights_cache_dir()
+            point_fairchem_cache(cache_dir)
             try:
                 kwargs = {"cache_dir": cache_dir} if cache_dir else {}
                 predictor = pretrained_mlip.get_predict_unit(self.params["model"], device=self.params["device"], **kwargs)
