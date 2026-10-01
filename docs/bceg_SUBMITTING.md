@@ -41,7 +41,7 @@ External programs, none of which the shared environment can provide for you:
 | CREST methods, all start geometries | `crest`, `xtb` | in the shared env (conda-forge `crest`, currently 3.0.2) |
 | CREST with inline UMA (`+uma` methods, `refine: sp/opt`) | `crest` ≥ 3.1 and `fmlip-relay-server` | **unreleased**, so these methods are commented out in `configs/example.yaml`. 3.1 exists only on the open PR [crest-lab/crest#483](https://github.com/crest-lab/crest/pull/483) (branch `pprcht/crest@experimental`). To use it: build that branch with `-Dfmlip-relay=enabled`, `pip install '<crest-src>/subprojects/fmlip_relay[uma]'` into the env, then set `params: {executable: /abs/path/to/crest-3.1}` on those methods |
 | GOAT | ORCA | cluster module; absolute path in `orca_cmd` |
-| LoQI | `loqi` | separate env; path in `executable` |
+| LoQI | `loqi` | in the shared env (`gp_env_cluster.yml`) |
 
 ### Your config
 

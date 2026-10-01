@@ -84,8 +84,7 @@ huggingface-cli login                # once per user: the UMA weights are gated;
 
 Step 4 alone (condensing) needs only the Python of `module load python`. For the maintainer: `conda env
 create -f gp_env_cluster.yml` from the root of `/groups/ReismanLab/orca_descriptors` (its `-e .` line installs
-that clone, so `git pull` there updates everyone); LoQI lives in its own environment,
-[loqi_env.yml](loqi_env.yml), and its `loqi` executable is named in the bceg config.
+that clone, so `git pull` there updates everyone). LoQI is part of that environment.
 
 ### 3. Cluster: submit the jobs and check them
 

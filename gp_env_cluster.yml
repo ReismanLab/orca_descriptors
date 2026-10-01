@@ -12,8 +12,6 @@
 # Not installed here:
 #   ORCA (DFT, GOAT)   -> cluster module (module load orca/6.1.0 in the config's slurm.setup)
 #   NBO 7              -> /resnick/groups/ReismanLab/nbo7 (NBOEXE / GENEXE exported in slurm.setup)
-#   LoQI               -> its own environment (PyTorch >= 2.8 conflicts with fairchem's torch pin): loqi_env.yml;
-#                         point methods.<name>.params.executable at that env's `loqi`
 #   CREST >= 3.1       -> only needed for the `+uma` inline-refinement methods; build from source
 #                         (crest-lab/crest#483) and set params.executable
 name: gp_env
@@ -34,7 +32,7 @@ dependencies:
       - pyarrow==23.0.1
       - tqdm==4.67.3
       - morfeus-ml==0.7.2
-      - rdkit==2024.3.5
+      - rdkit==2026.3.6
       - dbstep==1.1.0
       - cclib==1.8.1
       - openbabel-wheel==3.1.1.23
@@ -45,5 +43,7 @@ dependencies:
       - ase
       - scine-molassembler==3.0.1
       - scine-utilities==10.1.0 # same SCINE release as molassembler 3.0.1
+      # --- bceg: LoQI diffusion conformer generator (organics only); needs rdkit >= 2026.3.1, torch >= 2.8 ---
+      - "loqi @ git+https://github.com/isayevlab/LoQI"
       # --- this repository, editable: desc_utils + bceg, console scripts orcadesc and bceg ---
       - -e .

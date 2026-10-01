@@ -1,6 +1,6 @@
 """LoQI diffusion conformer generator (organics only): https://github.com/isayevlab/LoQI
 
-Called through its CLI so it can live in its own environment (set ``executable``).
+Called through its CLI (``executable`` defaults to the ``loqi`` on PATH).
 """
 
 from __future__ import annotations
