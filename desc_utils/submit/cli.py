@@ -118,11 +118,15 @@ def cmd_fetch_weights(args) -> int:
             os.environ["SSL_CERT_FILE"] = certifi.where()   # conda's OpenSSL does not find the system CA store
         except ImportError:
             pass
+    from bceg.refine.uma import weights_cache_dir
     from fairchem.core import pretrained_mlip
-    cache = os.environ.get("HF_HUB_CACHE") or os.environ.get("HF_HOME") or "~/.cache/huggingface/hub"
-    print(f"fetching {args.model} into {cache} ...")
-    unit = pretrained_mlip.get_predict_unit(args.model, device="cpu")
-    print(f"ok: {args.model} loads ({type(unit).__name__}); the jobs can now run with HF_HUB_OFFLINE=1")
+    cache = weights_cache_dir()
+    if cache is None:
+        print("WARNING: HF_HUB_CACHE is not set; fairchem will use its private ~/.cache/fairchem, which other "
+              "users' jobs cannot read. Export HF_HUB_CACHE=<shared cache> first.", file=sys.stderr)
+    print(f"fetching {args.model} into {cache or '~/.cache/fairchem'} ...")
+    unit = pretrained_mlip.get_predict_unit(args.model, device="cpu", **({"cache_dir": cache} if cache else {}))
+    print(f"ok: {args.model} loads ({type(unit).__name__}); the jobs can now run with HF_HUB_OFFLINE=1 and the same HF_HUB_CACHE")
     return 0
 
 

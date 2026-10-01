@@ -25,6 +25,14 @@ def load_env_runtime() -> None:
     import sqlite3  # noqa: F401
 
 
+def weights_cache_dir() -> str | None:
+    """Where the UMA checkpoints live. fairchem ignores HF_HUB_CACHE and uses its own ~/.cache/fairchem
+    unless a cache_dir is passed; we pass FAIRCHEM_CACHE_DIR, else HF_HUB_CACHE, so one shared, offline
+    cache serves every user's jobs. None = fairchem's default."""
+    import os
+    return os.environ.get("FAIRCHEM_CACHE_DIR") or os.environ.get("HF_HUB_CACHE") or None
+
+
 def _version(pkg: str) -> str:
     try:
         return version(pkg)
@@ -69,19 +77,21 @@ class UMA(Refiner):
             # in, so an 8-core allocation on a 64-core node would oversubscribe eightfold. This runs
             # in-process, so run()'s OMP_NUM_THREADS never applies to it.
             torch.set_num_threads(resolve_threads(self.params["threads"]))
+            cache_dir = weights_cache_dir()
             try:
-                predictor = pretrained_mlip.get_predict_unit(self.params["model"], device=self.params["device"])
+                kwargs = {"cache_dir": cache_dir} if cache_dir else {}
+                predictor = pretrained_mlip.get_predict_unit(self.params["model"], device=self.params["device"], **kwargs)
             except Exception as exc:  # huggingface_hub raises its own hierarchy; the cause is in the message
                 name = type(exc).__name__
                 if "huggingface" in repr(type(exc)).lower() or "hf_hub" in str(exc).lower() or "Hub" in str(exc):
                     raise RuntimeError(
                         f"UMA weights for {self.params['model']!r} are not in the Hugging Face cache and the node "
                         f"could not download them ({name}). Compute nodes have no usable internet access: fetch the "
-                        f"weights once on a login node with the same HF_HUB_CACHE, then run the jobs offline:\n"
+                        f"weights once on a login node into the same cache (now: {cache_dir or 'fairchem default ~/.cache/fairchem'}), "
+                        f"then run the jobs offline:\n"
                         f"    export HF_HUB_CACHE=<shared cache>   # e.g. /groups/ReismanLab/hf_cache/hub\n"
-                        f"    huggingface-cli login                 # once per user, the weights are gated\n"
-                        f"    python -c \"from fairchem.core import pretrained_mlip; "
-                        f"pretrained_mlip.get_predict_unit('{self.params['model']}', device='cpu')\"\n"
+                        f"    hf auth login                         # once per user, the weights are gated\n"
+                        f"    orcadesc fetch-weights --model {self.params['model']}\n"
                         f"and put `export HF_HUB_CACHE=<shared cache>` and `export HF_HUB_OFFLINE=1` in slurm.setup."
                     ) from exc
                 raise

@@ -88,8 +88,9 @@ login node, into a cache shared by the group and read offline by the jobs (the t
 ```bash
 export HF_HUB_CACHE=/groups/ReismanLab/hf_cache/hub       # the shared cache (only model files; your token stays in ~/.cache/huggingface)
 hf auth login                                              # once per user: the weights are gated
-orcadesc fetch-weights --model uma-s-1p2                   # once per model; sets SSL_CERT_FILE to the certifi bundle (conda's OpenSSL
-                                                           # does not find the system CA store, hence CERTIFICATE_VERIFY_FAILED otherwise)
+orcadesc fetch-weights --model uma-s-1p2                   # once per model, into HF_HUB_CACHE (fairchem alone would use ~/.cache/fairchem);
+                                                           # sets SSL_CERT_FILE to the certifi bundle (conda's OpenSSL does not find the
+                                                           # system CA store, hence CERTIFICATE_VERIFY_FAILED otherwise)
 ```
 
 Step 4 alone (condensing) needs only the Python of `module load python`. For the maintainer: `conda env
