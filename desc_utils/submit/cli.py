@@ -108,6 +108,24 @@ def cmd_submit(args) -> int:
     return 0
 
 
+def cmd_fetch_weights(args) -> int:
+    """Download the UMA weights into the Hugging Face cache (login node), so the jobs can run offline."""
+    import os
+    import sqlite3  # noqa: F401  -- the env's libstdc++ before torch's (bceg.refine.uma.load_env_runtime)
+    if "SSL_CERT_FILE" not in os.environ:
+        try:
+            import certifi
+            os.environ["SSL_CERT_FILE"] = certifi.where()   # conda's OpenSSL does not find the system CA store
+        except ImportError:
+            pass
+    from fairchem.core import pretrained_mlip
+    cache = os.environ.get("HF_HUB_CACHE") or os.environ.get("HF_HOME") or "~/.cache/huggingface/hub"
+    print(f"fetching {args.model} into {cache} ...")
+    unit = pretrained_mlip.get_predict_unit(args.model, device="cpu")
+    print(f"ok: {args.model} loads ({type(unit).__name__}); the jobs can now run with HF_HUB_OFFLINE=1")
+    return 0
+
+
 def cmd_status(args) -> int:
     print_status(Config.load(args.config))
     return 0
@@ -141,6 +159,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true", help="also resubmit molecules recorded complete or in progress")
     p.add_argument("--no-sbatch", action="store_true", help="write the job scripts but do not call sbatch")
     p.set_defaults(func=cmd_submit)
+
+    p = sub.add_parser("fetch-weights", help="(login node) download the UMA weights into the Hugging Face cache")
+    p.add_argument("--model", default="uma-s-1p2")
+    p.set_defaults(func=cmd_fetch_weights)
 
     p = sub.add_parser("status", help="state of every molecule of the input list, from the records")
     p.add_argument("config")

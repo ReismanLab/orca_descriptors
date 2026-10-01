@@ -80,6 +80,7 @@ slurm:
   setup:                                          # start of every job (prepare, ORCA, and bceg's unless its slurm block has its own setup)
     - source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
     - conda activate gp_env
+    - export LD_LIBRARY_PATH=$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}   # pip wheels (torch) take the env's libstdc++, not the old system one
     - export HF_HUB_CACHE=/groups/ReismanLab/hf_cache/hub   # UMA weights, fetched once on a login node (README step 2)
     - export HF_HUB_OFFLINE=1                              # compute nodes never try the network
     - module load orca/6.1.0

@@ -14,6 +14,17 @@ from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_EV, Conformer
 
 
+def load_env_runtime() -> None:
+    """Load the conda environment's C++ runtime before any pip wheel does.
+
+    pip-installed torch links ``libstdc++.so.6`` without a conda RPATH, so imported first it binds the
+    process to the system copy (EL9: too old for the env's ICU, ``CXXABI_1.3.15`` missing) and every later
+    conda library fails to import. Importing ``sqlite3`` (conda-built, RPATH into ``$CONDA_PREFIX/lib``)
+    first puts the env's libstdc++ in the process; torch then reuses it. Harmless outside conda.
+    """
+    import sqlite3  # noqa: F401
+
+
 def _version(pkg: str) -> str:
     try:
         return version(pkg)
@@ -49,6 +60,8 @@ class UMA(Refiner):
 
     def calculator(self):
         if self._calc is None:
+            import sqlite3  # noqa: F401  -- before torch: see load_env_runtime()
+            load_env_runtime()
             import torch
             from fairchem.core import FAIRChemCalculator, pretrained_mlip
 
