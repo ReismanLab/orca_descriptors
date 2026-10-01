@@ -108,10 +108,10 @@ AND the termination banner is present, else `failed`; `timeout` when SLURM's TER
 ## Steps
 
 0. Import `bceg` (done, subtree merge `cfaddb0`: `bceg/`, `tests/bceg/`, `configs/bceg_example.yaml`,
-   `inputs/example_NN_ligands.txt`, `docs/bceg_*.md`). In `gp_env` 57 of its 60 tests pass; the 3 failures
-   are environmental and identical in the B-CEG-MCD clone (two need `xtb` on PATH, one depends on the
-   RDKit version's hydride SMILES). Still to do: fold `docs/bceg_SUBMITTING.md` into the README, add
-   fairchem-core, ase, crest, xtb to `gp_env.yml`, and delete `docs/bceg_README.md` once merged.
+   `inputs/example_NN_ligands.txt`, `docs/bceg_*.md`). All 60 of its tests pass in `gp_env` since rdkit
+   was bumped to 2026.3.6 (2026-10-01, needed by LoQI, which now lives in `gp_env_cluster.yml` instead of
+   its own `loqi_env.yml`; the descriptor regression was re-validated to 1e-8 on the data present). Still
+   to do: fold `docs/bceg_SUBMITTING.md` into the README and delete `docs/bceg_README.md` once merged.
 1. `desc_utils/submit/` (done 2026-09-30, 13 tests in `tests/test_submit.py` against a fake bceg tree):
    `config.py` (resolve, defaults, compared/recorded split, freeze with template copy and git commit),
    `source.py` (bceg tree reader: ensemble, params hashes, charge/multiplicity from params.json; runs
