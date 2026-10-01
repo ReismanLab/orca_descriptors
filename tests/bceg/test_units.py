@@ -64,9 +64,10 @@ def test_params_coercion_and_unknown_keys():
 
 
 def test_resource_keys_not_compared():
-    a, b = Crest(threads=4), Crest(threads=16, mlip_device="cpu")
+    a, b = Crest(threads=4), Crest(threads=16, mlip_device="cuda")
     assert a.compared_params() == b.compared_params()
-    assert Crest(refine="opt").resource_class() == "gpu"
+    assert Crest(refine="opt").resource_class() == "cpu"                       # mlip_device defaults to cpu
+    assert Crest(refine="opt", mlip_device="cuda").resource_class() == "gpu"
     assert Crest().resource_class() == "cpu"
 
 
