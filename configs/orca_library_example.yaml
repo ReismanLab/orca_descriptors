@@ -1,0 +1,58 @@
+# One ORCA library: conformer ensembles from bceg, one ORCA compound job per conformer.
+# Relative paths are relative to this file. `submit` freezes the resolved copy under
+# <library_dir>/_jobs/<timestamp>/ and the cluster jobs read that snapshot.
+#
+#   python -m desc_utils.submit submit configs/orca_library_example.yaml --dry-run
+#   python -m desc_utils.submit submit configs/orca_library_example.yaml
+#   python -m desc_utils.submit status configs/orca_library_example.yaml
+#
+# `source` and `dft` define the results and are written to <library_dir>/params.json on the first
+# submit; changing them later is refused. A different level of theory is a different library_dir.
+
+library_dir: ../DATA/orca/example_library        # absolute path on the cluster, e.g. /groups/ReismanLab/DATA/orca/<LIB>
+
+source:
+  kind: bceg
+  config: bceg_example.yaml                       # bceg's config: transformations, methods, post-optimisation, its slurm block
+  transformation: NiH2                            # one of the transformations of that config
+  method: crest_gfn2                              # one of its methods; the ensemble refined here is raw_1_<lot>.xyz
+  lot: null                                       # null = the post-optimisation level of the bceg config (uma-s-1p2)
+  smiles: ../inputs/example_NN_ligands.txt        # the input list, given to bceg and used to select molecules here
+  run_bceg: true                                  # false: the ensembles exist already, do not call bceg
+  # results_dir: defaults to the bceg config's results_dir
+
+orca: on                                          # off: ensembles only; run the same command later with on
+
+dft:
+  ewin_kcal_mol: 5.0                              # conformers within this window of the ensemble minimum get an ORCA job
+  # calc_param_template: calcParam.inp.tmpl       # default: desc_utils/submit/calcParam.inp.tmpl (structure of the compound job)
+  level_of_theory:                                # charge and multiplicity are NOT here: they come from the ensemble
+    conf_search: false                            # ORCA's own GOAT search (off: the ensemble is the conformer search)
+    opt_geom: true
+    freq_calc: true
+    nmr_calc: true
+    vertical_redox: true
+    goat_method: XTB
+    opt_method: "wb97m-d4 def2-tzvp(-f)"          # the LNiH2 library settings
+    opt_solvent: ""
+    svp_method: "m06 d4 def2-tzvp"
+    property_solvent: ""
+    nmr_method: "m06 d4 def2-tzvp"
+    nbo_run: "NBO NPA"
+    extra_basis: {Ni: def2-tzvp}                  # full def2-TZVP on Ni in the optimization and frequency steps; {} for none
+
+slurm:
+  setup:                                          # run at the start of every prepare and ORCA job (bare shell on the node)
+    - source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
+    - conda activate gp_env
+    - module load orca/6.1.0
+    - export NBOBIN=/resnick/groups/ReismanLab/nbo7/bin
+    - export NBOEXE=$NBOBIN/nbo7.i8.exe
+    - export GENEXE=$NBOBIN/gennbo.i8.exe
+    - export PATH="$PATH:$NBOBIN"
+    - ulimit -s unlimited
+  prepare: {time: "00:30:00", mem: 2G, cpus_per_task: 1}
+  orca: {time: "160:00:00", mem_per_cpu: 4G, ntasks: 16, nodes: 1}   # ntasks -> %pal nprocs; mem_per_cpu -> %maxcore (75 %)
+  array_throttle: 50
+
+condense: true                                    # write conf_N/orca_condensed.json when each ORCA job ends
