@@ -1,7 +1,8 @@
 """Start geometries for single-start searchers (CREST, GOAT, molassembler).
 
 Each replicate gets its own ETKDG embedding (seed = replicate seed), optionally
-pre-optimised with xtb, then checked:
+pre-optimised with xtb (``start_preopt: gfn2 | gfn1 | gfn0 | gfnff``) or with UMA
+(``start_preopt: uma``, parameters in ``start_preopt_params``), then checked:
 
 - every bond to a metal (e.g. Ni-N, Ni-F, Ni-H) must be <= ``max_metal_ligand_distance``;
 - every other bond of the graph must stay < 1.35 x the covalent-radii sum;
@@ -30,6 +31,7 @@ from bceg.chem import ORGANIC_ELEMENTS, embed
 from bceg.external import resolve_threads
 from bceg.structure import Structure
 from bceg.xtb import xtb_identity, xtb_optimize
+from bceg.xyz import Conformer
 
 SEED_STRIDE = 10007
 BOND_STRETCH_FACTOR = 1.35
@@ -98,12 +100,29 @@ def metal_geometry(mol: Chem.Mol, coords: np.ndarray) -> dict[str, dict]:
     return out
 
 
+def _uma_preoptimizer(params: dict):
+    """The UMA refiner used for ``start_preopt: uma`` (built once per call of make_start_geometry)."""
+    from bceg.refine.uma import UMA, _version
+
+    allowed = set(UMA.defaults) - {"lot", "keep_unconverged"}
+    unknown = set(params["start_preopt_params"]) - allowed
+    if unknown:
+        raise ValueError(f"start_preopt_params: unknown UMA parameter(s) {sorted(unknown)}; allowed: {sorted(allowed)}")
+    return UMA(**params["start_preopt_params"]), "fairchem-core", _version("fairchem-core")
+
+
 def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: dict) -> tuple[np.ndarray, dict]:
     """Return (coords, info) following the start_* parameters of a searcher."""
     rejected = []
     preopt = params["start_preopt"]
-    # which xtb ran is not in the params hash (it is a resource key), so record it here
-    xtb_path, xtb_ver = xtb_identity(params["xtb_executable"]) if preopt != "none" else (None, None)
+    # which program ran is not in the params hash (xtb_executable is a resource key), so record it here
+    uma = None
+    if preopt == "uma":
+        uma, program, version = _uma_preoptimizer(params)
+    elif preopt != "none":
+        program, version = xtb_identity(params["xtb_executable"])
+    else:
+        program, version = None, None
     for attempt in range(params["start_max_attempts"]):
         s = seed + attempt * SEED_STRIDE
         if params["start_geometry"] == "input":
@@ -120,17 +139,23 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
             raise ValueError(f"Unknown start_geometry {params['start_geometry']!r}")
 
         energy, embedded = None, coords
-        if params["start_preopt"] != "none":
+        if uma is not None:
+            result = uma.run(structure, [Conformer(coords)], workdir / f"preopt_{attempt}")
+            if not result.conformers:
+                raise RuntimeError("UMA pre-optimisation returned no geometry")
+            coords, energy = np.asarray(result.conformers[0].coords), result.conformers[0].energy
+        elif preopt != "none":
             coords, energy = xtb_optimize(
                 structure.elements, coords, structure.charge, structure.uhf, workdir / f"preopt_{attempt}",
-                method=params["start_preopt"], level=params["start_preopt_level"],
+                method=preopt, level=params["start_preopt_level"],
                 executable=params["xtb_executable"], threads=resolve_threads(params.get("threads", params.get("nprocs"))))
         problems = coordination_problems(structure.mol, coords, params["max_metal_ligand_distance"])
         if not problems:
             return coords, {
                 "source": source, "seed": s, "attempts": attempt + 1, "preopt": preopt,
-                "preopt_level": params["start_preopt_level"], "preopt_energy": energy, "rejected": rejected,
-                "preopt_program": xtb_path, "preopt_version": xtb_ver,
+                "preopt_level": params["start_preopt_params"] if preopt == "uma" else params["start_preopt_level"],
+                "preopt_energy": energy, "rejected": rejected,
+                "preopt_program": program, "preopt_version": version,
                 "rmsd_preopt_vs_embedded": round(heavy_atom_rmsd(structure.mol, embedded, coords), 3),
                 "metal_geometry": metal_geometry(structure.mol, coords),
             }

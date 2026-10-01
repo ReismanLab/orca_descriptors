@@ -29,6 +29,7 @@ from bceg.structure import Structure
 from bceg.xyz import read_xyz, write_xyz
 
 DONE, FAILED, NOT_APPLICABLE, RUNNING = "done", "failed", "not_applicable", "running"
+PRE_REFINEMENT, SEARCH = "pre_refinement", "search"   # phases of a search task (run_<i>.json "phase")
 
 
 @dataclass(frozen=True)
@@ -275,23 +276,35 @@ def _run_search(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
         write_record(rec_path, record | {"status": NOT_APPLICABLE, "reason": reason})
         return NOT_APPLICABLE
 
-    write_record(rec_path, record | {"status": RUNNING})
+    # phase: "pre_refinement" while the start geometry is embedded and pre-optimised (CREST, GOAT,
+    # molassembler), "search" once the searcher proper runs. Lets a status reader tell the two apart.
+    phase = {"phase": PRE_REFINEMENT if searcher.has_start_step() else SEARCH}
+    write_record(rec_path, record | {"status": RUNNING} | phase)
+
+    def _start_geometry_done(info: dict) -> None:
+        phase["phase"] = SEARCH
+        write_record(rec_path, record | {"status": RUNNING, "phase": SEARCH, "start_geometry": info})
+
+    searcher.on_start_geometry = _start_geometry_done
     t0 = time.time()
-    with workdir(prefix=f"{task.method}_{task.replicate}_") as wd:
-        try:
-            result = searcher.run(structure, task.replicate, wd)
-            _write_xyz_atomic(xyz, structure.elements, result.conformers)
-        except Exception as exc:
-            _keep_failed_workdir(wd, md, task.replicate)
-            write_record(rec_path, record | _usage(record, t0) | {
-                "status": FAILED, "error": repr(exc), "traceback": traceback.format_exc()[-5000:],
-                "failed_files": f"logs/raw_{task.replicate}_failed/"})
-            return FAILED
-        if isinstance(result.details.get("start_geometry"), dict):
-            result.details["start_geometry"]["rmsd_to_replicates"] = _start_geometry_rmsd_to_replicates(
-                structure, wd, md, task.replicate)
-        _copy_logs(result.log_files, md, f"raw_{task.replicate}")
-    write_record(rec_path, record | _usage(record, t0) | {
+    try:
+        with workdir(prefix=f"{task.method}_{task.replicate}_") as wd:
+            try:
+                result = searcher.run(structure, task.replicate, wd)
+                _write_xyz_atomic(xyz, structure.elements, result.conformers)
+            except Exception as exc:
+                _keep_failed_workdir(wd, md, task.replicate)
+                write_record(rec_path, record | _usage(record, t0) | phase | {
+                    "status": FAILED, "error": repr(exc), "traceback": traceback.format_exc()[-5000:],
+                    "failed_files": f"logs/raw_{task.replicate}_failed/"})
+                return FAILED
+            if isinstance(result.details.get("start_geometry"), dict):
+                result.details["start_geometry"]["rmsd_to_replicates"] = _start_geometry_rmsd_to_replicates(
+                    structure, wd, md, task.replicate)
+            _copy_logs(result.log_files, md, f"raw_{task.replicate}")
+    finally:
+        searcher.on_start_geometry = None
+    write_record(rec_path, record | _usage(record, t0) | phase | {
         "status": DONE, "n_conformers": len(result.conformers),
         "versions": result.versions, "details": result.details,
         "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),

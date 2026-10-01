@@ -222,3 +222,39 @@ def test_slurm_config_checks_and_chain_overrides(project):
     jobdir = write_jobs(cfg, expand(cfg)[0], root / "jobs")
     sbatch = (jobdir / "chain_etkdg.sbatch").read_text()
     assert "--time=48:00:00" in sbatch and "--mem=64G" in sbatch
+
+
+def test_search_record_phases(project, fake_xtb, monkeypatch):
+    """run_<i>.json says pre_refinement while the start geometry is made, search afterwards; a failure keeps its phase."""
+    from bceg import geometry
+    from bceg.search import SEARCHERS
+
+    root, write = project
+    cfg = Config.load(write("{}", searcher="single_start", transformations="{none: null}"))
+    phases = []
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    real_run = SEARCHERS["single_start"].run
+
+    def spying_run(self, structure, replicate, workdir):
+        phases.append(json.loads((md / f"run_{replicate}.json").read_text())["phase"])   # before the start geometry
+        out = real_run(self, structure, replicate, workdir)
+        phases.append(json.loads((md / f"run_{replicate}.json").read_text())["phase"])   # after it
+        return out
+
+    monkeypatch.setattr(SEARCHERS["single_start"], "run", spying_run)
+    run_local(cfg)
+    assert phases[:2] == ["pre_refinement", "search"]
+    rec = json.loads((md / "run_1.json").read_text())
+    assert rec["status"] == "done" and rec["phase"] == "search" and rec["details"]["start_geometry"]["attempts"] == 1
+    # a failure in the start geometry is recorded in that phase
+    monkeypatch.setattr(geometry, "coordination_problems", lambda *a: ["forced"])
+    cfg2 = Config.load(write("{start_max_attempts: 1}", searcher="single_start", transformations="{none: null}"))
+    (root / "results").rename(root / "results_done")
+    run_local(cfg2)
+    rec = json.loads((md / "run_1.json").read_text())
+    assert rec["status"] == "failed" and rec["phase"] == "pre_refinement"
+    # a searcher without a start step is in phase search from the start
+    (root / "results").rename(root / "results_failed")
+    cfg3 = Config.load(write("{n_confs: 2}", transformations="{none: null}"))
+    run_local(cfg3)
+    assert json.loads((md / "run_1.json").read_text())["phase"] == "search"

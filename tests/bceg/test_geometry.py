@@ -123,3 +123,42 @@ def test_real_xtb_preopt_nix2_bpy(tmp_path, x):
         print(x, rep, "rmsd vs embedded", info["rmsd_preopt_vs_embedded"], info["metal_geometry"])
     rmsds = [geometry.heavy_atom_rmsd(s.mol, starts[i], starts[j]) for i, j in ((0, 1), (0, 2), (1, 2))]
     print(f"Ni{x}2/bpy replicate start RMSDs (A):", [round(r, 3) for r in rmsds])
+
+
+# --------------------------------------------------------------------------- pre-refinement with UMA
+def test_uma_preopt_uses_the_refiner_and_records_it(tmp_path, monkeypatch):
+    from bceg.refine import uma as uma_mod
+    from bceg.xyz import Conformer
+
+    seen = {}
+
+    def fake_run(self, structure, conformers, workdir):
+        seen["params"] = dict(self.params)
+        seen["workdir"] = workdir
+        return uma_mod.RefineResult([Conformer(conformers[0].coords, -7.5, {"converged": True})], versions={"fairchem-core": "x"})
+
+    monkeypatch.setattr(uma_mod.UMA, "run", fake_run)
+    searcher = Crest(start_preopt="uma", start_preopt_params={"model": "uma-m-1p1", "fmax": 0.1},
+                     max_metal_ligand_distance=99.0)   # the fake refiner leaves the raw embedding as it is
+    assert searcher.has_start_step()
+    coords, info = searcher.start_geometry(nix2("F"), seed=1, workdir=tmp_path)
+    assert info["preopt"] == "uma" and info["preopt_energy"] == -7.5 and info["preopt_program"] == "fairchem-core"
+    assert info["preopt_level"] == {"model": "uma-m-1p1", "fmax": 0.1}
+    assert seen["params"]["model"] == "uma-m-1p1" and seen["params"]["fmax"] == 0.1 and seen["params"]["task"] == "omol"
+    assert seen["workdir"] == tmp_path / "preopt_0"
+    # the hashed parameters carry the pre-refinement choice
+    assert searcher.compared_params()["start_preopt_params"] == {"model": "uma-m-1p1", "fmax": 0.1}
+
+
+def test_uma_preopt_rejects_unknown_parameters(tmp_path):
+    with pytest.raises(ValueError, match="start_preopt_params"):
+        Crest(start_preopt="uma", start_preopt_params={"modle": "x"}).start_geometry(nix2("F"), seed=1, workdir=tmp_path)
+    assert not Crest(start_preopt="none").has_start_step()
+
+
+def test_start_geometry_hook_is_called_once_accepted(fake_xtb, tmp_path):
+    calls = []
+    searcher = Crest()
+    searcher.on_start_geometry = calls.append
+    _, info = searcher.start_geometry(nix2("F"), seed=1, workdir=tmp_path)
+    assert calls == [info]
