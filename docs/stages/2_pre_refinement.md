@@ -20,7 +20,7 @@ geometry is kept as `logs/raw_1_start_geometry.xyz`; the attempts of a failed ru
 |---|---|---|---|---|
 | `method` | `xtb` (searchers with a start step), `none` (others) | `xtb`, `uma` or `none` | `start_preopt` | yes |
 | `params` | per method, below | the pre-optimiser's settings | `start_preopt_level` / `start_preopt_params` | yes |
-| `start_geometry` | `etkdg` | `etkdg`: a new embedding per seed; `input`: the coordinates returned by the transformation | `start_geometry` | yes |
+| `start_geometry` | `etkdg` | `etkdg`: an RDKit ETKDG embedding seeded by `seed_offset + replicate` (`seed_offset` is a `conformer_search.params` key, default 0; the library runs replicate 1, so seed 1), re-seeded with `seed + attempt * 10007` after a rejection, hence reproducible by default; `input`: the coordinates returned by the transformation | `start_geometry` | yes |
 | `start_ff` | `auto` | force field relaxing the raw embedding before the pre-optimisation: `auto` (MMFF94s if parametrised, else none), `MMFF94`, `MMFF94s`, `UFF`, `none` | `start_ff` | yes |
 | `max_metal_ligand_distance` | `2.5` | Angstrom; a longer metal-ligand bond rejects the geometry (decoordination) | `max_metal_ligand_distance` | yes |
 | `max_attempts` | `10` | re-embeddings before the search fails | `start_max_attempts` | yes |
