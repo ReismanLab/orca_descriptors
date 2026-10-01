@@ -19,7 +19,15 @@ SKIP_STATES = {"complete", "in_progress"}
 
 
 def cmd_submit(args) -> int:
-    cfg = Config.load(args.config)
+    try:
+        cfg = Config.load(args.config)
+    except (ValueError, KeyError, FileNotFoundError) as exc:
+        print(f"CONFIG ERROR: {exc}", file=sys.stderr)
+        return 2
+    problems = slurm.check_partitions(cfg, cfg.bceg_raw())
+    if problems:
+        print("CONFIG ERROR:\n  " + "\n  ".join(problems), file=sys.stderr)
+        return 2
     lib = cfg.library_dir
     lib.mkdir(parents=True, exist_ok=True)
 
@@ -70,7 +78,12 @@ def cmd_submit(args) -> int:
     print(f"frozen config: {frozen.path}")
     bceg_ids: list[str] = []
     if cfg.source.get("run_bceg"):
-        bceg_ids = source.submit(jobdir, no_sbatch=args.no_sbatch)
+        try:
+            bceg_ids = source.submit(jobdir, no_sbatch=args.no_sbatch)
+        except (RuntimeError, ParamsMismatch) as exc:
+            print(f"bceg submission failed: {exc}\nNothing was queued; the ORCA stage was not submitted. "
+                  f"Fix the cause and run the same command again ({jobdir} can be deleted).", file=sys.stderr)
+            return 1
     if not cfg.orca_on:
         print("orca: off; ensembles only. Re-run with orca: on to refine them.")
         return 0

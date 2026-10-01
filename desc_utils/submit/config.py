@@ -90,11 +90,32 @@ def inline_bceg_raw(block: dict, base_dir: Path, library_dir: Path, smiles: str,
     return raw
 
 
+PLACEHOLDER = "CHANGE_ME"
+
+
+def find_placeholders(obj, prefix: str = "") -> list[str]:
+    """Dotted paths of every value still equal to the CHANGE_ME placeholder of the example configs."""
+    hits = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            hits += find_placeholders(v, f"{prefix}.{k}" if prefix else str(k))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            hits += find_placeholders(v, f"{prefix}[{i}]")
+    elif isinstance(obj, str) and PLACEHOLDER in obj.upper():
+        hits.append(prefix)
+    return hits
+
+
 def read_raw(path: str | Path) -> dict:
     """Read a library config and make every path in it absolute; fill the defaults."""
     path = Path(path).resolve()
     raw = yaml.safe_load(path.read_text()) or {}
     _check_keys(raw, TOP_KEYS, str(path))
+    placeholders = find_placeholders(raw)
+    if placeholders:
+        raise ValueError(f"{path}: replace the {PLACEHOLDER} placeholder(s) at: " + ", ".join(placeholders)
+                         + " (or delete the key to use the cluster default)")
     for key in ("library_dir", "source", "dft"):
         if key not in raw:
             raise ValueError(f"{path}: '{key}' is required")

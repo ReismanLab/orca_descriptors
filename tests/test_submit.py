@@ -380,3 +380,46 @@ def test_unrelated_bceg_method_may_change_but_selected_one_may_not(tree, fake_sb
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
     assert main(["submit", str(path), "--dry-run"]) == 2
     assert "source.bceg.method.params.n_confs: 3 -> 4" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- guards before anything is written
+def test_placeholder_is_refused_at_load(tree, capsys):
+    path = _inline_cfg(tree)
+    raw = yaml.safe_load(path.read_text())
+    raw["source"]["config"]["slurm"]["cpu"]["partition"] = "CHANGE_ME"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    with pytest.raises(ValueError, match="source.config.slurm.cpu.partition"):
+        Config.load(path)
+    assert main(["submit", str(path), "--dry-run"]) == 2
+    assert "CONFIG ERROR" in capsys.readouterr().err and not (tree["root"] / "LIB_inline" / "params.json").exists()
+
+
+def test_unknown_partition_is_refused_before_writing(tree, monkeypatch, capsys):
+    path = _inline_cfg(tree)
+    raw = yaml.safe_load(path.read_text())
+    raw["source"]["config"]["slurm"]["cpu"]["partition"] = "expansion"
+    raw["slurm"]["orca"]["partition"] = "nowhere"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    monkeypatch.setattr(slurm, "known_partitions", lambda: {"expansion", "gpu"})
+    assert main(["submit", str(path)]) == 2
+    err = capsys.readouterr().err
+    assert "slurm.orca.partition: partition 'nowhere' does not exist" in err
+    assert "source.config.slurm.cpu.partition" not in err          # 'expansion' exists, so it is not reported
+    assert not (tree["root"] / "LIB_inline" / "params.json").exists() and not (tree["root"] / "LIB_inline" / "_jobs").exists()
+    assert slurm.known_partitions() == {"expansion", "gpu"}
+
+
+def test_bceg_sbatch_failure_is_reported_cleanly(tree, monkeypatch, capsys):
+    path = _inline_cfg(tree)
+    raw = yaml.safe_load(path.read_text())
+    raw["source"]["run_bceg"] = True
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    from desc_utils.submit.source import BcegSource
+
+    def boom(self, jobdir, no_sbatch=False):
+        raise RuntimeError("bceg submit.sh failed (1): sbatch: error: invalid partition specified: x")
+
+    monkeypatch.setattr(BcegSource, "submit", boom)
+    assert main(["submit", str(path)]) == 1
+    err = capsys.readouterr().err
+    assert "bceg submission failed" in err and "Nothing was queued" in err

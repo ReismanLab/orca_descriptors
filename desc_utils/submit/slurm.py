@@ -91,6 +91,49 @@ def write_orca_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[
     return script, tasks_path
 
 
+def known_partitions() -> set[str] | None:
+    """Partition names from ``sinfo``; None when sinfo is unavailable (laptop, tests)."""
+    try:
+        out = subprocess.run(["sinfo", "-h", "-o", "%P"], capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return {p.strip().rstrip("*") for p in out.stdout.split() if p.strip()}
+
+
+def requested_partitions(cfg: Config, bceg_raw: dict | None) -> dict[str, str]:
+    """{dotted setting: partition} for every partition named in the library and bceg SLURM blocks."""
+    found = {}
+    for prof in ("prepare", "orca"):
+        p = cfg.slurm.get(prof, {}).get("partition")
+        if p:
+            found[f"slurm.{prof}.partition"] = p
+    if bceg_raw:
+        bslurm = bceg_raw.get("slurm") or {}
+        for prof in ("cpu", "gpu"):
+            p = (bslurm.get(prof) or {}).get("partition")
+            if p:
+                found[f"source.config.slurm.{prof}.partition"] = p
+        for name, method in (bceg_raw.get("methods") or {}).items():
+            p = ((method or {}).get("slurm") or {}).get("partition")
+            if p:
+                found[f"source.config.methods.{name}.slurm.partition"] = p
+        p = ((bceg_raw.get("post_optimization") or {}).get("slurm") or {}).get("partition")
+        if p:
+            found["source.config.post_optimization.slurm.partition"] = p
+    return found
+
+
+def check_partitions(cfg: Config, bceg_raw: dict | None) -> list[str]:
+    """Problems with the partitions named in the config, checked against sinfo (empty when fine or unknowable)."""
+    known = known_partitions()
+    if known is None:
+        return []
+    return [f"{where}: partition {name!r} does not exist here (sinfo knows: {', '.join(sorted(known))})"
+            for where, name in requested_partitions(cfg, bceg_raw).items() if name not in known]
+
+
 def sbatch(script: Path, dependency: list[str] | None = None) -> str:
     """Submit ``script`` and return its job id. ``dependency``: job ids for ``--dependency=afterany``."""
     cmd = ["sbatch", "--parsable"]
