@@ -1,7 +1,7 @@
 # B-CEG-MCD example configuration. Relative paths are relative to this file.
 inputs: ../inputs/example_NN_ligands.txt   # default input list; `bceg submit --smiles FILE` overrides it
 results_dir: ../DATA                         # git-ignored
-replicates: 3
+replicates: 1                                # ORCA libraries refine replicate 1 only (desc_utils.submit); the benchmark uses 3
 
 # depth-1 folders; pick with `bceg submit -t NiF2` (default: all). `script:` names a script shipped
 # with bceg (src/bceg/transforms_builtin/README.md) or a path to one of your own, relative to THIS file.
