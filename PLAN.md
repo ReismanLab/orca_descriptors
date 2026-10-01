@@ -136,8 +136,21 @@ AND the termination banner is present, else `failed`; `timeout` when SLURM's TER
    inline defaults: `inputs` = `source.smiles`, `replicates` 1, `results_dir` = `<library_dir>/ensembles`,
    bceg `slurm.setup` = the library's. Compared settings narrowed to the refined transformation, method,
    post-optimisation and `replicates`; paths and both slurm blocks recorded only.
-6. Next: first run on the cluster (sbatch flags, module names, fairchem / molassembler install, NBO
-   variables), then delete `submission_scripts_v3/` and fold `docs/bceg_*.md` into the README.
+6. (2026-10-01) First run on the cluster: `CHANGE_ME` placeholders refused at load, `sinfo` partition
+   check, `OPENBLAS_NUM_THREADS=1`, the UMA weights cache (`FAIRCHEM_CACHE_DIR`, `fetch-weights`), the
+   re-queue and running guards. Still to do: delete `submission_scripts_v3/`, fold `docs/bceg_*.md` into
+   the README.
+7. (2026-10-01) Stage layout of the library config (owner's request): one block per stage,
+   `transformation` / `pre_refinement` / `conformer_search` / `post_optimization` / `pruning` / `dft`,
+   one choice per block (another search method = another YAML; folders stay
+   `<transformation>/<InChIKey>/<method>/`); `source`, `source.config` and the `xyz` source are gone.
+   New in bceg: `start_preopt: uma` (`start_preopt_params`) and a `phase` (`pre_refinement` | `search`)
+   in `run_<i>.json`, written through `Searcher.on_start_geometry`. Pruning defaults to none; the GOAT
+   `conf_search` step left the template; `status` gives one `queued / running / done / failed` per stage
+   (`ensemble_stage: queued` is written by `submit`). `docs/stages/<n>_<stage>.md` document every option
+   and parameter per stage, with `tests/test_stage_docs.py` failing on an undocumented key. The compared
+   layout of `params.json` changed: libraries created before need `rm $LIB/params.json` (or a new
+   `library_dir`) before their next submit.
 
 ## Settled questions (2026-09-30)
 

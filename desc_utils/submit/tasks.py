@@ -1,8 +1,9 @@
 """The two cluster tasks of the ORCA stage, and what ``submit`` does per molecule.
 
 ``prepare_molecule``  (prepare array, one element per molecule, runs after bceg)
-    read the ensemble, check its hyper-parameter hash against the library, split it into conf_N/
-    folders inside the energy window, render calcParam.inp, record everything, submit the ORCA array.
+    read the ensemble, check its hyper-parameter hash against the library, prune it (stage 5: the energy
+    window, or nothing), split it into conf_N/ folders, render calcParam.inp, record everything, submit
+    the ORCA array.
 ``run_orca_conformer``  (ORCA array, one element per conformer)
     run ORCA in conf_N/, record the outcome (exit code AND the termination banner), condense.
 """
@@ -24,7 +25,7 @@ from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils.submit import records, slurm, template
 from desc_utils.submit.config import Config
-from desc_utils.submit.source import Ensemble, make_source
+from desc_utils.submit.source import Ensemble, Ensembles
 
 TERMINATION_BANNER = "ORCA TERMINATED NORMALLY"
 RUN_TIME_RE = re.compile(r"^TOTAL RUN TIME:\s*(.+?)\s*$", re.MULTILINE)
@@ -35,17 +36,22 @@ def conformer_name(i: int) -> str:
 
 
 # --------------------------------------------------------------------------- prepare
-def energy_window(conformers: list[Conformer], ewin_kcal_mol: float) -> list[tuple[str, Conformer, float | None, str]]:
-    """(name, conformer, E - Emin in kcal/mol or None, status) for every conformer, in file order."""
+def energy_window(conformers: list[Conformer], ewin_kcal_mol: float | None) -> list[tuple[str, Conformer, float | None, str]]:
+    """Stage 5, pruning: (name, conformer, E - Emin in kcal/mol or None, status) for every conformer, in
+    file order. ``ewin_kcal_mol`` None (the default) keeps every conformer; with a window, a conformer
+    above it is ``skipped_energy_filter`` and one without an energy ``skipped_no_energy``."""
     energies = [c.energy for c in conformers if c.energy is not None]
     e_min = min(energies) if energies else None
     out = []
     for i, c in enumerate(conformers, start=1):
-        if c.energy is None or e_min is None:
-            out.append((conformer_name(i), c, None, "skipped_no_energy"))
-            continue
-        rel = (c.energy - e_min) * HARTREE_TO_KCAL
-        out.append((conformer_name(i), c, rel, "skipped_energy_filter" if rel > ewin_kcal_mol else "prepared"))
+        rel = None if (c.energy is None or e_min is None) else (c.energy - e_min) * HARTREE_TO_KCAL
+        if ewin_kcal_mol is None:
+            status = "prepared"
+        elif rel is None:
+            status = "skipped_no_energy"
+        else:
+            status = "skipped_energy_filter" if rel > ewin_kcal_mol else "prepared"
+        out.append((conformer_name(i), c, rel, status))
     return out
 
 
@@ -65,7 +71,7 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         raise RuntimeError(f"{input_smiles}: InChIKey {mol.inchikey} != {inchikey} (RDKit version drift?)")
     lib = cfg.library_dir
     mol_dir = lib / inchikey
-    ens = make_source(cfg.source).ensemble(mol)
+    ens = Ensembles(cfg).ensemble(mol)
     base = {"inchikey": inchikey, "smiles": ens.input_smiles, "canonical_smiles": ens.canonical_smiles,
             "name": ens.name, "ensemble": ens.record, "pipeline": cfg.pipeline}
     records.register_molecule(lib, inchikey, _registry_entry(ens))
@@ -95,7 +101,7 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
     (mol_dir / "calcParam.inp").write_text(rendered)
     dft_record = {
         "engine": "ORCA", "orca_module": _orca_module(), "charge": ens.charge, "multiplicity": ens.multiplicity,
-        "ewin_kcal_mol": cfg.dft["ewin_kcal_mol"], "calc_param_template": str(cfg.template_path),
+        "pruning": dict(cfg.pruning), "calc_param_template": str(cfg.template_path),
         "calc_param_md5": template.md5(rendered), "nprocs": nprocs, "maxcore_mb": maxcore,
         "level_of_theory": template.validate_level_of_theory(lot),
         "compound_steps": template.compound_steps(lot, ens.charge, ens.multiplicity),
@@ -106,11 +112,11 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         dft_record["previous_calc_param_md5"] = previous_md5
         dft_record["settings_changed_at"] = records.now()
 
-    # --- split the ensemble into conf_N/ inside the energy window
+    # --- prune (stage 5) and split the ensemble into conf_N/
     existing = meta.get("conformers") or {}
     conformer_records: dict = {}
     to_run: list[str] = []
-    for name, conf, rel, status in energy_window(ens.conformers, float(cfg.dft["ewin_kcal_mol"])):
+    for name, conf, rel, status in energy_window(ens.conformers, cfg.ewin):
         rec = {"energy_hartree": conf.energy, "energy_above_min_kcal_mol": rel}
         old = (existing.get(name) or {}).get("status")
         if status != "prepared":
@@ -122,8 +128,10 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         conf_dir.mkdir(exist_ok=True)
         # comment line: "<E> energy=<E> units=hartree": ORCA ignores it, the UMA-only descriptor
         # route reads energy= (spec: numbering.energy source xyz_comment, key energy, units hartree)
-        tagged = Conformer(conf.coords, conf.energy, {"energy": f"{conf.energy:.10f}", "units": "hartree",
-                                                       "source": ens.record.get("lot") or "ensemble"})
+        tags = {"source": ens.record.get("lot") or "ensemble"}
+        if conf.energy is not None:
+            tags = {"energy": f"{conf.energy:.10f}", "units": "hartree", **tags}
+        tagged = Conformer(conf.coords, conf.energy, tags)
         write_xyz(conf_dir / "input.xyz", ens.elements, [tagged])
         shutil.copyfile(mol_dir / "calcParam.inp", conf_dir / "calcParam.inp")
         conformer_records[name] = rec | {"status": "prepared", "prepared_at": records.now()}

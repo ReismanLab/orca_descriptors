@@ -5,6 +5,8 @@ at the same time and all land in the same file. A merge that changes nothing lea
 
 Statuses
 --------
+Ensemble stage of a molecule (``metadata["ensemble_stage"]``): written by ``submit`` as ``queued`` with the
+bceg job ids when stages 1-4 were just queued for it; bceg's own run records take over from there.
 ORCA stage of a molecule (``metadata["orca_stage"]["status"]``):
   ``queued``            prepare task submitted, ensemble not looked at yet
   ``prepared``          ensemble split into conf_N/, ORCA jobs submitted (or nothing to submit)

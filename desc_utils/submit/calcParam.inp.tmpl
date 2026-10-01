@@ -9,8 +9,8 @@ end
 # Rendered by desc_utils.submit.template from the dft.level_of_theory block of the library config
 # (charge and multiplicity come from the conformer ensemble; nprocs and maxcore from slurm.orca).
 # Edit the config, not this file, to change a method/basis/solvent choice. This file controls
-# STRUCTURE (which Compound steps exist and how they feed into each other).
-Variable conf_search = $conf_search;
+# STRUCTURE (which Compound steps exist and how they feed into each other). The conformer search
+# happened before ORCA (the ensemble); input.xyz is one conformer of it.
 Variable opt_geom = $opt_geom;
 Variable freq_calc = $freq_calc;
 Variable nmr_calc = $nmr_calc;
@@ -20,11 +20,6 @@ Variable vertical_redox = $vertical_redox;
 Variable input_xyz = "input.xyz";
 Variable multiplicity = $multiplicity;
 Variable charge = $charge;
-
-# ------ GOAT optimization ------
-Variable goat_method = "$goat_method";
-Variable var_goat = "GOAT";
-Variable goat_solvent = "";
 
 # ------ DFT Optimization + Freq of Lowest En ------
 Variable opt_method = "$opt_method";
@@ -49,20 +44,6 @@ Variable red_mult = multiplicity + 1;
 Variable opt_xyz;
 Variable scf_guess = "PModel";
 
-
-if (conf_search) then
-    # ------------------------------------
-    # GOAT optimization
-    # ------------------------------------
-
-    NewStep
-    %base "conf_search"
-    ! &{var_goat} &{goat_method} &{goat_solvent}
-    * xyzfile &{charge} &{multiplicity} &{input_xyz}
-    Step_end
-
-    input_xyz = "conf_search.globalminimum.xyz";
-EndIf
 
 if (opt_geom) then
     # ------------------------------------

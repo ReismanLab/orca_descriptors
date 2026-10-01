@@ -1,11 +1,14 @@
-"""desc_utils.submit against a fake bceg results tree: config, freeze and refuse rule, prepare (split +
-energy window + rendered input + records), ORCA task with a fake orca, status, registry."""
+"""The ORCA stage (desc_utils.submit) against a fake bceg tree and a fake orca.
+
+The tree has two molecules with a finished ensemble (CCO, CC(C)O) and one without (benzene); the
+library config is written in the stage layout (transformation / pre_refinement / conformer_search /
+post_optimization / pruning / dft) with ``run_bceg: false`` so nothing is computed.
+"""
+
 from __future__ import annotations
 
 import json
-import os
 import stat
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -20,15 +23,15 @@ from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 from desc_utils.submit import records, slurm, template
 from desc_utils.submit.cli import main
 from desc_utils.submit.config import Config
-from desc_utils.submit.source import make_source
-from desc_utils.submit.status import status_table
-from desc_utils.submit.tasks import orca_outcome, prepare_molecule, run_orca_conformer
+from desc_utils.submit.source import Ensembles
+from desc_utils.submit.status import stage_statuses, status_table
+from desc_utils.submit.tasks import energy_window, orca_outcome, prepare_molecule, run_orca_conformer
 
 LOT = "uma-s-1p2"
 LIGANDS = "CCO ethanol\nCC(C)O\nc1ccccc1 benzene\n"  # benzene gets no ensemble
 LEVEL_OF_THEORY = {
-    "conf_search": False, "opt_geom": True, "freq_calc": True, "nmr_calc": True, "vertical_redox": True,
-    "goat_method": "XTB", "opt_method": "wb97m-d4 def2-tzvp(-f)", "opt_solvent": "", "svp_method": "m06 d4 def2-tzvp",
+    "opt_geom": True, "freq_calc": True, "nmr_calc": True, "vertical_redox": True,
+    "opt_method": "wb97m-d4 def2-tzvp(-f)", "opt_solvent": "", "svp_method": "m06 d4 def2-tzvp",
     "property_solvent": "", "nmr_method": "m06 d4 def2-tzvp", "nbo_run": "NBO NPA", "extra_basis": {"Ni": "def2-tzvp"},
 }
 
@@ -41,41 +44,60 @@ def _ensemble(results_dir: Path, smiles: str, rel_kcal=(0.0, 2.0, 10.0)) -> None
     n = len(structure.elements)
     confs = [Conformer(coords=[[i * 0.1 + k, 0.0, 0.0] for i in range(n)], energy=-100.0 + r / HARTREE_TO_KCAL)
              for k, r in enumerate(rel_kcal)]
+    write_xyz(md.raw(1), structure.elements, confs)
     write_xyz(md.refined(1, LOT), structure.elements, confs)
     sp = make_params({"searcher": "rdkit_etkdg", "params": {"n_confs": 3}, "seed_rule": "x",
                       "transformation": {"name": "none"}, "structure": structure.identity()})
     md.params().write_text(json.dumps(sp))
     md.params(LOT).write_text(json.dumps(make_params({"refiner": "uma", "lot": LOT, "search_params_sha256": sp["sha256"]})))
-    write_record(md.run_record(1), {"status": "done", "params_sha256": sp["sha256"]})
+    write_record(md.run_record(1), {"status": "done", "params_sha256": sp["sha256"], "phase": "search"})
     write_record(md.run_record(1, LOT), {"status": "done", "versions": {"fairchem": "x"}})
+
+
+def _lib_cfg(**overrides) -> dict:
+    raw = {
+        "library_dir": "LIB",
+        "smiles": "ligands.txt",
+        "ensembles_dir": "DATA_bceg",
+        "run_bceg": False,
+        "transformation": {"name": "none", "multiplicity": 1},
+        "pre_refinement": "none",
+        "conformer_search": {"name": "etkdg", "searcher": "rdkit_etkdg", "params": {"n_confs": 3}},
+        "post_optimization": {"refiner": "uma", "params": {"model": LOT}},
+        "pruning": {"energy_window_kcal_mol": 5.0},
+        "dft": {"level_of_theory": LEVEL_OF_THEORY},
+        "slurm": {"setup": ["echo setup"], "orca": {"time": "01:00:00", "mem_per_cpu": "4G", "ntasks": 2},
+                  "ensembles": {"cpu": {"time": "01:00:00"}}},
+        "condense": False,
+    }
+    raw.update(overrides)
+    return raw
 
 
 @pytest.fixture
 def tree(tmp_path: Path) -> dict:
     (tmp_path / "ligands.txt").write_text(LIGANDS)
     results = tmp_path / "DATA_bceg"
-    (tmp_path / "bceg.yaml").write_text(textwrap.dedent(f"""
-        inputs: ligands.txt
-        results_dir: DATA_bceg
-        replicates: 1
-        transformations: {{none: {{multiplicity: 1}}}}
-        methods: {{etkdg: {{searcher: rdkit_etkdg, params: {{n_confs: 3}}}}}}
-        post_optimization: {{refiner: uma, params: {{model: {LOT}}}}}
-        slurm: {{setup: [], cpu: {{time: "01:00:00"}}}}
-        """))
     for smi in ("CCO", "CC(C)O"):
         _ensemble(results, smi)
-    lib_cfg = {
-        "library_dir": "LIB",
-        "source": {"kind": "bceg", "config": "bceg.yaml", "transformation": "none", "method": "etkdg",
-                   "smiles": "ligands.txt", "run_bceg": False},
-        "dft": {"ewin_kcal_mol": 5.0, "level_of_theory": LEVEL_OF_THEORY},
-        "slurm": {"setup": ["echo setup"], "orca": {"time": "01:00:00", "mem_per_cpu": "4G", "ntasks": 2}},
-        "condense": False,
-    }
-    (tmp_path / "lib.yaml").write_text(yaml.safe_dump(lib_cfg, sort_keys=False))
+    (tmp_path / "lib.yaml").write_text(yaml.safe_dump(_lib_cfg(), sort_keys=False))
     keys = {s: InputMolecule.from_smiles(s).inchikey for s in ("CCO", "CC(C)O", "c1ccccc1")}
     return {"root": tmp_path, "cfg": tmp_path / "lib.yaml", "lib": tmp_path / "LIB", "keys": keys, "results": results}
+
+
+def _rewrite(tree, **overrides) -> Path:
+    """Write lib.yaml again with top-level overrides (deleting a key: pass ``key=None`` via DELETE)."""
+    raw = _lib_cfg()
+    for k, v in overrides.items():
+        if v is DELETE:
+            raw.pop(k, None)
+        else:
+            raw[k] = v
+    tree["cfg"].write_text(yaml.safe_dump(raw, sort_keys=False))
+    return tree["cfg"]
+
+
+DELETE = object()
 
 
 @pytest.fixture
@@ -93,30 +115,89 @@ def fake_sbatch(monkeypatch):
 # --------------------------------------------------------------------------- config / template
 def test_config_resolves_paths_and_defaults(tree):
     cfg = Config.load(tree["cfg"])
-    assert cfg.library_dir == tree["lib"]
-    assert cfg.source["results_dir"] == str(tree["results"])          # taken from the bceg config
+    assert cfg.library_dir == tree["lib"] and cfg.ensembles_dir == tree["results"] and cfg.smiles_path == tree["root"] / "ligands.txt"
     assert cfg.template_path.name == "calcParam.inp.tmpl" and cfg.template_path.exists()
     assert cfg.slurm["orca"]["ntasks"] == 2 and cfg.slurm["orca"]["nodes"] == 1  # override + default
-    assert cfg.orca_on and not cfg.condense
-    assert "run_bceg" not in cfg.compared()["source"] and cfg.recorded()["run_bceg"] is False
-    assert cfg.compared()["dft"]["calc_param_template"]["sha256"] == cfg.template_sha256()
+    assert cfg.orca_on and not cfg.condense and not cfg.run_bceg
+    assert cfg.transformation_name == "none" and cfg.method_name == "etkdg" and cfg.lot == LOT and not cfg.has_preopt
+    assert cfg.pre_refinement == {"method": "none", "params": {}}
+    assert cfg.ewin == 5.0
+    compared = cfg.compared()
+    assert set(compared) == {"transformation", "pre_refinement", "conformer_search", "post_optimization", "pruning", "dft", "replicates"}
+    assert compared["conformer_search"]["params"]["n_confs"] == 3 and compared["conformer_search"]["params"]["prune_rms"] == -1.0
+    assert compared["post_optimization"]["lot"] == LOT and compared["post_optimization"]["params"]["fmax"] == 0.05
+    assert compared["transformation"]["multiplicity"] == 1 and compared["replicates"] == 1
+    assert compared["dft"]["calc_param_template"]["sha256"] == cfg.template_sha256()
+    assert cfg.recorded()["run_bceg"] is False and cfg.recorded()["paths"]["ensembles_dir"] == str(tree["results"])
+    # bceg's view: one transformation, one method, replicate 1, the library's setup
+    b = cfg.bceg_raw()
+    assert b["replicates"] == 1 and b["inputs"] == str(tree["root"] / "ligands.txt") and b["results_dir"] == str(tree["results"])
+    assert list(b["transformations"]) == ["none"] and list(b["methods"]) == ["etkdg"]
+    assert b["methods"]["etkdg"] == {"searcher": "rdkit_etkdg", "params": {"n_confs": 3}, "slurm": {}}   # no start_* for ETKDG
+    assert b["slurm"] == {"setup": ["echo setup"], "cpu": {"time": "01:00:00"}}
+
+
+def test_stage_defaults_and_mapping_to_bceg(tree):
+    # a searcher with a start geometry gets xtb GFN2 by default
+    cfg = Config.load(_rewrite(tree, pre_refinement=DELETE, pruning=DELETE,
+                               conformer_search={"name": "crest_gfn2", "searcher": "crest", "params": {"workhorse": "gfn2"}}))
+    assert cfg.pre_refinement == {"method": "xtb", "params": {"gfn": "gfn2", "level": "normal"}} and cfg.has_preopt
+    assert cfg.ewin is None and cfg.pruning == {"energy_window_kcal_mol": None}
+    params = cfg.bceg_raw()["methods"]["crest_gfn2"]["params"]
+    assert params["start_preopt"] == "gfn2" and params["start_preopt_level"] == "normal" and params["workhorse"] == "gfn2"
+    assert "start_preopt" not in cfg.compared()["conformer_search"]["params"]      # the pre-refinement block owns it
+    # uma pre-refinement and the embedding keys
+    cfg = Config.load(_rewrite(tree, conformer_search={"name": "crest_uma", "searcher": "crest"},
+                               pre_refinement={"method": "uma", "params": {"model": "uma-m-1p1", "fmax": 0.1},
+                                               "max_metal_ligand_distance": 2.8, "max_attempts": 3}))
+    params = cfg.bceg_raw()["methods"]["crest_uma"]["params"]
+    assert params["start_preopt"] == "uma" and params["start_preopt_params"] == {"model": "uma-m-1p1", "fmax": 0.1}
+    assert params["max_metal_ligand_distance"] == 2.8 and params["start_max_attempts"] == 3
+    assert cfg.compared()["pre_refinement"]["max_attempts"] == 3
+    # no post-optimisation: ORCA refines the raw search output
+    cfg = Config.load(_rewrite(tree, post_optimization=None))
+    assert cfg.lot is None and cfg.compared()["post_optimization"] is None
+    ens = Ensembles(cfg).ensemble(InputMolecule.from_smiles("CCO"))
+    assert ens.done and ens.xyz_path.name == "raw_1.xyz"
+
+
+@pytest.mark.parametrize("override, message", [
+    ({"pre_refinement": {"method": "xtb"}}, "no start geometry"),                   # ETKDG has nothing to pre-optimise
+    ({"pre_refinement": {"method": "dft"}}, "pre_refinement.method"),
+    ({"conformer_search": {"name": "x", "searcher": "rdkit_etkdg", "params": {"n_conf": 3}}}, "unknown parameter"),
+    ({"conformer_search": {"name": "x", "searcher": "magic"}}, "conformer_search.searcher"),
+    ({"pruning": {"energy_window_kcal_mol": -1}}, "positive number"),
+    ({"pruning": {"ewin": 5}}, "unknown keys"),
+    ({"transformation": {"script": "ni_x2.py"}}, "`name` is required"),
+    ({"post_optimization": {"refiner": "uma", "params": {"modle": "x"}}}, "unknown parameter"),
+    ({"dft": {"level_of_theory": {**LEVEL_OF_THEORY, "conf_search": False}}, "prune": 1}, "unknown keys"),
+])
+def test_config_errors_are_caught_at_load(tree, capsys, override, message):
+    path = _rewrite(tree, **override)
+    with pytest.raises(ValueError, match=message):
+        Config.load(path)
+    assert main(["submit", str(path), "--dry-run"]) == 2
+    assert "CONFIG ERROR" in capsys.readouterr().err
 
 
 def test_render_and_compound_steps():
     text = template.render(Config.load.__globals__["DEFAULT_TEMPLATE"], LEVEL_OF_THEORY, charge=0, multiplicity=1,
                            nprocs=8, maxcore_mb=3072)
-    assert "$" not in text
+    assert "$" not in text and "conf_search" not in text and "GOAT" not in text
     assert "%maxcore 3072" in text and "nprocs 8" in text
     assert text.count('NewGTO Ni "def2-tzvp" end') == 2
     opt = text.split('%base "optimization"')[1].split("StepEnd")[0]
     single = text.split('%base "singlepoint"')[1].split("StepEnd")[0]
     assert "%basis" in opt and "%basis" not in single
     steps = template.compound_steps(LEVEL_OF_THEORY, 0, 1)
+    assert list(steps) == ["optimization", "frequency", "singlepoint", "nmr", "oxidation", "reduction"]
     assert steps["oxidation"] == {"runs": True, "method": "m06 d4 def2-tzvp", "solvent": "", "population_analysis": "NBO NPA",
                                   "charge": 1, "multiplicity": 2}
     assert steps["frequency"]["extra_basis"] == "Ni def2-tzvp"
     no_eb = dict(LEVEL_OF_THEORY, extra_basis={})
     assert "%basis" not in template.render(Config.load.__globals__["DEFAULT_TEMPLATE"], no_eb, 0, 1, 1, 1000)
+    with pytest.raises(KeyError, match="unknown keys"):
+        template.validate_level_of_theory({**LEVEL_OF_THEORY, "goat_method": "XTB"})
 
 
 def test_maxcore():
@@ -132,19 +213,22 @@ def test_submit_dry_run_writes_nothing(tree, capsys):
     assert not (tree["lib"] / "params.json").exists()
     out = capsys.readouterr().out
     assert "3 molecule(s) to prepare" in out and "orca: on" in out
+    assert "pipeline: transformation none | pre_refinement none | conformer_search etkdg (rdkit_etkdg) | " \
+           f"post_optimization uma {LOT} | pruning 5 kcal/mol | dft on" in out
 
 
 def test_submit_freezes_and_queues_prepare(tree, fake_sbatch):
     assert main(["submit", str(tree["cfg"])]) == 0
     lib = tree["lib"]
     params = json.loads((lib / "params.json").read_text())
-    assert params["compared"]["dft"]["ewin_kcal_mol"] == 5.0 and "run_bceg" not in params["compared"]["source"]
+    assert params["compared"]["pruning"]["energy_window_kcal_mol"] == 5.0 and params["recorded"]["run_bceg"] is False
     jobdirs = list((lib / "_jobs").iterdir())
     assert len(jobdirs) == 1
     jobdir = jobdirs[0]
     frozen = yaml.safe_load((jobdir / "config.yaml").read_text())
     assert frozen["_pipeline"]["repo"] and "git_commit" in frozen["_pipeline"]
     assert frozen["dft"]["calc_param_template"] == str(jobdir / "calcParam.inp.tmpl")
+    assert Config.load(jobdir / "config.yaml").compared()["conformer_search"] == Config.load(tree["cfg"]).compared()["conformer_search"]
     tasks = [json.loads(l) for l in (jobdir / "prepare.jsonl").read_text().splitlines()]
     assert [t["inchikey"] for t in tasks] == list(tree["keys"].values())
     script = (jobdir / "prepare.sbatch").read_text()
@@ -160,18 +244,25 @@ def test_submit_freezes_and_queues_prepare(tree, fake_sbatch):
     assert main(["submit", str(tree["cfg"]), "--dry-run"]) == 0
 
 
-def test_changed_dft_is_refused(tree, fake_sbatch, capsys):
+def test_changed_stage_setting_is_refused(tree, fake_sbatch, capsys):
     assert main(["submit", str(tree["cfg"])]) == 0
     raw = yaml.safe_load(tree["cfg"].read_text())
-    raw["dft"]["ewin_kcal_mol"] = 8.0
+    raw["pruning"]["energy_window_kcal_mol"] = 8.0
     tree["cfg"].write_text(yaml.safe_dump(raw))
     assert main(["submit", str(tree["cfg"]), "--dry-run"]) == 2
     err = capsys.readouterr().err
-    assert "REFUSED" in err and "ewin_kcal_mol: 5.0 -> 8.0" in err
+    assert "REFUSED" in err and "pruning.energy_window_kcal_mol: 5.0 -> 8.0" in err
+    raw["pruning"]["energy_window_kcal_mol"] = 5.0
+    raw["conformer_search"]["params"]["n_confs"] = 4
+    tree["cfg"].write_text(yaml.safe_dump(raw))
+    assert main(["submit", str(tree["cfg"]), "--dry-run"]) == 2
+    assert "conformer_search.params.n_confs: 3 -> 4" in capsys.readouterr().err
     # recorded settings may change freely
-    raw["dft"]["ewin_kcal_mol"] = 5.0
+    raw["conformer_search"]["params"]["n_confs"] = 3
     raw["orca"] = "off"
     raw["slurm"]["orca"]["time"] = "99:00:00"
+    raw["slurm"]["ensembles"]["cpu"]["time"] = "48:00:00"
+    raw["conformer_search"]["slurm"] = {"cpus_per_task": 4}
     tree["cfg"].write_text(yaml.safe_dump(raw))
     assert main(["submit", str(tree["cfg"]), "--dry-run"]) == 0
 
@@ -183,7 +274,7 @@ def _frozen(tree, fake_sbatch) -> Config:
     return Config.load(jobdir / "config.yaml")
 
 
-def test_prepare_splits_filters_and_submits(tree, fake_sbatch):
+def test_prepare_prunes_splits_and_submits(tree, fake_sbatch):
     cfg = _frozen(tree, fake_sbatch)
     key = tree["keys"]["CCO"]
     assert prepare_molecule(cfg, key, "CCO") == "prepared"
@@ -197,7 +288,9 @@ def test_prepare_splits_filters_and_submits(tree, fake_sbatch):
     assert xyz_comment_energy(mol_dir / "conf_1", "input.xyz", "energy", "hartree") == pytest.approx(-100.0)
     meta = records.load_metadata(tree["lib"], key)
     assert meta["dft"]["charge"] == 0 and meta["dft"]["multiplicity"] == 1
+    assert meta["dft"]["pruning"] == {"energy_window_kcal_mol": 5.0}
     assert meta["dft"]["compound_steps"]["optimization"]["extra_basis"] == "Ni def2-tzvp"
+    assert "conf_search" not in meta["dft"]["compound_steps"]
     assert meta["dft"]["level_of_theory"]["extra_basis"] == {"Ni": "def2-tzvp"}
     assert meta["ensemble"]["params_sha256"] and meta["ensemble"]["lot"] == LOT and meta["ensemble"]["replicate"] == 1
     assert meta["conformers"]["conf_3"]["status"] == "skipped_energy_filter"
@@ -211,6 +304,19 @@ def test_prepare_splits_filters_and_submits(tree, fake_sbatch):
     # the registry now carries the ensemble provenance
     reg = records.load_registry(tree["lib"])[key]
     assert reg["source"]["method"] == "etkdg" and reg["source"]["params_sha256"] == meta["ensemble"]["params_sha256"]
+
+
+def test_no_pruning_keeps_every_conformer(tree, fake_sbatch):
+    confs = [Conformer([[0.0, 0.0, 0.0]], e) for e in (-1.0, -1.0 + 10 / HARTREE_TO_KCAL, None)]
+    assert [s for _, _, _, s in energy_window(confs, None)] == ["prepared", "prepared", "prepared"]
+    assert [s for _, _, _, s in energy_window(confs, 5.0)] == ["prepared", "skipped_energy_filter", "skipped_no_energy"]
+    _rewrite(tree, pruning=DELETE)
+    cfg = _frozen(tree, fake_sbatch)
+    key = tree["keys"]["CCO"]
+    assert prepare_molecule(cfg, key, "CCO") == "prepared"
+    meta = records.load_metadata(tree["lib"], key)
+    assert meta["orca_stage"]["n_to_run"] == 3 and meta["dft"]["pruning"] == {"energy_window_kcal_mol": None}
+    assert (tree["lib"] / key / "conf_3" / "input.xyz").exists()
 
 
 def test_prepare_without_ensemble(tree, fake_sbatch):
@@ -260,7 +366,7 @@ def test_orca_outcome_requires_banner(tmp_path):
                                                           "orca_terminated_normally": None, "orca_run_time": None}
 
 
-def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch):
+def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch, capsys):
     cfg = _frozen(tree, fake_sbatch)
     key = tree["keys"]["CCO"]
     prepare_molecule(cfg, key, "CCO")
@@ -280,11 +386,17 @@ def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch):
 
     df = status_table(cfg)
     row = df.set_index("inchikey").loc[key]
-    assert row["state"] == "incomplete" and row["completed"] == 1 and row["failed"] == 1 and row["skipped_energy_filter"] == 1
-    assert row["search"] == "done" and row["post_opt"] == "done" and row["n_conf"] == ""   # fake records carry no count
+    assert row["state"] == "incomplete"
+    assert [row[c] for c in ("transformation", "pre_refinement", "search", "post_opt", "pruning", "dft")] == \
+           ["done", "n/a", "done", "done", "done", "failed"]
+    assert row["n_conf"] == 3 and row["n_dft"] == "2/3" and row["dft_done"] == "1/2"
     benzene = df.set_index("inchikey").loc[tree["keys"]["c1ccccc1"]]
-    assert benzene["state"] == "in_progress" and benzene["search"] == "missing" and benzene["post_opt"] == "missing"
-    assert benzene["reason"] == "ensemble: search missing, post-optimisation missing"
+    assert benzene["state"] == "in_progress"
+    assert [benzene[c] for c in ("pre_refinement", "search", "post_opt", "pruning", "dft")] == ["n/a", "-", "-", "queued", "queued"]
+    assert benzene["reason"] == "ensemble: preopt n/a, search -, post_opt -"
+    assert main(["status", str(cfg.path)]) == 0
+    out = capsys.readouterr().out
+    assert "transf preopt search post_opt pruning" in " ".join(out.split()) and "needs a look" in out
 
     # resubmission: the failed conformer is prepared again, the completed one is left alone
     assert prepare_molecule(cfg, key, "CCO") == "prepared"
@@ -293,6 +405,7 @@ def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch):
     assert meta["conformers"]["conf_2"]["status"] == "submitted" and meta["conformers"]["conf_2"]["resubmitted_from"] == "failed"
     assert run_orca_conformer(cfg, key, "conf_2", orca_cmd=str(good)) == "completed"
     assert records.molecule_state(records.load_metadata(tree["lib"], key))[0] == "complete"
+    assert status_table(cfg).set_index("inchikey").loc[key]["dft"] == "done"
 
 
 def test_registry_keeps_first_smiles_and_aliases(tmp_path, capsys):
@@ -316,132 +429,99 @@ def test_molecule_state_rules():
                                                          "conf_2": {"status": "skipped_energy_filter"}}})[0] == "complete"
 
 
-# --------------------------------------------------------------------------- one-file config (inline bceg)
-def _inline_cfg(tree, **overrides) -> Path:
-    bceg_block = {
-        "transformations": {"none": {"multiplicity": 1}},
-        "methods": {"etkdg": {"searcher": "rdkit_etkdg", "params": {"n_confs": 3}},
-                    "other": {"searcher": "rdkit_etkdg", "params": {"n_confs": 50}}},
-        "post_optimization": {"refiner": "uma", "params": {"model": LOT}},
-        "slurm": {"cpu": {"time": "01:00:00"}},
-    }
-    raw = {
-        "library_dir": "LIB_inline",
-        "source": {"kind": "bceg", "config": bceg_block, "transformation": "none", "method": "etkdg",
-                   "smiles": "ligands.txt", "run_bceg": False, "results_dir": "DATA_bceg"},
-        "dft": {"ewin_kcal_mol": 5.0, "level_of_theory": LEVEL_OF_THEORY},
-        "slurm": {"setup": ["echo setup"], "orca": {"time": "01:00:00", "mem_per_cpu": "4G", "ntasks": 2}},
-        "condense": False,
-    }
-    for k, v in overrides.items():
-        raw[k] = v
-    path = tree["root"] / "lib_inline.yaml"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    return path
+# --------------------------------------------------------------------------- one status per stage
+def _progress(search=None, refine=None, transformation="done", has_preopt=True, has_refiner=True):
+    return {"transformation": transformation, "error": None, "search_record": search, "refine_record": refine,
+            "has_preopt": has_preopt, "has_refiner": has_refiner, "n_conformers": None}
 
 
-def test_inline_bceg_config(tree, fake_sbatch):
-    cfg = Config.load(_inline_cfg(tree))
-    b = cfg.source["config"]
-    assert isinstance(b, dict) and b["replicates"] == 1 and b["inputs"] == str(tree["root"] / "ligands.txt")
-    assert b["slurm"]["setup"] == ["echo setup"] and b["slurm"]["cpu"] == {"time": "01:00:00"}   # setup inherited
-    assert b["transformations"]["none"]["script"] is None and cfg.source["results_dir"] == str(tree["results"])
-    compared = cfg.compared()["source"]
-    assert compared["bceg"]["method"] == {"searcher": "rdkit_etkdg", "params": {"n_confs": 3}}
-    assert compared["bceg"]["replicates"] == 1 and "other" not in str(compared) and "results_dir" not in compared
-    assert cfg.recorded()["source_paths"]["results_dir"] == str(tree["results"])
-    # the inline config drives the source like a file would
-    source = make_source(cfg.source)
-    ens = source.ensemble(InputMolecule.from_smiles("CCO"))
-    assert ens.done and len(ens.conformers) == 3 and ens.charge == 0
-    # full submit on it, then prepare straight from the frozen copy
-    assert main(["submit", str(cfg.path)]) == 0
-    frozen = Config.load(next((tree["root"] / "LIB_inline" / "_jobs").iterdir()) / "config.yaml")
-    assert isinstance(frozen.source["config"], dict)
-    assert prepare_molecule(frozen, tree["keys"]["CCO"], "CCO") == "prepared"
+STAGES = ("transformation", "pre_refinement", "search", "post_opt", "pruning", "dft")
 
 
-def test_inline_defaults_results_dir_into_library(tree):
-    path = _inline_cfg(tree)
-    raw = yaml.safe_load(path.read_text())
-    del raw["source"]["results_dir"]
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    cfg = Config.load(path)
-    assert cfg.source["results_dir"] == str(tree["root"] / "LIB_inline" / "ensembles")
-    assert cfg.source["config"]["results_dir"] == cfg.source["results_dir"]
+def _stages(progress, meta=None, orca_on=True):
+    return tuple(stage_statuses(progress, meta or {}, orca_on)[k] for k in STAGES)
 
 
-def test_unrelated_bceg_method_may_change_but_selected_one_may_not(tree, fake_sbatch, capsys):
-    path = _inline_cfg(tree)
-    assert main(["submit", str(path)]) == 0
-    raw = yaml.safe_load(path.read_text())
-    raw["source"]["config"]["methods"]["other"]["params"]["n_confs"] = 7      # not the method this library refines
-    raw["source"]["config"]["slurm"]["cpu"]["time"] = "48:00:00"               # bceg resources: recorded only
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    assert main(["submit", str(path), "--dry-run"]) == 0
-    raw["source"]["config"]["methods"]["etkdg"]["params"]["n_confs"] = 4       # the refined ensemble's parameters
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    assert main(["submit", str(path), "--dry-run"]) == 2
-    assert "source.bceg.method.params.n_confs: 3 -> 4" in capsys.readouterr().err
+def test_stage_statuses_rules():
+    queued = {"ensemble_stage": {"status": "queued"}}
+    assert _stages(_progress()) == ("done", "-", "-", "-", "-", "-")
+    assert _stages(_progress(), queued) == ("done", "queued", "queued", "queued", "-", "-")
+    assert _stages(_progress(), queued | {"orca_stage": {"status": "queued"}}) == ("done", "queued", "queued", "queued", "queued", "queued")
+    assert _stages(_progress({"status": "running", "phase": "pre_refinement"})) == ("done", "running", "queued", "queued", "-", "-")
+    assert _stages(_progress({"status": "running", "phase": "search"})) == ("done", "done", "running", "queued", "-", "-")
+    assert _stages(_progress({"status": "running"})) == ("done", "done", "running", "queued", "-", "-")        # legacy record
+    assert _stages(_progress({"status": "done"})) == ("done", "done", "done", "-", "-", "-")
+    assert _stages(_progress({"status": "done"}, {"status": "running"})) == ("done", "done", "done", "running", "-", "-")
+    assert _stages(_progress({"status": "done"}, {"status": "done"})) == ("done", "done", "done", "done", "-", "-")
+    assert _stages(_progress({"status": "failed", "phase": "pre_refinement"})) == ("done", "failed", "-", "-", "-", "-")
+    assert _stages(_progress({"status": "failed", "phase": "search"})) == ("done", "done", "failed", "-", "-", "-")
+    assert _stages(_progress({"status": "failed"})) == ("done", "failed", "failed", "-", "-", "-")                # legacy record
+    assert _stages(_progress({"status": "done"}, {"status": "failed"})) == ("done", "done", "done", "failed", "-", "-")
+    assert _stages(_progress({"status": "running", "phase": "search"}, has_preopt=False)) == ("done", "n/a", "running", "queued", "-", "-")
+    assert _stages(_progress({"status": "done"}, has_refiner=False)) == ("done", "done", "done", "n/a", "-", "-")
+    assert _stages(_progress(transformation="not_applicable"), queued) == ("n/a",) + ("n/a",) * 5
+    assert _stages(_progress(transformation="failed"))[0] == "failed"
+    done = _progress({"status": "done"}, {"status": "done"})
+    assert _stages(done, {"orca_stage": {"status": "prepared"}}) == ("done", "done", "done", "done", "done", "queued")
+    assert _stages(done, {"orca_stage": {"status": "prepared"}, "conformers": {"a": {"status": "submitted"}}})[5] == "queued"
+    assert _stages(done, {"orca_stage": {"status": "prepared"}, "conformers": {"a": {"status": "running"}, "b": {"status": "submitted"}}})[5] == "running"
+    assert _stages(done, {"orca_stage": {"status": "prepared"}, "conformers": {"a": {"status": "completed"}, "b": {"status": "skipped_energy_filter"}}})[5] == "done"
+    assert _stages(done, {"orca_stage": {"status": "prepared"}, "conformers": {"a": {"status": "completed"}, "b": {"status": "timeout"}}})[5] == "failed"
+    assert _stages(done, {"orca_stage": {"status": "ensemble_changed"}})[4:] == ("failed", "-")
+    assert _stages(done, {"orca_stage": {"status": "prepared"}}, orca_on=False)[4:] == ("off", "off")
 
 
 # --------------------------------------------------------------------------- guards before anything is written
 def test_placeholder_is_refused_at_load(tree, capsys):
-    path = _inline_cfg(tree)
-    raw = yaml.safe_load(path.read_text())
-    raw["source"]["config"]["slurm"]["cpu"]["partition"] = "CHANGE_ME"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    with pytest.raises(ValueError, match="source.config.slurm.cpu.partition"):
-        Config.load(path)
-    assert main(["submit", str(path), "--dry-run"]) == 2
-    assert "CONFIG ERROR" in capsys.readouterr().err and not (tree["root"] / "LIB_inline" / "params.json").exists()
+    raw = _lib_cfg()
+    raw["slurm"]["ensembles"]["cpu"]["partition"] = "CHANGE_ME"
+    tree["cfg"].write_text(yaml.safe_dump(raw, sort_keys=False))
+    with pytest.raises(ValueError, match="slurm.ensembles.cpu.partition"):
+        Config.load(tree["cfg"])
+    assert main(["submit", str(tree["cfg"]), "--dry-run"]) == 2
+    assert "CONFIG ERROR" in capsys.readouterr().err and not (tree["lib"] / "params.json").exists()
 
 
 def test_unknown_partition_is_refused_before_writing(tree, monkeypatch, capsys):
-    path = _inline_cfg(tree)
-    raw = yaml.safe_load(path.read_text())
-    raw["source"]["config"]["slurm"]["cpu"]["partition"] = "expansion"
+    raw = _lib_cfg()
+    raw["slurm"]["ensembles"]["cpu"]["partition"] = "expansion"
     raw["slurm"]["orca"]["partition"] = "nowhere"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    raw["conformer_search"]["slurm"] = {"partition": "gone"}
+    tree["cfg"].write_text(yaml.safe_dump(raw, sort_keys=False))
     monkeypatch.setattr(slurm, "known_partitions", lambda: {"expansion", "gpu"})
-    assert main(["submit", str(path)]) == 2
+    assert main(["submit", str(tree["cfg"])]) == 2
     err = capsys.readouterr().err
     assert "slurm.orca.partition: partition 'nowhere' does not exist" in err
-    assert "source.config.slurm.cpu.partition" not in err          # 'expansion' exists, so it is not reported
-    assert not (tree["root"] / "LIB_inline" / "params.json").exists() and not (tree["root"] / "LIB_inline" / "_jobs").exists()
+    assert "conformer_search.slurm.partition: partition 'gone'" in err
+    assert "slurm.ensembles.cpu.partition" not in err          # 'expansion' exists, so it is not reported
+    assert not (tree["lib"] / "params.json").exists() and not (tree["lib"] / "_jobs").exists()
     assert slurm.known_partitions() == {"expansion", "gpu"}
 
 
 def test_bceg_sbatch_failure_is_reported_cleanly(tree, monkeypatch, capsys):
-    path = _inline_cfg(tree)
-    raw = yaml.safe_load(path.read_text())
-    raw["source"]["run_bceg"] = True
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    from desc_utils.submit.source import BcegSource
+    path = _rewrite(tree, run_bceg=True)
 
     def boom(self, jobdir, no_sbatch=False, force=False):
         raise RuntimeError("bceg submit.sh failed (1): sbatch: error: invalid partition specified: x")
 
-    monkeypatch.setattr(BcegSource, "submit", boom)
-    monkeypatch.setattr(BcegSource, "pending_tasks", lambda self, force=False: (["one task"], []))  # the fake tree's params.json is not bceg's
+    monkeypatch.setattr(Ensembles, "submit", boom)
+    monkeypatch.setattr(Ensembles, "pending_tasks", lambda self, force=False: (["one task"], []))  # the fake tree's params.json is not bceg's
     assert main(["submit", str(path)]) == 1
     err = capsys.readouterr().err
     assert "bceg submission failed" in err and "Nothing was queued" in err
 
 
 def test_queued_molecule_is_requeued_when_bceg_runs_again_for_it(tree, fake_sbatch, monkeypatch, capsys):
-    path = _inline_cfg(tree)
-    raw = yaml.safe_load(path.read_text())
-    raw["source"]["run_bceg"] = True
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    from desc_utils.submit.source import BcegSource
-
+    path = _rewrite(tree, run_bceg=True)
     key = tree["keys"]["CCO"]
     # first submission: everything queued behind bceg
-    monkeypatch.setattr(BcegSource, "pending_tasks", lambda self, force=False: ([type("T", (), {"inchikey": key})()], []))
-    monkeypatch.setattr(BcegSource, "submit", lambda self, jobdir, no_sbatch=False, force=False: ["42"])
+    monkeypatch.setattr(Ensembles, "pending_tasks", lambda self, force=False: ([type("T", (), {"inchikey": key})()], []))
+    monkeypatch.setattr(Ensembles, "submit", lambda self, jobdir, no_sbatch=False, force=False: ["42"])
     assert main(["submit", str(path)]) == 0
-    assert records.load_metadata(tree["root"] / "LIB_inline", key)["orca_stage"]["status"] == "queued"
+    meta = records.load_metadata(tree["lib"], key)
+    assert meta["orca_stage"]["status"] == "queued"
+    assert meta["ensemble_stage"]["status"] == "queued" and meta["ensemble_stage"]["bceg_job_ids"] == ["42"]
+    assert "ensemble_stage" not in records.load_metadata(tree["lib"], tree["keys"]["CC(C)O"])   # bceg had nothing for it
     # bceg has work for CCO again (its refinement failed and is resubmitted): CCO is re-queued, the others stay skipped
     assert main(["submit", str(path)]) == 0
     out = capsys.readouterr().out
@@ -450,26 +530,39 @@ def test_queued_molecule_is_requeued_when_bceg_runs_again_for_it(tree, fake_sbat
     tasks = [json.loads(l) for l in (fake_sbatch[-1]["script"].parent / "prepare.jsonl").read_text().splitlines()]
     assert [t["inchikey"] for t in tasks] == [key]
     # nothing pending in bceg: queued molecules are skipped as before
-    monkeypatch.setattr(BcegSource, "pending_tasks", lambda self, force=False: ([], []))
+    monkeypatch.setattr(Ensembles, "pending_tasks", lambda self, force=False: ([], []))
     assert main(["submit", str(path), "--dry-run"]) == 0
     assert "0 molecule(s) to prepare" in capsys.readouterr().out
 
 
+def test_orca_off_marks_the_ensemble_queued(tree, fake_sbatch, monkeypatch):
+    path = _rewrite(tree, run_bceg=True, orca="off")
+    key = tree["keys"]["c1ccccc1"]
+    monkeypatch.setattr(Ensembles, "pending_tasks", lambda self, force=False: ([type("T", (), {"inchikey": key})()], []))
+    monkeypatch.setattr(Ensembles, "submit", lambda self, jobdir, no_sbatch=False, force=False: ["77"])
+    assert main(["submit", str(path)]) == 0
+    assert fake_sbatch == []                                               # no prepare array with orca off
+    meta = records.load_metadata(tree["lib"], key)
+    assert meta["ensemble_stage"]["bceg_job_ids"] == ["77"] and "orca_stage" not in meta
+    assert records.load_registry(tree["lib"])[key]["name"] == "benzene"
+    row = status_table(Config.load(path)).set_index("inchikey").loc[key]
+    assert [row[c] for c in ("pre_refinement", "search", "post_opt", "pruning", "dft")] == ["n/a", "queued", "queued", "off", "off"]
+
+
 def test_running_bceg_task_is_not_resubmitted(tree):
     """A replicate whose bceg record says running is left alone by pending_tasks (unless force)."""
-    cfg = Config.load(_inline_cfg(tree))
-    raw = yaml.safe_load(cfg.path.read_text())
-    raw["source"]["run_bceg"] = True
-    cfg.path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    cfg = Config.load(cfg.path)
-    source = make_source(cfg.source)
+    cfg = Config.load(_rewrite(tree, run_bceg=True))
+    source = Ensembles(cfg)
     key = tree["keys"]["c1ccccc1"]   # benzene: no ensemble yet -> a pending chain task
     md = method_dir(tree["results"], "none", key, "etkdg")
     md.path.mkdir(parents=True, exist_ok=True)
     before, _ = source.pending_tasks()
     assert key in {t.inchikey for t in before}
-    write_record(md.run_record(1), {"status": "running"})
+    write_record(md.run_record(1), {"status": "running", "phase": "search"})
     after, _ = source.pending_tasks()
     assert key not in {t.inchikey for t in after} and len(after) == len(before) - 1
     forced, _ = source.pending_tasks(force=True)
     assert key in {t.inchikey for t in forced}
+    # and status shows it running
+    row = status_table(cfg).set_index("inchikey").loc[key]
+    assert row["search"] == "running" and row["post_opt"] == "queued"

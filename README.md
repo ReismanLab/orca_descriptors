@@ -103,11 +103,12 @@ that clone, so `git pull` there updates everyone). LoQI is part of that environm
 
 ### 3. Cluster: submit the jobs and check them
 
-One library is one **library directory** `$LIB` and one config file. One command runs, for every SMILES of
-the input list, the conformer ensemble (`bceg`: transformation, conformer search, UMA post-optimisation)
-and then one ORCA compound job per conformer within the energy window. Everything you choose is in that
-one YAML; everything the run discovers is in per-molecule records, and the records decide what is left
-to do. The code is never copied: jobs run from the shared clone, whose git commit is recorded.
+One library is one **library directory** `$LIB` and one config file with one block per stage. One
+command runs, for every SMILES of the input list, the six stages: `transformation`, `pre_refinement`,
+`conformer_search` and `post_optimization` (the conformer ensemble, run by `bceg`), `pruning` (which
+conformers go on) and `dft` (one ORCA compound job per conformer). Everything you choose is in that one
+YAML; everything the run discovers is in per-molecule records, and the records decide what is left to
+do. The code is never copied: jobs run from the shared clone, whose git commit is recorded.
 
 **3.1 Write the config.** Copy the example next to your SMILES list and edit it:
 
@@ -118,22 +119,26 @@ nano ligands.txt                  # one SMILES per line, optional name after it;
 nano <LIB>.yaml                   # table below; relative paths are relative to the file
 ```
 
-| Block | Content |
-|---|---|
-| `library_dir` | `$LIB`, absolute |
-| `source` | `smiles` (the input list), `transformation` and `method` to refine, `lot` (`null` = the post-optimisation level), `run_bceg` (`false`: the ensembles exist, do not call bceg), `results_dir` (default `$LIB/ensembles`), and `config`: the bceg settings, see the next row |
-| `source.config` | the conformer-ensemble settings ([docs/bceg_README.md](docs/bceg_README.md), [docs/bceg_SUBMITTING.md](docs/bceg_SUBMITTING.md)): `replicates` (1), `transformations` (`none`, `NiH2`, `NiF2`, or your script), `methods` (name, searcher and parameters: `crest_gfn2`, `goat_xtb`, `molassembler`, `rdkit_etkdg`, `loqi`), `post_optimization` (UMA model, `fmax`), and bceg's `slurm` block (partitions, resources; its `setup` defaults to the library's). The method name is the parameter set: every parameter is logged in the method folder's `params.json` with the defaults filled in, and changing one for an existing method is refused, you rename the method. A path to a separate bceg YAML is accepted here instead of the block |
-| `orca` | `on`, or `off` to stop after the ensembles; the same command later with `on` refines them |
-| `dft` | `ewin_kcal_mol` (conformers within this window of the ensemble minimum get an ORCA job); `level_of_theory`: which compound steps run (`opt_geom`, `freq_calc`, `nmr_calc`, `vertical_redox`, `conf_search`), method, basis and solvent of each (`opt_method`, `opt_solvent`, `svp_method`, `property_solvent`, `nmr_method`, `nbo_run`), `extra_basis` (`{Ni: def2-tzvp}`: full def2-TZVP on Ni in the optimization and frequency steps, `{}` for none). No charge or multiplicity: both come from the ensemble |
-| `slurm` | `setup` lines run at the start of every job (activate `gp_env`, `module load orca`, the NBO variables); `prepare` and `orca` profiles (`time`, `mem_per_cpu`, `ntasks`, `nodes`, `partition`, ...; `ntasks` becomes `%pal nprocs`, `mem_per_cpu` gives `%maxcore` at 75 %); `array_throttle` |
-| `condense` | write `conf_N/orca_condensed.json` when each ORCA job ends (step 4 done by the job) |
+Each stage document lists every option the stage covers, every parameter with its default and
+whether it is hashed, and an example block per option.
 
-The settings that define the results are written to `$LIB/params.json` by the first `submit`, and a later
-submit with other values is refused with a diff: the transformation, method and level refined, the bceg
-settings of that transformation, method and post-optimisation, and `dft`. A different level of theory is a
-different `library_dir`. `orca`, `run_bceg`, the paths, both `slurm` blocks and `condense` are recorded but
-may change freely, and so may the other methods of the `source.config` block. The shipped example carries
-the level of theory of the LNiH2 library. The compound job's structure is
+| Block | Stage | Content |
+|---|---|---|
+| `library_dir`, `smiles`, `ensembles_dir`, `run_bceg` | | `$LIB` (absolute), the input list, where the ensembles go (default `$LIB/ensembles`), and `run_bceg: false` when they exist already |
+| `transformation` | 1, [docs/stages/1_transformation.md](docs/stages/1_transformation.md) | the SMILES as is (`none`) or a script that turns it into the structure computed (`ni_x2.py` with `params: {x: H}` gives L-NiH2; your own script works too); `name` is the depth-1 folder of the ensembles; `charge` and `multiplicity` apply to every later stage |
+| `pre_refinement` | 2, [docs/stages/2_pre_refinement.md](docs/stages/2_pre_refinement.md) | the pre-optimisation of the start geometry handed to CREST, GOAT or molassembler: `xtb` (default, `gfn`, `level`), `uma` (model, `fmax`, ...) or `none` (required for `rdkit_etkdg` and `loqi`); the embedding checks (`max_metal_ligand_distance`, `max_attempts`) |
+| `conformer_search` | 3, [docs/stages/3_conformer_search.md](docs/stages/3_conformer_search.md) | `name` (the method folder; **the name is the parameter set**: every parameter is logged with its defaults in the folder's `params.json`, and changing one under an existing name is refused, you rename it), `searcher` (`crest`, `goat`, `molassembler`, `rdkit_etkdg`, `loqi`), its `params`, and `slurm` overrides for the step |
+| `post_optimization` | 4, [docs/stages/4_post_optimization.md](docs/stages/4_post_optimization.md) | every conformer re-optimised with `uma` (`model`, `fmax`, `max_steps`, `device`), or `null` to send the search output to ORCA as it is |
+| `pruning` | 5, [docs/stages/5_pruning.md](docs/stages/5_pruning.md) | `energy_window_kcal_mol`: `null` (default) sends every conformer to ORCA, a number keeps those within the window of the ensemble minimum on the post-optimisation energies |
+| `orca`, `dft` | 6, [docs/stages/6_dft.md](docs/stages/6_dft.md) | `orca: off` stops after the ensembles (the same command later with `on` refines them); `dft.level_of_theory`: which compound steps run (`opt_geom`, `freq_calc`, `nmr_calc`, `vertical_redox`), method, basis and solvent of each (`opt_method`, `opt_solvent`, `svp_method`, `property_solvent`, `nmr_method`, `nbo_run`), `extra_basis` (`{Ni: def2-tzvp}`). No charge or multiplicity: both come from the ensemble |
+| `slurm` | | `setup` lines run at the start of every job (activate `gp_env`, `module load orca`, the NBO variables); `ensembles` (bceg's jobs: `mode`, `tasks_per_job`, `cpu` and `gpu` profiles); `prepare` and `orca` profiles (`time`, `mem_per_cpu`, `ntasks`, `nodes`, `partition`, ...; `ntasks` becomes `%pal nprocs`, `mem_per_cpu` gives `%maxcore` at 75 %); `array_throttle` |
+| `condense` | | write `conf_N/orca_condensed.json` when each ORCA job ends (step 4 done by the job) |
+
+The six stage blocks define the results: they are written to `$LIB/params.json` by the first `submit`
+(with the searcher's and refiner's defaults filled in), and a later submit with other values is refused
+with a diff. A different choice in any of them is a different `library_dir`. `orca`, `run_bceg`, the
+paths, `slurm` and `condense` are recorded but may change freely. The shipped example carries the level
+of theory of the LNiH2 library. The compound job's structure is
 [desc_utils/submit/calcParam.inp.tmpl](desc_utils/submit/calcParam.inp.tmpl); give `dft.calc_param_template`
 your own copy only to change which steps exist.
 
@@ -145,13 +150,14 @@ orcadesc submit <LIB>.yaml --dry-run     # what would run: molecules per state, 
 orcadesc submit <LIB>.yaml               # or: python -m desc_utils.submit submit <LIB>.yaml
 ```
 
-`submit` writes `$LIB/params.json` (first time), freezes the resolved config, the template and the git
-commit under `$LIB/_jobs/<timestamp>/`, runs bceg's submission for the input list (its job arrays, scripts
-and logs land under `_jobs/<timestamp>/bceg/`), then queues a `prepare` array, one element per molecule,
-`afterany` the bceg jobs. Each prepare element reads the molecule's ensemble `raw_1_<lot>.xyz` (replicate 1
-only), checks its `params.json` hash, splits it into `$LIB/<InChIKey>/conf_N/input.xyz` inside the energy
-window, renders `calcParam.inp` with the ensemble's charge and multiplicity, writes the record, and submits
-that molecule's ORCA array, one element per conformer. Each ORCA element records its outcome and condenses.
+`submit` prints the pipeline on one line, writes `$LIB/params.json` (first time), freezes the resolved
+config, the template and the git commit under `$LIB/_jobs/<timestamp>/`, runs bceg's submission for the
+input list (stages 1 to 4; its job arrays, scripts and logs land under `_jobs/<timestamp>/bceg/`), then
+queues a `prepare` array, one element per molecule, `afterany` the bceg jobs. Each prepare element reads
+the molecule's ensemble `raw_1_<lot>.xyz` (replicate 1 only), checks its `params.json` hash, prunes it
+(stage 5), splits it into `$LIB/<InChIKey>/conf_N/input.xyz`, renders `calcParam.inp` with the ensemble's
+charge and multiplicity, writes the record, and submits that molecule's ORCA array, one element per
+conformer (stage 6). Each ORCA element records its outcome and condenses.
 
 Running the same command again is how a library grows or recovers: molecules recorded `complete` or
 `in_progress` are skipped, the others are prepared again, and inside a molecule a `completed` conformer is
@@ -162,37 +168,49 @@ with other parameters is refused for a library built on the old one (`ensemble_c
 **3.3 Check the jobs.**
 
 ```bash
-orcadesc status <LIB>.yaml                                                                       # per molecule: state, ORCA stage, conformer counts
+orcadesc status <LIB>.yaml                                                                       # per molecule: one status per stage, conformer counts
 squeue -u $USER                                                                                  # what SLURM really holds
 python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/check_jobs.py $LIB      # per conformer, from squeue and the ORCA outputs
 python3 -m json.tool $LIB/<InChIKey>/metadata.json                                               # the full record of one molecule
 less $LIB/_jobs/<timestamp>/slurm_logs/orca_prepare_<jobid>_<index>.out                          # a prepare log; orca_<InChIKey>_... for ORCA
 ```
 
+`status` prints one row per molecule with one column per stage (`transf`, `preopt`, `search`,
+`post_opt`, `pruning`, `dft`), then `n_conf` (ensemble size), `n_dft` (conformers kept / total),
+`dft_done` (completed / kept) and the molecule `state`, followed by per-stage counts and a `needs a
+look` list.
+
+| Stage value | Meaning |
+|---|---|
+| `queued` | the job that runs this stage is submitted (bceg's for 2-4, the prepare or ORCA array for 5-6) and has not reached it |
+| `running` | the stage is running now (for 2 and 3, from the `phase` the bceg task records; for 6, any conformer `running`) |
+| `done` | finished; for `dft`, every kept conformer `completed` |
+| `failed` | the stage failed (error in `reason`); for `dft`, a conformer `failed`, `timeout` or never submitted; for `pruning`, the ensemble changed under the library |
+| `n/a` | the pipeline has no such step for this molecule (no pre-refinement for `rdkit_etkdg`, no post-optimisation, a transformation that does not apply: every later stage is `n/a`) |
+| `-` | nothing recorded and nothing queued |
+| `off` | `pruning` and `dft` with `orca: off` |
+
 | Molecule state | Meaning |
 |---|---|
 | `absent` | nothing recorded yet |
 | `in_progress` | prepare queued, or ORCA jobs `submitted` or `running` |
 | `incomplete` | ensemble missing, failed or not applicable, or a conformer `failed`, `timeout`, or never submitted |
-| `complete` | every conformer `completed` or skipped by the energy filter |
+| `complete` | every conformer `completed` or pruned |
 
-The `search` and `post_opt` columns are bceg's own records for the ensemble (`missing`, `running`, `done`,
-`failed`, `not_applicable`) and `n_conf` the size of the ensemble, so a molecule waiting for its ensemble
-shows `in_progress` / `queued` with the search still `running`.
-The ORCA stage of a molecule (`orca_stage.status`) is `queued`, `prepared`, `ensemble_missing` (bceg not
-done, or failed; the next `submit` picks it up), `not_applicable` (the transformation does not apply) or
-`ensemble_changed`. A conformer is `completed` only if ORCA exited 0 *and* printed `ORCA TERMINATED
-NORMALLY`; a walltime kill is recorded as `timeout`. States come from the records, not from `squeue`:
-`check_jobs.py` shows whether anything is really queued (`QUEUED`, `RUNNING`, `OK`, `FAILED` with the
-reason, `CHECK`, `NOT STARTED`).
+A conformer is `completed` only if ORCA exited 0 *and* printed `ORCA TERMINATED NORMALLY`; a walltime
+kill is recorded as `timeout`. States come from the records, not from `squeue`: `check_jobs.py` shows
+whether anything is really queued (`QUEUED`, `RUNNING`, `OK`, `FAILED` with the reason, `CHECK`,
+`NOT STARTED`).
 
-**3.4 What is recorded, and how to reproduce a library.** `$LIB/params.json` holds the compared settings;
-`_jobs/<timestamp>/` the frozen config, template, bceg config, task lists and scripts of each submission;
+**3.4 What is recorded, and how to reproduce a library.** `$LIB/params.json` holds the six stage blocks as
+run; `_jobs/<timestamp>/` the frozen config, template, bceg config, task lists and scripts of each submission;
 `molecule_registry.json` maps every InChIKey folder to the SMILES as submitted, its line in the list, the
 canonical SMILES and the bceg method folder with its hyper-parameter hashes (an InChIKey is a hash and
-cannot be turned back into a molecule). Per molecule, `metadata.json` records the ensemble (bceg directory,
-method, level, replicate, `params.json` hashes, program versions), the clone and git commit, the DFT set-up
-(charge, multiplicity, energy window, template, MD5 of the rendered input, `nprocs`, `maxcore`, the
+cannot be turned back into a molecule). Per molecule, `metadata.json` records when its ensemble was queued
+(`ensemble_stage`), the ensemble (bceg directory, method, level, replicate, `params.json` hashes, program
+versions; bceg's own `run_1[_<lot>].json` in the method folder has the phase, host, wall time and errors),
+the clone and git commit, the DFT set-up
+(charge, multiplicity, `pruning`, template, MD5 of the rendered input, `nprocs`, `maxcore`, the
 `level_of_theory` values and `compound_steps`: method, solvent, extra basis, charge and multiplicity of
 every compound step as it ran) and one record per conformer (energy above the minimum, SLURM ids, times,
 exit code, termination banner, run time, condense result). To reproduce a library: copy its YAML file, and
@@ -341,8 +359,9 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | Symptom | Cause | Fix |
 |---|---|---|
 | `check_jobs.py` reports `FAILED ... killed by SLURM: time limit` or `out of memory`, or `status` shows `timeout` / `failed` | the SLURM allocation was too small for this conformer | raise `slurm.orca.time` or `mem_per_cpu` in `<LIB>.yaml` (recorded, not compared) and run `orcadesc submit` again: only the failed conformers are resubmitted |
-| `orcadesc submit` prints `REFUSED` with a diff of `source` or `dft` | a result-defining setting changed since the library was created | restore it, or put the new settings in a new `library_dir` |
-| `orcadesc submit` prints `bceg PARAMS MISMATCH` | a parameter of an existing bceg method changed in `source.config` | rename the method (and point `source.method` at it) or restore the parameter |
+| `orcadesc submit` prints `REFUSED` with a diff of a stage block | a result-defining setting changed since the library was created (also after updating the code: older libraries have the previous layout of `params.json`) | restore it, or put the new settings in a new `library_dir`; for a test library, delete `$LIB/params.json` |
+| `orcadesc submit` prints `bceg PARAMS MISMATCH` | a parameter of `conformer_search`, `pre_refinement`, `transformation` or `post_optimization` changed while the method folder exists | give `conformer_search.name` a new value or restore the parameter |
+| `orcadesc submit` prints `CONFIG ERROR ... unknown parameter(s)` | a misspelt or unknown key in a stage block | the stage document lists the keys: [docs/stages](docs/stages) |
 | `status` says `in_progress` but `squeue` shows nothing | a job died (walltime, node failure) before writing its end | `orcadesc submit <LIB>.yaml --force` |
 | `status` says `ensemble_missing` after the bceg jobs finished | bceg failed for that molecule; its `run_1*.json` in the method folder holds the error | fix the cause, run `orcadesc submit` again (bceg reruns only the failed replicate) |
 | a prepare log ends with `orca not found on PATH` or an ORCA job's `calcParam.out` is empty | the `slurm.setup` lines do not load the ORCA module, or NBO variables are missing | add `module load orca/6.1.0` (and the `NBOEXE` / `GENEXE` exports) to `slurm.setup`, resubmit |
@@ -376,9 +395,9 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions); `submit/` (the ORCA stage of step 3, the `orcadesc` command: `config.py`, `source.py`, `template.py` and `calcParam.inp.tmpl`, `records.py`, `slurm.py`, `tasks.py`, `status.py`). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
 | [bceg](bceg) | Conformer ensembles (imported from [ReismanLab/B-CEG-MCD](https://github.com/ReismanLab/B-CEG-MCD) with its history): transformations (`transforms_builtin/ni_x2.py`), searchers (`search/`: CREST, GOAT, molassembler, RDKit ETKDG, LoQI), UMA post-optimisation (`refine/`), hyper-parameter logs (`provenance.py`), SLURM arrays (`slurm.py`), the `bceg` command. Its original documents are under [docs](docs). |
-| [configs](configs) | `orca_library_example.yaml`: one library in one file, ensembles and ORCA (LNiH2 level of theory); copy it next to your SMILES list (step 3). Its `source.config` block is also a complete config for the standalone `bceg` command. |
+| [configs](configs) | `orca_library_example.yaml`: one library in one file, one block per stage (LNiH2 level of theory); copy it next to your SMILES list (step 3). |
 | [inputs](inputs) | Example SMILES list. |
-| [docs](docs) | bceg's README, SUBMITTING and PLAN as imported. [PLAN.md](PLAN.md) at the root is this repository's plan for the merger. |
+| [docs](docs) | `stages/`: one reference per stage of the library config (options, parameters, examples). bceg's README, SUBMITTING and PLAN as imported (the standalone `bceg` command keeps its own config format). [PLAN.md](PLAN.md) at the root is this repository's plan for the merger. |
 | [submission_scripts_v3](submission_scripts_v3) | Legacy, replaced by step 3 and kept for the batches still running under it. The previous submission workflow, copied into every batch directory: `workflow_inputs.yaml` (every chosen setting), `submit_all_smiles.py` (one job per SMILES, skips finished ligands, checks the settings against the records), `launch_workflow.sh` (build, CREST, UMA and ORCA submission for one ligand), the stage scripts (`ligand_only_create_folder.py`, `crest.py`, `uma_opt_confs.py`, `launch_orca_all.py`), `calcParam.inp.tmpl` and `calc_param_template.py` (ORCA input rendered from the yaml), `slurm-calcParam.sh` (one ORCA job, records its outcome and condenses its output), `metadata_utils.py`, `record_step.py`, `mark_orca_done.py`, `check_inputs.py` (the `metadata.json` provenance and status record), `lookup_molecule.py` (InChIKey to submitted SMILES and RDKit molecule, from `molecule_registry.json`), `submit_aggregate.py`, `slurm-aggregate.sh` and `aggregate_metadata.py` (batch summary `<LIB>_metadata.json`: majority settings, flagged ligands). |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | Cluster tools for any library: `check_jobs.py` (queued / running / done / failed state of every ORCA job), `list_molecules.py` (InChIKey and conformer count), `slurm-condense.sh` (condense a whole library on a compute node); `calcParam.inp`, the fixed compound input of the LNiH2 library; and the older manual launcher (`launch_orca_all.py`, `slurm-calcParam.sh`), superseded by step 3. |
 | [tests](tests) | Unit tests, and regression tests against the reference CSVs in `tests/reference/` (run when the LNiH2 library is under `DATA/`). |
@@ -425,14 +444,14 @@ downstream are:
 
 | Step (`%base`) | Level of theory | Purpose | Files used by the pipeline |
 |---|---|---|---|
-| `conf_search` (optional) | GOAT / xTB | conformer search | – |
 | `optimization` | ωB97M-D4 / def2-TZVP(-f), def2-TZVP on Ni | geometry | `optimization.xyz` (geometry for morfeus, numbering) |
 | `frequency` | same as optimization | harmonic frequencies, thermochemistry | `calcParam.out` (frequencies, normal modes for DescriPyTor) |
 | `singlepoint` | M06-D4 / def2-TZVP, `NBO NPA`, `HIRSHFELD CHELPG`, `%elprop` (dipole, polarizability) | electronic descriptors | `singlepoint.property.json` (energies, charges, MOs, dipole), `calcParam.out` (NBO 7 block 1) |
 | `nmr` | M06-D4 / def2-TZVP, GIAO | shieldings | `nmr.property.json` |
 | `oxidation`, `reduction` | as `singlepoint`, vertical (N±1 electrons) on the optimized geometry | redox and Fukui descriptors | `oxidation.property.json`, `reduction.property.json`, `calcParam.out` (NBO blocks 2 and 3) |
 
-Solvent is empty by default; NBO requires the `NBOEXE`/`GENEXE` environment variables. Every file in the
+The conformer search happens before ORCA (stages 1 to 5 of the library config; the fixed LNiH2 input had
+an optional GOAT step instead). Solvent is empty by default; NBO requires the `NBOEXE`/`GENEXE` environment variables. Every file in the
 last column is read through `orca_condensed.json` once that file exists (section 1); the raw files are
 then only needed on the cluster.
 

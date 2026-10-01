@@ -11,7 +11,7 @@ from bceg.provenance import ParamsMismatch, check_or_write
 
 from desc_utils.submit import records, slurm
 from desc_utils.submit.config import Config
-from desc_utils.submit.source import make_source
+from desc_utils.submit.source import Ensembles
 from desc_utils.submit.status import print_status
 from desc_utils.submit.tasks import prepare_molecule, run_orca_conformer
 
@@ -24,7 +24,7 @@ def cmd_submit(args) -> int:
     except (ValueError, KeyError, FileNotFoundError) as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
         return 2
-    problems = slurm.check_partitions(cfg, cfg.bceg_raw())
+    problems = slurm.check_partitions(cfg)
     if problems:
         print("CONFIG ERROR:\n  " + "\n  ".join(problems), file=sys.stderr)
         return 2
@@ -39,13 +39,14 @@ def cmd_submit(args) -> int:
         print(f"REFUSED\n{exc}", file=sys.stderr)
         return 2
     print(f"library {lib} ({verdict} params.json)")
+    print("pipeline: " + pipeline_line(cfg))
 
     # 2. which molecules need work, from the records
-    source = make_source(cfg.source)
+    source = Ensembles(cfg)
     molecules = source.molecules()
     tasks: list = []
     problems: list = []
-    if cfg.source.get("run_bceg"):
+    if cfg.run_bceg:
         tasks, problems = source.pending_tasks(force=args.force)
     bceg_pending = {getattr(t, "inchikey", None) for t in tasks}
     selected, skipped = [], []
@@ -70,7 +71,7 @@ def cmd_submit(args) -> int:
         print(f"  {'new' if m['state'] == 'absent' else m['state']:>5}  {m['inchikey']}  {m['input_smiles']}"
               + (f"  ({m['reason']})" if m["state"] != "absent" else ""))
 
-    if cfg.source.get("run_bceg"):
+    if cfg.run_bceg:
         for p in problems:
             print(f"bceg PARAMS MISMATCH\n{p}", file=sys.stderr)
         if problems:
@@ -79,7 +80,7 @@ def cmd_submit(args) -> int:
     print(f"orca: {'on' if cfg.orca_on else 'off'}; {len(selected)} molecule(s) to prepare, {len(skipped)} skipped")
     if args.dry_run:
         return 0
-    if not selected and not (cfg.source.get("run_bceg") and tasks):
+    if not selected and not (cfg.run_bceg and tasks):
         print("Nothing to submit.")
         return 0
 
@@ -88,13 +89,22 @@ def cmd_submit(args) -> int:
     frozen = cfg.freeze(jobdir)
     print(f"frozen config: {frozen.path}")
     bceg_ids: list[str] = []
-    if cfg.source.get("run_bceg"):
+    if cfg.run_bceg:
         try:
             bceg_ids = source.submit(jobdir, no_sbatch=args.no_sbatch, force=args.force)
         except (RuntimeError, ParamsMismatch) as exc:
             print(f"bceg submission failed: {exc}\nNothing was queued; the ORCA stage was not submitted. "
                   f"Fix the cause and run the same command again ({jobdir} can be deleted).", file=sys.stderr)
             return 1
+        if bceg_ids:
+            # stages 1-4 are queued for these molecules: say so in their records (status reads it until
+            # bceg's own run records exist), whatever orca says
+            by_key = {m.inchikey: (i, m) for i, m in enumerate(molecules)}
+            for key in sorted(k for k in bceg_pending if k in by_key):
+                i, mol = by_key[key]
+                records.register_molecule(lib, key, {"smiles": mol.input_smiles, "smiles_line": i, "name": mol.name})
+                records.update_metadata(lib, key, {"inchikey": key, "smiles": mol.input_smiles, "ensemble_stage": {
+                    "status": "queued", "bceg_job_ids": bceg_ids, "submitted_at": records.now()}})
     if not cfg.orca_on:
         print("orca: off; ensembles only. Re-run with orca: on to refine them.")
         return 0
@@ -117,6 +127,20 @@ def cmd_submit(args) -> int:
                            "submitted_at": records.now()}})
     print(f"prepare array {job_id} ({len(selected)} molecule(s))" + (f" after bceg jobs {', '.join(bceg_ids)}" if bceg_ids else ""))
     return 0
+
+
+def pipeline_line(cfg: Config) -> str:
+    """One line naming the six stages as configured (printed by submit, kept in the logs)."""
+    pre = cfg.pre_refinement
+    pre_txt = pre["method"] if pre["method"] != "xtb" else f"xtb {pre['params']['gfn']}/{pre['params']['level']}"
+    if pre["method"] == "uma":
+        pre_txt = f"uma {pre['params'].get('model', 'uma-s-1p2')}"
+    post = cfg.post_optimization
+    post_txt = f"{post['refiner']} {cfg.lot}" if post else "none"
+    ewin = cfg.ewin
+    return (f"transformation {cfg.transformation_name} | pre_refinement {pre_txt} | conformer_search "
+            f"{cfg.method_name} ({cfg.search['searcher']}) | post_optimization {post_txt} | pruning "
+            f"{'none' if ewin is None else f'{ewin:g} kcal/mol'} | dft {'on' if cfg.orca_on else 'off'}")
 
 
 def cmd_fetch_weights(args) -> int:

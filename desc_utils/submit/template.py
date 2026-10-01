@@ -13,9 +13,9 @@ from pathlib import Path
 from string import Template
 
 # Booleans control which Compound steps run (rendered as ORCA's lowercase true/false).
-BOOL_KEYS = {"conf_search", "opt_geom", "freq_calc", "nmr_calc", "vertical_redox"}
+BOOL_KEYS = {"opt_geom", "freq_calc", "nmr_calc", "vertical_redox"}
 # Strings are method/basis/solvent/population-analysis choices.
-STRING_KEYS = {"goat_method", "opt_method", "opt_solvent", "svp_method", "property_solvent", "nmr_method", "nbo_run"}
+STRING_KEYS = {"opt_method", "opt_solvent", "svp_method", "property_solvent", "nmr_method", "nbo_run"}
 # extra_basis = {element: basis}, rendered as a %basis block in the optimization and frequency steps.
 MAP_KEYS = {"extra_basis"}
 REQUIRED_KEYS = BOOL_KEYS | STRING_KEYS
@@ -78,7 +78,8 @@ def compound_steps(lot: dict, charge: int, multiplicity: int) -> dict:
     """Level of theory of every compound step as it will actually run, keyed by the step's %base name.
 
     Recorded in metadata.json so the record says per step which method, solvent, basis overrides,
-    charge and multiplicity were used. Keywords fixed in the template (TightSCF, HIRSHFELD CHELPG,
+    charge and multiplicity were used. The conformer search is not a step here any more: the ensemble
+    (stages 1 to 5 of the library config) is the conformer search. Keywords fixed in the template (TightSCF, HIRSHFELD CHELPG,
     %elprop, ...) are covered by the MD5 of the rendered input.
     """
     lot = validate_level_of_theory(lot)
@@ -86,7 +87,6 @@ def compound_steps(lot: dict, charge: int, multiplicity: int) -> dict:
     base = {"charge": charge, "multiplicity": multiplicity}
     sp = {"method": lot["svp_method"], "solvent": lot["property_solvent"], "population_analysis": lot["nbo_run"]}
     return {
-        "conf_search": {"runs": bool(lot["conf_search"]), "method": lot["goat_method"], "solvent": "", **base},
         "optimization": {"runs": bool(lot["opt_geom"]), "method": lot["opt_method"], "solvent": lot["opt_solvent"],
                          "extra_basis": eb, **base},
         "frequency": {"runs": bool(lot["freq_calc"]), "method": lot["opt_method"], "solvent": lot["opt_solvent"],
