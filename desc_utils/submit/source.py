@@ -119,6 +119,22 @@ class BcegSource:
         return Ensemble(**base, status=DONE, xyz_path=xyz, charge=int(charge), multiplicity=int(multiplicity),
                         elements=elements, conformers=conformers, record=record)
 
+    def progress(self, mol: InputMolecule) -> dict:
+        """Where bceg stands for this molecule, from its run records: ``search`` and ``post_opt`` are one of
+        ``missing`` (no record yet), ``running``, ``done``, ``failed``, ``not_applicable``; ``n_conformers``
+        is the count of the refined (or, failing that, the raw) ensemble when it is done."""
+        md = method_dir(self.results_dir, self.transformation.name, mol.inchikey, self.method)
+        search = read_record(md.run_record(1)) or {}
+        refine = read_record(md.run_record(1, self.lot)) if self.lot else None
+        out = {"search": search.get("status", "missing"),
+               "post_opt": (refine or {}).get("status", "missing") if self.lot else "n/a",
+               "n_conformers": (refine or search).get("n_conformers") if (refine or search) else None}
+        if search.get("status") == "failed" and search.get("error"):
+            out["error"] = search["error"]
+        if refine and refine.get("status") == "failed" and refine.get("error"):
+            out["error"] = refine["error"]
+        return out
+
     # ------------------------------------------------------------------ running bceg
     def pending_tasks(self) -> tuple[list, list[str]]:
         """bceg tasks still to run for this selection, and params-mismatch messages (read-only)."""
@@ -179,6 +195,11 @@ class XyzSource:
         return Ensemble(**base, status=DONE, xyz_path=self.path, charge=int(self.source["charge"]),
                         multiplicity=int(self.source["multiplicity"]), elements=elements, conformers=conformers,
                         record=record)
+
+    def progress(self, mol: InputMolecule) -> dict:
+        exists = self.path.exists()
+        return {"search": "done" if exists else "missing", "post_opt": "n/a",
+                "n_conformers": len(read_xyz(self.path)[1]) if exists else None}
 
     def pending_tasks(self):
         return [], []

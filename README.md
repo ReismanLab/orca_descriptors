@@ -161,6 +161,9 @@ less $LIB/_jobs/<timestamp>/slurm_logs/orca_prepare_<jobid>_<index>.out         
 | `incomplete` | ensemble missing, failed or not applicable, or a conformer `failed`, `timeout`, or never submitted |
 | `complete` | every conformer `completed` or skipped by the energy filter |
 
+The `search` and `post_opt` columns are bceg's own records for the ensemble (`missing`, `running`, `done`,
+`failed`, `not_applicable`) and `n_conf` the size of the ensemble, so a molecule waiting for its ensemble
+shows `in_progress` / `queued` with the search still `running`.
 The ORCA stage of a molecule (`orca_stage.status`) is `queued`, `prepared`, `ensemble_missing` (bceg not
 done, or failed; the next `submit` picks it up), `not_applicable` (the transformation does not apply) or
 `ensemble_changed`. A conformer is `completed` only if ORCA exited 0 *and* printed `ORCA TERMINATED

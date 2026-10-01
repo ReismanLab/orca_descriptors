@@ -281,7 +281,10 @@ def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch):
     df = status_table(cfg)
     row = df.set_index("inchikey").loc[key]
     assert row["state"] == "incomplete" and row["completed"] == 1 and row["failed"] == 1 and row["skipped_energy_filter"] == 1
-    assert df.set_index("inchikey").loc[tree["keys"]["c1ccccc1"], "state"] == "in_progress"  # prepare queued
+    assert row["search"] == "done" and row["post_opt"] == "done" and row["n_conf"] == ""   # fake records carry no count
+    benzene = df.set_index("inchikey").loc[tree["keys"]["c1ccccc1"]]
+    assert benzene["state"] == "in_progress" and benzene["search"] == "missing" and benzene["post_opt"] == "missing"
+    assert benzene["reason"] == "ensemble: search missing, post-optimisation missing"
 
     # resubmission: the failed conformer is prepared again, the completed one is left alone
     assert prepare_molecule(cfg, key, "CCO") == "prepared"
