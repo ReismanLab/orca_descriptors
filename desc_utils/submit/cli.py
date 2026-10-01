@@ -43,12 +43,25 @@ def cmd_submit(args) -> int:
     # 2. which molecules need work, from the records
     source = make_source(cfg.source)
     molecules = source.molecules()
+    tasks: list = []
+    problems: list = []
+    if cfg.source.get("run_bceg"):
+        tasks, problems = source.pending_tasks()
+    bceg_pending = {getattr(t, "inchikey", None) for t in tasks}
     selected, skipped = [], []
     for i, mol in enumerate(molecules):
-        state, reason = records.molecule_state(records.load_metadata(lib, mol.inchikey))
-        if state in SKIP_STATES and not args.force:
+        meta = records.load_metadata(lib, mol.inchikey)
+        state, reason = records.molecule_state(meta)
+        # A molecule whose prepare is still "queued" while bceg has work for it again: that prepare array
+        # waited on the previous bceg jobs, so it has run (or died) already. Queue a new one behind the
+        # new bceg jobs; prepare_molecule is idempotent, so an old array still pending does no harm.
+        waiting_on_bceg = (state == "in_progress" and not (meta.get("conformers") or {})
+                           and mol.inchikey in bceg_pending)
+        if state in SKIP_STATES and not args.force and not waiting_on_bceg:
             skipped.append((mol, state, reason))
             continue
+        if waiting_on_bceg:
+            reason = "prepare re-queued behind the new bceg job(s)"
         selected.append({"inchikey": mol.inchikey, "input_smiles": mol.input_smiles, "name": mol.name,
                          "state": state, "reason": reason, "smiles_line": i})
     for mol, state, reason in skipped:
@@ -57,9 +70,7 @@ def cmd_submit(args) -> int:
         print(f"  {'new' if m['state'] == 'absent' else m['state']:>5}  {m['inchikey']}  {m['input_smiles']}"
               + (f"  ({m['reason']})" if m["state"] != "absent" else ""))
 
-    tasks: list = []
     if cfg.source.get("run_bceg"):
-        tasks, problems = source.pending_tasks()
         for p in problems:
             print(f"bceg PARAMS MISMATCH\n{p}", file=sys.stderr)
         if problems:

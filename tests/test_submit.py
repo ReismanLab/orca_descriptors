@@ -427,3 +427,29 @@ def test_bceg_sbatch_failure_is_reported_cleanly(tree, monkeypatch, capsys):
     assert main(["submit", str(path)]) == 1
     err = capsys.readouterr().err
     assert "bceg submission failed" in err and "Nothing was queued" in err
+
+
+def test_queued_molecule_is_requeued_when_bceg_runs_again_for_it(tree, fake_sbatch, monkeypatch, capsys):
+    path = _inline_cfg(tree)
+    raw = yaml.safe_load(path.read_text())
+    raw["source"]["run_bceg"] = True
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    from desc_utils.submit.source import BcegSource
+
+    key = tree["keys"]["CCO"]
+    # first submission: everything queued behind bceg
+    monkeypatch.setattr(BcegSource, "pending_tasks", lambda self: ([type("T", (), {"inchikey": key})()], []))
+    monkeypatch.setattr(BcegSource, "submit", lambda self, jobdir, no_sbatch=False: ["42"])
+    assert main(["submit", str(path)]) == 0
+    assert records.load_metadata(tree["root"] / "LIB_inline", key)["orca_stage"]["status"] == "queued"
+    # bceg has work for CCO again (its refinement failed and is resubmitted): CCO is re-queued, the others stay skipped
+    assert main(["submit", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "prepare re-queued behind the new bceg job(s)" in out and f"skip  {tree['keys']['CC(C)O']}" in out
+    assert fake_sbatch[-1]["dependency"] == ["42"]
+    tasks = [json.loads(l) for l in (fake_sbatch[-1]["script"].parent / "prepare.jsonl").read_text().splitlines()]
+    assert [t["inchikey"] for t in tasks] == [key]
+    # nothing pending in bceg: queued molecules are skipped as before
+    monkeypatch.setattr(BcegSource, "pending_tasks", lambda self: ([], []))
+    assert main(["submit", str(path), "--dry-run"]) == 0
+    assert "0 molecule(s) to prepare" in capsys.readouterr().out
