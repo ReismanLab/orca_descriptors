@@ -109,10 +109,10 @@ class UMA(Refiner):
                         f"could not download them ({name}). Compute nodes have no usable internet access: fetch the "
                         f"weights once on a login node into the same cache (now: {cache_dir or 'fairchem default ~/.cache/fairchem'}), "
                         f"then run the jobs offline:\n"
-                        f"    export HF_HUB_CACHE=<shared cache>   # e.g. /groups/ReismanLab/hf_cache/hub\n"
+                        f"    export FAIRCHEM_CACHE_DIR=<shared cache>   # e.g. /groups/ReismanLab/hf_cache/hub\n"
                         f"    hf auth login                         # once per user, the weights are gated\n"
                         f"    orcadesc fetch-weights --model {self.params['model']}\n"
-                        f"and put `export HF_HUB_CACHE=<shared cache>` and `export HF_HUB_OFFLINE=1` in slurm.setup."
+                        f"and put `export FAIRCHEM_CACHE_DIR=<shared cache>` and `export HF_HUB_OFFLINE=1` in slurm.setup."
                     ) from exc
                 raise
             self._calc = FAIRChemCalculator(predictor, task_name=self.params["task"])
