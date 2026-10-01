@@ -120,7 +120,11 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
             continue  # leave the record as it is
         conf_dir = mol_dir / name
         conf_dir.mkdir(exist_ok=True)
-        write_xyz(conf_dir / "input.xyz", ens.elements, [conf])
+        # comment line: "<E> energy=<E> units=hartree": ORCA ignores it, the UMA-only descriptor
+        # route reads energy= (spec: numbering.energy source xyz_comment, key energy, units hartree)
+        tagged = Conformer(conf.coords, conf.energy, {"energy": f"{conf.energy:.10f}", "units": "hartree",
+                                                       "source": ens.record.get("lot") or "ensemble"})
+        write_xyz(conf_dir / "input.xyz", ens.elements, [tagged])
         shutil.copyfile(mol_dir / "calcParam.inp", conf_dir / "calcParam.inp")
         conformer_records[name] = rec | {"status": "prepared", "prepared_at": records.now()}
         if old in records.BAD_CONFORMER or old in records.PENDING_CONFORMER:

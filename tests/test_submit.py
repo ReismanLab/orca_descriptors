@@ -192,7 +192,9 @@ def test_prepare_splits_filters_and_submits(tree, fake_sbatch):
     inp = (mol_dir / "conf_1" / "calcParam.inp").read_text()
     assert "nprocs 2" in inp and "%maxcore 3072" in inp and "* xyzfile" not in inp.split("%Compound")[0]
     xyz = (mol_dir / "conf_1" / "input.xyz").read_text().splitlines()
-    assert xyz[0].strip() == "9" and xyz[1].startswith("-100.0000000000")
+    assert xyz[0].strip() == "9" and xyz[1].startswith("-100.0000000000") and "energy=-100.0000000000" in xyz[1]
+    from desc_utils.numbering.io import xyz_comment_energy
+    assert xyz_comment_energy(mol_dir / "conf_1", "input.xyz", "energy", "hartree") == pytest.approx(-100.0)
     meta = records.load_metadata(tree["lib"], key)
     assert meta["dft"]["charge"] == 0 and meta["dft"]["multiplicity"] == 1
     assert meta["dft"]["compound_steps"]["optimization"]["extra_basis"] == "Ni def2-tzvp"

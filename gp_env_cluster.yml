@@ -1,10 +1,13 @@
 # Cluster environment: gp_env (the descriptor pipeline, see gp_env.yml) plus what the conformer
 # ensembles (bceg/) and the ORCA stage (desc_utils.submit) need on the compute nodes.
 #
-# Maintainer only, from the shared clone, on a filesystem the compute nodes mount:
+# Maintainer only, run FROM THE ROOT OF THE SHARED CLONE (the `-e .` line below installs that clone),
+# on a filesystem the compute nodes mount:
+#   cd /groups/ReismanLab/orca_descriptors
 #   source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
-#   conda env create -f /groups/ReismanLab/orca_descriptors/gp_env_cluster.yml
-# Users: `conda activate gp_env` and run from the shared clone; never pip install into it.
+#   conda env create -f gp_env_cluster.yml
+# `git pull` in the clone then updates every user; nobody else pip-installs into the env.
+# Users: `conda activate gp_env`; the commands `orcadesc` and `bceg` are on PATH.
 #
 # Not installed here:
 #   ORCA (DFT, GOAT)   -> cluster module (module load orca/6.1.0 in the config's slurm.setup)
@@ -42,3 +45,5 @@ dependencies:
       - ase
       - scine-molassembler==3.0.1
       - scine-utilities==10.1.0 # same SCINE release as molassembler 3.0.1
+      # --- this repository, editable: desc_utils + bceg, console scripts orcadesc and bceg ---
+      - -e .
