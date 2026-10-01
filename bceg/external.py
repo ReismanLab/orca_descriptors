@@ -67,6 +67,10 @@ def run(cmd: list[str], cwd: Path, threads: int = 1, log_name: str = "stdout.log
     """Run ``cmd`` in ``cwd`` with stdout+stderr captured to ``cwd/log_name``."""
     env = dict(os.environ)
     env.update(OMP_NUM_THREADS=f"{threads},1", MKL_NUM_THREADS=str(threads), OMP_STACKSIZE="4G")
+    # The conda-forge xtb/CREST binaries link the pthreads OpenBLAS; called from inside their OpenMP
+    # regions it prints "OpenBLAS Warning : Detect OpenMP Loop ..." once per BLAS call (tens of millions
+    # of lines per CREST run). One BLAS thread skips that check; the programs keep their OpenMP threads.
+    env.setdefault("OPENBLAS_NUM_THREADS", "1")
     log = cwd / log_name
     with open(log, "w") as out:
         proc = subprocess.run(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, text=True)

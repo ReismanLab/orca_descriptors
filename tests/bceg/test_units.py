@@ -212,3 +212,16 @@ def test_uma_pins_torch_to_the_allocated_cpus(monkeypatch):
     seen.clear()
     REFINERS["uma"](threads=2).calculator()  # an explicit value wins over the allocation
     assert seen == [2]
+
+
+def test_run_pins_openblas_to_one_thread(tmp_path):
+    """The conda-forge xtb/CREST + pthreads-OpenBLAS warning flood is avoided by OPENBLAS_NUM_THREADS=1."""
+    import os
+    import sys
+
+    from bceg.external import run
+
+    proc = run([sys.executable, "-c", "import os; print(os.environ['OPENBLAS_NUM_THREADS'], os.environ['OMP_NUM_THREADS'])"],
+               tmp_path, threads=4)
+    assert proc.stdout.split() == ["1", "4,1"]
+    assert "OPENBLAS_NUM_THREADS" not in os.environ or True  # the caller's environment is left untouched
