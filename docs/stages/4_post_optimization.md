@@ -11,7 +11,7 @@ search, right after it.
 
 | Key | Default | Meaning | Hashed |
 |---|---|---|---|
-| `refiner` | `uma` | the only refiner today | yes |
+| `refiner` | `uma` | the only refiner today; g-xTB and AIMNet2 are planned (a refiner is a class in `bceg/refine/` registered in `REFINERS`, see the end of this page) | yes |
 | `params` | `{}` | the refiner's parameters, below | yes, except the resource keys |
 | `slurm` | `{}` | overrides of `slurm.ensembles.cpu`/`.gpu` for this step (split mode) or merged under the search's overrides (chained mode) | no |
 
@@ -68,3 +68,15 @@ RDKit with `ff_optimize`) or none (molassembler, LoQI, RDKit without force field
 `running`, `done`, `failed` (the error from `run_1_<lot>.json` is in `reason`; a missing UMA weight
 cache or an SSL error at download time are the usual causes, see the README's troubleshooting table).
 `n_conf` then counts the post-optimised conformers.
+
+## Adding a refiner (planned: g-xTB, AIMNet2)
+
+A refiner is a subclass of `bceg.refine.base.Refiner` in `bceg/refine/`: `name`, `defaults` (every
+parameter with its default), `resource_keys` (the ones not hashed: device, threads, executable), a
+`lot` property (the label of `raw_1_<lot>.xyz`) and `run(structure, conformers, workdir)` returning a
+`RefineResult` with the conformers, their energies in Hartree and the program versions. Registering the
+class in `REFINERS` (`bceg/refine/__init__.py`) makes it a valid `post_optimization.refiner`; the
+config, hashing and status need no change. Add its parameter table to this page (the test suite
+checks that every default is documented). g-xTB would follow `bceg/xtb.py` (one subprocess per
+conformer, CPU); AIMNet2 would follow the UMA class (ASE calculator, `device` routed to the gpu
+profile) and needs its package in `gp_env_cluster.yml`.

@@ -151,6 +151,10 @@ AND the termination banner is present, else `failed`; `timeout` when SLURM's TER
    and parameter per stage, with `tests/test_stage_docs.py` failing on an undocumented key. The compared
    layout of `params.json` changed: libraries created before need `rm $LIB/params.json` (or a new
    `library_dir`) before their next submit.
+8. Later (owner, 2026-10-01): more refiners for `post_optimization`: g-xTB (subprocess driver like
+   `bceg/xtb.py`) and AIMNet2 (ASE calculator like the UMA class, `aimnet` package in
+   `gp_env_cluster.yml`). Contained: a `Refiner` subclass registered in `bceg.refine.REFINERS` plus its
+   table in `docs/stages/4_post_optimization.md`.
 
 ## Settled questions (2026-09-30)
 
