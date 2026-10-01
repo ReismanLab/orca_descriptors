@@ -1,11 +1,12 @@
 # Stage 3: `conformer_search`
 
 The conformer ensemble of the transformed structure, written by bceg to
-`<ensembles_dir>/<transformation>/<InChIKey>/<name>/raw_1.xyz` (replicate 1; energies in Hartree on
-the comment lines when the searcher gives them). The folder also holds `params.json` (every parameter
-with the defaults filled in, hashed), `run_1.json` (status, phase, SLURM ids, host, wall time,
-core-hours, program versions, `details`) and `logs/` (`raw_1_crest.out`, `raw_1_input.toml`,
-`raw_1_start_geometry.xyz`, ...; a failed run keeps its small files under `logs/raw_1_failed/`).
+`<ensembles_dir>/<transformation>/<InChIKey>/<name>/raw_<i>.xyz`, one file per replicate `i` (energies
+in Hartree on the comment lines when the searcher gives them). The folder also holds `params.json`
+(every parameter with the defaults filled in, hashed), `run_<i>.json` (status, phase, SLURM ids, host,
+wall time, core-hours, program versions, `details`) and `logs/` (`raw_<i>_crest.out`,
+`raw_<i>_input.toml`, `raw_<i>_start_geometry.xyz`, ...; a failed run keeps its small files under
+`logs/raw_<i>_failed/`). With the default `replicates: 1` the only files are `raw_1.xyz` and `run_1.json`.
 
 **The `name` is the parameter set.** Every parameter of the searcher is logged in `params.json`;
 running again under the same name with any parameter changed is refused with a diff (`REFUSED` from
@@ -20,11 +21,40 @@ YAML points at one of them.
 | `name` | required | method folder; letters, digits, `_`, `-`, `.` | yes |
 | `searcher` | required | `crest`, `goat`, `molassembler`, `rdkit_etkdg`, `loqi` | yes |
 | `params` | `{}` | the searcher's parameters, tables below; an unknown key is refused at load | yes, except the resource keys marked |
+| `replicates` | `1` | how many times the search runs, each replicate from its own seed (and start geometry); the ORCA stage pools them, see below | yes, in the library's `params.json` (not in the method folder's) |
 | `slurm` | `{}` | overrides of `slurm.ensembles.cpu` (or `.gpu`) for this step: `partition`, `time`, `cpus_per_task`, `ntasks`, `mem`, `mem_per_cpu`, `nodes`, `gres`, `extra`, ... | no |
 
 Every searcher also takes `seed_offset` (default `0`): the replicate seed is `seed_offset + replicate`.
 The pre-refinement keys (`start_preopt`, ...) are set from the `pre_refinement` block, not here
 ([2_pre_refinement.md](2_pre_refinement.md)).
+
+## Replicates
+
+```yaml
+conformer_search:
+  name: crest_gfn2
+  searcher: crest
+  replicates: 3
+```
+
+bceg runs the search `replicates` times for every molecule, replicate `i` seeded by `seed_offset + i`
+(a new ETKDG embedding each for CREST, GOAT and molassembler, so the searches start from different
+geometries; see [2_pre_refinement.md](2_pre_refinement.md)); each replicate is one cluster task that
+writes `raw_<i>.xyz`, `run_<i>.json` and, after stage 4, `raw_<i>_<lot>.xyz`. The `prepare` task of
+the ORCA stage then **pools the replicates, in order, into one ensemble**: the conformers of `raw_1`,
+then those of `raw_2`, ... Stage 5 prunes that pooled list against its overall minimum, and `conf_N`
+numbers positions in it. Every conformer records its `replicate` and `index_in_replicate` in
+`metadata.json` and on the comment line of its `input.xyz` (`replicate=2 replicate_index=1`). Nothing
+removes duplicates across replicates: two replicates finding the same minimum give it two ORCA jobs.
+
+Every replicate must be finished before a molecule is prepared: one without a record yet is
+`ensemble_missing` (the prepare task waits for the next `submit`), one that failed is `ensemble_failed`
+with the replicate named in `reason`. The library's content therefore never depends on which bceg jobs
+happened to be done. `orcadesc submit` again resubmits only the unfinished replicates.
+
+`replicates` is part of the library's `params.json` (a library with 1 and one with 3 are two libraries),
+but not of the method folder's: bceg records the count without comparing it, so a shared `ensembles_dir`
+can hold three replicates of a method and serve a library that pools one as well as one that pools three.
 
 ## `crest`: CREST iMTD-GC (metals and organics)
 
@@ -165,5 +195,8 @@ slurm:
 ## Status
 
 `search` in `orcadesc status`: `queued` while the bceg job waits or is still in the pre-refinement
-phase, `running`, `done`, `failed` (error in `reason`, files under `logs/raw_1_failed/`), `n/a` when
-the searcher does not apply to the molecule (LoQI on a complex). `n_conf` is the ensemble size.
+phase, `running`, `done`, `failed` (error in `reason`, files under `logs/raw_<i>_failed/`), `n/a` when
+the searcher does not apply to the molecule (LoQI on a complex). `n_conf` is the ensemble size, summed
+over the replicates. With several replicates one record stands for all: `failed` if any replicate
+failed, else `running` if any runs, `done` only once every replicate is done, `-` while one has no
+record yet.

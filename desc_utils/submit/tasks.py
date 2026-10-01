@@ -1,9 +1,9 @@
 """The two cluster tasks of the ORCA stage, and what ``submit`` does per molecule.
 
 ``prepare_molecule``  (prepare array, one element per molecule, runs after bceg)
-    read the ensemble, check its hyper-parameter hash against the library, prune it (stage 5: the energy
-    window, or nothing), split it into conf_N/ folders, render calcParam.inp, record everything, submit
-    the ORCA array.
+    read the ensemble (the search's replicates pooled in order), check its hyper-parameter hash against
+    the library, prune it (stage 5: the energy window, or nothing), split it into conf_N/ folders, render
+    calcParam.inp, record everything, submit the ORCA array.
 ``run_orca_conformer``  (ORCA array, one element per conformer)
     run ORCA in conf_N/, record the outcome (exit code AND the termination banner), condense.
 """
@@ -38,7 +38,7 @@ def conformer_name(i: int) -> str:
 # --------------------------------------------------------------------------- prepare
 def energy_window(conformers: list[Conformer], ewin_kcal_mol: float | None) -> list[tuple[str, Conformer, float | None, str]]:
     """Stage 5, pruning: (name, conformer, E - Emin in kcal/mol or None, status) for every conformer, in
-    file order. ``ewin_kcal_mol`` None (the default) keeps every conformer; with a window, a conformer
+    the order of the pooled ensemble (N = 1-based position in it). ``ewin_kcal_mol`` None (the default) keeps every conformer; with a window, a conformer
     above it is ``skipped_energy_filter`` and one without an energy ``skipped_no_energy``."""
     energies = [c.energy for c in conformers if c.energy is not None]
     e_min = min(energies) if energies else None
@@ -118,6 +118,8 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
     to_run: list[str] = []
     for name, conf, rel, status in energy_window(ens.conformers, cfg.ewin):
         rec = {"energy_hartree": conf.energy, "energy_above_min_kcal_mol": rel}
+        if "replicate" in conf.info:
+            rec |= {"replicate": conf.info["replicate"], "index_in_replicate": conf.info["index"]}
         old = (existing.get(name) or {}).get("status")
         if status != "prepared":
             conformer_records[name] = rec | {"status": status}
@@ -129,6 +131,8 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         # comment line: "<E> energy=<E> units=hartree": ORCA ignores it, the UMA-only descriptor
         # route reads energy= (spec: numbering.energy source xyz_comment, key energy, units hartree)
         tags = {"source": ens.record.get("lot") or "ensemble"}
+        if "replicate" in conf.info:
+            tags |= {"replicate": conf.info["replicate"], "replicate_index": conf.info["index"]}
         if conf.energy is not None:
             tags = {"energy": f"{conf.energy:.10f}", "units": "hartree", **tags}
         tagged = Conformer(conf.coords, conf.energy, tags)
@@ -142,7 +146,8 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
     records.update_metadata(lib, inchikey, base | {
         "dft": dft_record, "conformers": conformer_records,
         "orca_stage": {"status": "prepared", "reason": "", "prepared_at": records.now(),
-                       "n_conformers_in_ensemble": len(ens.conformers), "n_to_run": len(to_run)},
+                       "n_conformers_in_ensemble": len(ens.conformers), "n_replicates": cfg.replicates,
+                       "n_to_run": len(to_run)},
     })
     if not to_run:
         print(f"{inchikey}: nothing to run ({len(conformer_records)} conformer(s) recorded)")

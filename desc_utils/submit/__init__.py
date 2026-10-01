@@ -16,6 +16,7 @@ The config has one block per stage: transformation, pre_refinement, conformer_se
 (run by bceg), pruning, dft (run here). One ``submit`` runs bceg (ensembles) and then, ``afterany`` its
 jobs, a ``prepare`` array with one element per molecule that prunes the ensemble, splits it into
 ``conf_N/`` folders and submits that molecule's ORCA array. ``orca: off`` stops after bceg; the same
-command later with ``orca: on`` refines the finished ensembles. Only replicate 1 of an ensemble is refined.
+command later with ``orca: on`` refines the finished ensembles. The search's replicates
+(``conformer_search.replicates``, default 1) are pooled into one ensemble before pruning.
 ``status`` reports one status per stage (queued / running / done / failed) per molecule.
 """

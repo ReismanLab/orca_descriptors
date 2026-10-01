@@ -138,8 +138,10 @@ def pipeline_line(cfg: Config) -> str:
     post = cfg.post_optimization
     post_txt = f"{post['refiner']} {cfg.lot}" if post else "none"
     ewin = cfg.ewin
+    n_rep = cfg.replicates
     return (f"transformation {cfg.transformation_name} | pre_refinement {pre_txt} | conformer_search "
-            f"{cfg.method_name} ({cfg.search['searcher']}) | post_optimization {post_txt} | pruning "
+            f"{cfg.method_name} ({cfg.search['searcher']}, {n_rep} replicate{'s' if n_rep > 1 else ''}) | "
+            f"post_optimization {post_txt} | pruning "
             f"{'none' if ewin is None else f'{ewin:g} kcal/mol'} | dft {'on' if cfg.orca_on else 'off'}")
 
 

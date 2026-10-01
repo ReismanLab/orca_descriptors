@@ -1,10 +1,14 @@
 """Where the conformer ensembles come from: the bceg results tree of the library.
 
-For every molecule of the input list the ensemble is
-``<ensembles_dir>/<transformation>/<InChIKey>/<method>/raw_1_<lot>.xyz`` (replicate 1, post-optimised at
-``lot``; without a post-optimisation the raw search output ``raw_1.xyz``), its hyper-parameters are
-``params.json`` / ``params_<lot>.json`` and its outcome ``run_1[_<lot>].json``. Charge and multiplicity
-are read from ``params.json`` (bceg's ``structure``), never from the library config.
+For every molecule of the input list the ensemble is pooled, in replicate order, from the
+``conformer_search.replicates`` files ``<ensembles_dir>/<transformation>/<InChIKey>/<method>/raw_<i>_<lot>.xyz``
+(post-optimised at ``lot``; without a post-optimisation the raw search outputs ``raw_<i>.xyz``). The
+hyper-parameters are ``params.json`` / ``params_<lot>.json``, the outcome of replicate ``i`` is
+``run_<i>[_<lot>].json``. Every replicate must be finished: one without a record is ``ensemble_missing``,
+one that failed is ``ensemble_failed``, so what a library refines never depends on which jobs happened
+to be done. Each pooled conformer carries ``replicate`` and ``index`` (1-based, within its file) in its
+``info``. Charge and multiplicity are read from ``params.json`` (bceg's ``structure``), never from the
+library config.
 
 ``Ensembles.progress`` returns what the status command needs to say where stages 1 to 4 stand:
 the transformation's outcome, the two run records (with their ``phase``), and whether the pipeline has
@@ -39,7 +43,7 @@ class Ensemble:
     name: str | None
     status: str  # done | ensemble_missing | ensemble_failed | not_applicable
     reason: str = ""
-    xyz_path: Path | None = None
+    xyz_paths: list[Path] = field(default_factory=list)  # one per replicate, in order
     charge: int | None = None
     multiplicity: int | None = None
     elements: list[str] = field(default_factory=list)
@@ -51,8 +55,30 @@ class Ensemble:
         return self.status == DONE
 
 
+def aggregate_records(recs: list[dict | None]) -> dict | None:
+    """One run record standing for every replicate's, for the status command.
+
+    None when no replicate has a record. A ``not_applicable``, ``running`` or ``failed`` record wins over
+    the others, in that order (the first replicate in that state). None while a replicate has no record
+    yet, the stage is not done. Otherwise the first replicate's ``done`` record with ``n_conformers``
+    summed over the replicates."""
+    present = [r for r in recs if r]
+    if not present:
+        return None
+    for status in ("not_applicable", "running", "failed"):
+        for r in present:
+            if r.get("status") == status:
+                return r
+    if len(present) < len(recs):
+        return None
+    out = dict(present[0])
+    if any(r.get("n_conformers") is not None for r in present):
+        out["n_conformers"] = sum(r.get("n_conformers") or 0 for r in present)
+    return out
+
+
 class Ensembles:
-    """The ensembles of one library: one transformation, one method, one level, replicate 1."""
+    """The ensembles of one library: one transformation, one method, one level, ``replicates`` replicates."""
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -62,6 +88,7 @@ class Ensembles:
         self.searcher = self.bcfg.methods[self.method].searcher
         self.lot = cfg.lot
         self.results_dir = cfg.ensembles_dir
+        self.replicates = list(range(1, cfg.replicates + 1))
 
     def molecules(self) -> list[InputMolecule]:
         return load_inputs(self.cfg.smiles_path)
@@ -75,7 +102,7 @@ class Ensembles:
         md = self.method_dir(mol.inchikey)
         record: dict[str, Any] = {
             "kind": "bceg", "results_dir": str(self.results_dir), "transformation": self.transformation.name,
-            "method": self.method, "lot": self.lot, "replicate": 1, "method_dir": str(md.path),
+            "method": self.method, "lot": self.lot, "replicates": len(self.replicates), "method_dir": str(md.path),
         }
         structure = self.transformation.apply(mol.canonical_smiles)
         if structure is None:
@@ -87,34 +114,56 @@ class Ensembles:
         record["params_sha256"] = (params or {}).get("sha256")
         record["refine_params_sha256"] = (refine_params or {}).get("sha256") if self.lot else None
 
-        run_rec = read_record(md.run_record(1, self.lot))
-        xyz = md.refined(1, self.lot) if self.lot else md.raw(1)
-        record["run_record"] = str(md.run_record(1, self.lot))
-        record["xyz"] = str(xyz)
-        record["run_status"] = (run_rec or {}).get("status")
-        if run_rec is None:
+        runs = []  # (replicate, run record or None, xyz path)
+        for i in self.replicates:
+            rec_path = md.run_record(i, self.lot)
+            rec = read_record(rec_path)
+            xyz = md.refined(i, self.lot) if self.lot else md.raw(i)
+            runs.append((i, rec, xyz))
+        record["runs"] = [{"replicate": i, "run_record": str(md.run_record(i, self.lot)), "xyz": str(xyz),
+                           "run_status": (rec or {}).get("status")} for i, rec, xyz in runs]
+        missing = [md.run_record(i, self.lot).name for i, rec, _ in runs if rec is None]
+        if missing:
             return Ensemble(**base, status="ensemble_missing", record=record,
-                            reason=f"no {md.run_record(1, self.lot).name} in {md.path} (bceg not run or still running)")
-        if run_rec.get("status") == "not_applicable":
-            return Ensemble(**base, status="not_applicable", record=record, reason=run_rec.get("reason", ""))
-        if run_rec.get("status") != DONE or not xyz.exists():
-            return Ensemble(**base, status="ensemble_failed", record=record,
-                            reason=f"{md.run_record(1, self.lot).name}: status {run_rec.get('status')!r}"
-                                   + (f": {run_rec.get('error')}" if run_rec.get("error") else "")
-                                   + ("" if xyz.exists() else f"; {xyz.name} missing"))
+                            reason=f"no {', '.join(missing)} in {md.path} (bceg not run or still running)")
+        for i, rec, _ in runs:
+            if rec.get("status") == "not_applicable":
+                return Ensemble(**base, status="not_applicable", record=record, reason=rec.get("reason", ""))
+        failed = []
+        for i, rec, xyz in runs:
+            if rec.get("status") != DONE or not xyz.exists():
+                failed.append(f"{md.run_record(i, self.lot).name}: status {rec.get('status')!r}"
+                              + (f": {rec.get('error')}" if rec.get("error") else "")
+                              + ("" if xyz.exists() else f"; {xyz.name} missing"))
+        if failed:
+            return Ensemble(**base, status="ensemble_failed", record=record, reason="; ".join(failed))
 
-        elements, conformers = read_xyz(xyz)
+        elements: list[str] = []
+        conformers: list[Conformer] = []
+        per_replicate = []
+        for i, rec, xyz in runs:
+            els, confs = read_xyz(xyz)
+            if elements and els != elements:
+                return Ensemble(**base, status="ensemble_failed", record=record,
+                                reason=f"{xyz.name}: atom order differs from replicate {runs[0][0]}")
+            elements = els
+            for j, c in enumerate(confs, start=1):
+                c.info.update(replicate=i, index=j)
+            conformers.extend(confs)
+            per_replicate.append(len(confs))
         compared = (params or {}).get("compared") or {}
         struct = compared.get("structure") or {}
         charge = struct.get("charge", structure.charge)
         multiplicity = struct.get("multiplicity", structure.multiplicity)
         record["n_conformers"] = len(conformers)
-        record["versions"] = run_rec.get("versions")
-        return Ensemble(**base, status=DONE, xyz_path=xyz, charge=int(charge), multiplicity=int(multiplicity),
-                        elements=elements, conformers=conformers, record=record)
+        record["n_conformers_per_replicate"] = per_replicate
+        record["versions"] = runs[0][1].get("versions")
+        return Ensemble(**base, status=DONE, xyz_paths=[xyz for _, _, xyz in runs], charge=int(charge),
+                        multiplicity=int(multiplicity), elements=elements, conformers=conformers, record=record)
 
     def progress(self, mol: InputMolecule) -> dict:
-        """What bceg's records say about stages 1 to 4 for this molecule (read-only, never raises)."""
+        """What bceg's records say about stages 1 to 4 for this molecule (read-only, never raises).
+        With several replicates the records are folded into one by ``aggregate_records``."""
         out: dict[str, Any] = {"transformation": DONE, "error": None, "search_record": None, "refine_record": None,
                                "has_preopt": self.cfg.has_preopt and self.searcher.has_start_step(),
                                "has_refiner": self.lot is not None, "n_conformers": None}
@@ -128,8 +177,8 @@ class Ensembles:
             out["transformation"] = "not_applicable"
             return out
         md = self.method_dir(mol.inchikey)
-        search = read_record(md.run_record(1))
-        refine = read_record(md.run_record(1, self.lot)) if self.lot else None
+        search = aggregate_records([read_record(md.run_record(i)) for i in self.replicates])
+        refine = aggregate_records([read_record(md.run_record(i, self.lot)) for i in self.replicates]) if self.lot else None
         out["search_record"], out["refine_record"] = search, refine
         for rec in (refine, search):
             if rec and rec.get("n_conformers") is not None:

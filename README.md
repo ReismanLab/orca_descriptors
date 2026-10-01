@@ -127,7 +127,7 @@ whether it is hashed, and an example block per option.
 | `library_dir`, `smiles`, `ensembles_dir`, `run_bceg` | | `$LIB` (absolute), the input list, where the ensembles go (default `$LIB/ensembles`), and `run_bceg: false` when they exist already |
 | `transformation` | 1, [docs/stages/1_transformation.md](docs/stages/1_transformation.md) | the SMILES as is (`none`) or a script that turns it into the structure computed (`ni_x2.py` with `params: {x: H}` gives L-NiH2; your own script works too); `name` is the depth-1 folder of the ensembles; `charge` and `multiplicity` apply to every later stage |
 | `pre_refinement` | 2, [docs/stages/2_pre_refinement.md](docs/stages/2_pre_refinement.md) | the pre-optimisation of the start geometry handed to CREST, GOAT or molassembler: `xtb` (default, `gfn`, `level`), `uma` (model, `fmax`, ...) or `none` (required for `rdkit_etkdg` and `loqi`); the embedding checks (`max_metal_ligand_distance`, `max_attempts`) |
-| `conformer_search` | 3, [docs/stages/3_conformer_search.md](docs/stages/3_conformer_search.md) | `name` (the method folder; **the name is the parameter set**: every parameter is logged with its defaults in the folder's `params.json`, and changing one under an existing name is refused, you rename it), `searcher` (`crest`, `goat`, `molassembler`, `rdkit_etkdg`, `loqi`), its `params`, and `slurm` overrides for the step |
+| `conformer_search` | 3, [docs/stages/3_conformer_search.md](docs/stages/3_conformer_search.md) | `name` (the method folder; **the name is the parameter set**: every parameter is logged with its defaults in the folder's `params.json`, and changing one under an existing name is refused, you rename it), `searcher` (`crest`, `goat`, `molassembler`, `rdkit_etkdg`, `loqi`), its `params`, `replicates` (default 1: how many searches per molecule, each from its own seed; the ORCA stage pools them), and `slurm` overrides for the step |
 | `post_optimization` | 4, [docs/stages/4_post_optimization.md](docs/stages/4_post_optimization.md) | every conformer re-optimised with `uma` (`model`, `fmax`, `max_steps`, `device`), or `null` to send the search output to ORCA as it is |
 | `pruning` | 5, [docs/stages/5_pruning.md](docs/stages/5_pruning.md) | `energy_window_kcal_mol`: `null` (default) sends every conformer to ORCA, a number keeps those within the window of the ensemble minimum on the post-optimisation energies |
 | `orca`, `dft` | 6, [docs/stages/6_dft.md](docs/stages/6_dft.md) | `orca: off` stops after the ensembles (the same command later with `on` refines them); `dft.level_of_theory`: which compound steps run (`opt_geom`, `freq_calc`, `nmr_calc`, `vertical_redox`), method, basis and solvent of each (`opt_method`, `opt_solvent`, `svp_method`, `property_solvent`, `nmr_method`, `nbo_run`), `extra_basis` (`{Ni: def2-tzvp}`). No charge or multiplicity: both come from the ensemble |
@@ -154,8 +154,8 @@ orcadesc submit <LIB>.yaml               # or: python -m desc_utils.submit submi
 config, the template and the git commit under `$LIB/_jobs/<timestamp>/`, runs bceg's submission for the
 input list (stages 1 to 4; its job arrays, scripts and logs land under `_jobs/<timestamp>/bceg/`), then
 queues a `prepare` array, one element per molecule, `afterany` the bceg jobs. Each prepare element reads
-the molecule's ensemble `raw_1_<lot>.xyz` (replicate 1 only), checks its `params.json` hash, prunes it
-(stage 5), splits it into `$LIB/<InChIKey>/conf_N/input.xyz`, renders `calcParam.inp` with the ensemble's
+the molecule's ensemble `raw_<i>_<lot>.xyz` (every replicate, pooled in order), checks its `params.json` hash,
+prunes it (stage 5), splits it into `$LIB/<InChIKey>/conf_N/input.xyz`, renders `calcParam.inp` with the ensemble's
 charge and multiplicity, writes the record, and submits that molecule's ORCA array, one element per
 conformer (stage 6). Each ORCA element records its outcome and condenses.
 

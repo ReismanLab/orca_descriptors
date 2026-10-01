@@ -1,10 +1,12 @@
 # Stage 5: `pruning`
 
 Which conformers of the ensemble get an ORCA job. Run by the `prepare` task of the ORCA stage, once
-per molecule, after bceg: it reads `raw_1_<lot>.xyz` (or `raw_1.xyz` without a post-optimisation),
-decides per conformer, writes the kept ones to `<LIB>/<InChIKey>/conf_N/input.xyz` (N = position in
-the ensemble file, 1-based) and records every conformer, kept or not, in `metadata.json` with its
-energy and its energy above the ensemble minimum.
+per molecule, after bceg: it reads `raw_<i>_<lot>.xyz` (or `raw_<i>.xyz` without a post-optimisation)
+for every replicate `i` of the search ([3_conformer_search.md](3_conformer_search.md), `replicates`,
+default 1) and pools them in order into one ensemble, decides per conformer, writes the kept ones to
+`<LIB>/<InChIKey>/conf_N/input.xyz` (N = position in the pooled ensemble, 1-based) and records every
+conformer, kept or not, in `metadata.json` with its energy, its energy above the pooled minimum and
+the replicate it came from.
 
 ## Keys
 
@@ -39,10 +41,11 @@ is applied after the post-optimisation, on better energies, so the two are compl
 ## What is recorded
 
 Per conformer in `metadata.json` (`conformers.conf_N`): `energy_hartree`, `energy_above_min_kcal_mol`,
-and a status: `prepared` (kept, then `submitted`, `running`, `completed`, `failed` or `timeout` as the
+`replicate` and `index_in_replicate` (its position in that replicate's file), and a status: `prepared` (kept, then `submitted`, `running`, `completed`, `failed` or `timeout` as the
 ORCA job proceeds), `skipped_energy_filter` (above the window) or `skipped_no_energy` (no energy on its
 comment line while a window is set). The DFT record keeps the block as `dft.pruning`. The `prepare`
-log says how many conformers were kept (`n_to_run`) out of how many (`n_conformers_in_ensemble`).
+log says how many conformers were kept (`n_to_run`) out of how many (`n_conformers_in_ensemble`, over
+`n_replicates` replicates).
 
 ## Adding a criterion
 

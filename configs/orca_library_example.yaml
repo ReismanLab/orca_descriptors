@@ -34,6 +34,7 @@ pre_refinement:                                  # CREST, GOAT and molassembler 
 conformer_search:
   name: crest_gfn2                               # the name IS the parameter set: a changed parameter under the same name is refused
   searcher: crest                                # crest | goat | molassembler | rdkit_etkdg | loqi
+  # replicates: 1                                # searches per molecule, each from its own seed; pooled before pruning
   params:
     workhorse: gfn2                              # threads: default = the job's cpus_per_task
     toml_extra: {cregen: {ewin: 6.0}}            # CREST's own energy window, kcal/mol

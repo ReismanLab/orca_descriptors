@@ -3,7 +3,7 @@
 Every conformer of the search output is optimised at a better level and written to
 `raw_1_<lot>.xyz` (energies in Hartree on the comment lines) next to `params_<lot>.json` (the
 refiner's parameters, hashed together with the search's `params.json` hash) and `run_1_<lot>.json`.
-The ORCA stage reads `raw_1_<lot>.xyz`; its energies are what stage 5 prunes on. In chained mode
+The ORCA stage reads `raw_<i>_<lot>.xyz` of every replicate; its energies are what stage 5 prunes on. In chained mode
 (the default, `slurm.ensembles.mode: chained`) the post-optimisation runs in the same job as the
 search, right after it.
 

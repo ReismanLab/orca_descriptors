@@ -36,22 +36,27 @@ LEVEL_OF_THEORY = {
 }
 
 
-def _ensemble(results_dir: Path, smiles: str, rel_kcal=(0.0, 2.0, 10.0)) -> None:
+def _ensemble(results_dir: Path, smiles: str, rel_kcal=(0.0, 2.0, 10.0), replicates: int = 1,
+              shift_kcal: float = 1.0) -> None:
+    """Write a finished bceg method folder; replicate i has the energies ``rel_kcal + (i - 1) * shift_kcal``."""
     mol = InputMolecule.from_smiles(smiles)
     structure = Structure(mol.canonical_smiles)
     md = method_dir(results_dir, "none", mol.inchikey, "etkdg")
     md.path.mkdir(parents=True, exist_ok=True)
     n = len(structure.elements)
-    confs = [Conformer(coords=[[i * 0.1 + k, 0.0, 0.0] for i in range(n)], energy=-100.0 + r / HARTREE_TO_KCAL)
-             for k, r in enumerate(rel_kcal)]
-    write_xyz(md.raw(1), structure.elements, confs)
-    write_xyz(md.refined(1, LOT), structure.elements, confs)
     sp = make_params({"searcher": "rdkit_etkdg", "params": {"n_confs": 3}, "seed_rule": "x",
                       "transformation": {"name": "none"}, "structure": structure.identity()})
     md.params().write_text(json.dumps(sp))
     md.params(LOT).write_text(json.dumps(make_params({"refiner": "uma", "lot": LOT, "search_params_sha256": sp["sha256"]})))
-    write_record(md.run_record(1), {"status": "done", "params_sha256": sp["sha256"], "phase": "search"})
-    write_record(md.run_record(1, LOT), {"status": "done", "versions": {"fairchem": "x"}})
+    for rep in range(1, replicates + 1):
+        confs = [Conformer(coords=[[i * 0.1 + k + 10 * rep, 0.0, 0.0] for i in range(n)],
+                           energy=-100.0 + (r + (rep - 1) * shift_kcal) / HARTREE_TO_KCAL)
+                 for k, r in enumerate(rel_kcal)]
+        write_xyz(md.raw(rep), structure.elements, confs)
+        write_xyz(md.refined(rep, LOT), structure.elements, confs)
+        write_record(md.run_record(rep), {"status": "done", "params_sha256": sp["sha256"], "phase": "search",
+                                          "n_conformers": len(confs)})
+        write_record(md.run_record(rep, LOT), {"status": "done", "versions": {"fairchem": "x"}, "n_conformers": len(confs)})
 
 
 def _lib_cfg(**overrides) -> dict:
@@ -158,7 +163,7 @@ def test_stage_defaults_and_mapping_to_bceg(tree):
     cfg = Config.load(_rewrite(tree, post_optimization=None))
     assert cfg.lot is None and cfg.compared()["post_optimization"] is None
     ens = Ensembles(cfg).ensemble(InputMolecule.from_smiles("CCO"))
-    assert ens.done and ens.xyz_path.name == "raw_1.xyz"
+    assert ens.done and [p.name for p in ens.xyz_paths] == ["raw_1.xyz"]
 
 
 @pytest.mark.parametrize("override, message", [
@@ -213,7 +218,7 @@ def test_submit_dry_run_writes_nothing(tree, capsys):
     assert not (tree["lib"] / "params.json").exists()
     out = capsys.readouterr().out
     assert "3 molecule(s) to prepare" in out and "orca: on" in out
-    assert "pipeline: transformation none | pre_refinement none | conformer_search etkdg (rdkit_etkdg) | " \
+    assert "pipeline: transformation none | pre_refinement none | conformer_search etkdg (rdkit_etkdg, 1 replicate) | " \
            f"post_optimization uma {LOT} | pruning 5 kcal/mol | dft on" in out
 
 
@@ -292,7 +297,9 @@ def test_prepare_prunes_splits_and_submits(tree, fake_sbatch):
     assert meta["dft"]["compound_steps"]["optimization"]["extra_basis"] == "Ni def2-tzvp"
     assert "conf_search" not in meta["dft"]["compound_steps"]
     assert meta["dft"]["level_of_theory"]["extra_basis"] == {"Ni": "def2-tzvp"}
-    assert meta["ensemble"]["params_sha256"] and meta["ensemble"]["lot"] == LOT and meta["ensemble"]["replicate"] == 1
+    assert meta["ensemble"]["params_sha256"] and meta["ensemble"]["lot"] == LOT and meta["ensemble"]["replicates"] == 1
+    assert meta["ensemble"]["runs"][0]["replicate"] == 1 and meta["ensemble"]["n_conformers_per_replicate"] == [3]
+    assert meta["conformers"]["conf_1"]["replicate"] == 1 and meta["conformers"]["conf_3"]["index_in_replicate"] == 3
     assert meta["conformers"]["conf_3"]["status"] == "skipped_energy_filter"
     assert meta["conformers"]["conf_3"]["energy_above_min_kcal_mol"] == pytest.approx(10.0)
     assert meta["conformers"]["conf_1"]["status"] == "submitted" and meta["conformers"]["conf_1"]["slurm_array_job_id"] == "1002"
@@ -342,6 +349,95 @@ def test_prepare_refuses_changed_ensemble(tree, fake_sbatch):
     with pytest.raises(ParamsMismatch):
         prepare_molecule(cfg, key, "CCO", force=True)
     assert records.load_metadata(tree["lib"], key)["orca_stage"]["status"] == "ensemble_changed"
+
+
+# --------------------------------------------------------------------------- replicates
+def _two_replicates(tree) -> Path:
+    search = {"name": "etkdg", "searcher": "rdkit_etkdg", "params": {"n_confs": 3}, "replicates": 2}
+    return _rewrite(tree, conformer_search=search)
+
+
+def test_replicates_are_pooled_in_order(tree, fake_sbatch):
+    """conformer_search.replicates: bceg runs N searches; prepare pools raw_1..raw_N (in order) into one
+    ensemble, prunes it as a whole and records where every conformer came from."""
+    from desc_utils.submit.cli import pipeline_line
+    cfg = Config.load(_two_replicates(tree))
+    assert cfg.replicates == 2 and cfg.bceg_raw()["replicates"] == 2 and cfg.compared()["replicates"] == 2
+    assert "replicates" not in cfg.compared()["conformer_search"]           # hashed once, at the top level
+    assert "2 replicates" in pipeline_line(cfg)
+    _ensemble(tree["results"], "CCO", replicates=2)                          # rep 2: 1, 3, 11 kcal/mol
+    key = tree["keys"]["CCO"]
+    ens = Ensembles(cfg).ensemble(InputMolecule.from_smiles("CCO"))
+    assert ens.done and [p.name for p in ens.xyz_paths] == [f"raw_1_{LOT}.xyz", f"raw_2_{LOT}.xyz"]
+    assert [(c.info["replicate"], c.info["index"]) for c in ens.conformers] == [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)]
+    assert ens.record["n_conformers"] == 6 and ens.record["n_conformers_per_replicate"] == [3, 3]
+
+    cfg = _frozen(tree, fake_sbatch)
+    assert prepare_molecule(cfg, key, "CCO") == "prepared"
+    mol_dir = tree["lib"] / key
+    assert sorted(p.name for p in mol_dir.iterdir() if p.is_dir()) == ["conf_1", "conf_2", "conf_4", "conf_5"]
+    meta = records.load_metadata(tree["lib"], key)
+    assert meta["orca_stage"]["n_conformers_in_ensemble"] == 6 and meta["orca_stage"]["n_replicates"] == 2
+    assert meta["orca_stage"]["n_to_run"] == 4
+    c4 = meta["conformers"]["conf_4"]
+    assert c4["replicate"] == 2 and c4["index_in_replicate"] == 1 and c4["energy_above_min_kcal_mol"] == pytest.approx(1.0)
+    assert meta["conformers"]["conf_6"]["status"] == "skipped_energy_filter"
+    comment = (mol_dir / "conf_4" / "input.xyz").read_text().splitlines()[1]
+    assert "replicate=2" in comment and "replicate_index=1" in comment
+    assert len(meta["ensemble"]["runs"]) == 2 and meta["ensemble"]["runs"][1]["run_status"] == "done"
+    # a library with one replicate and the same settings has a different hash: another library_dir
+    one = Config.load(_rewrite(tree)).compared()
+    two = Config.load(_two_replicates(tree)).compared()
+    assert one != two and {k for k in one if one[k] != two[k]} == {"replicates"}
+
+
+def test_every_replicate_must_be_finished(tree, fake_sbatch):
+    """A replicate without a record is ensemble_missing, a failed one ensemble_failed: what a library
+    refines never depends on which bceg jobs happened to be done."""
+    cfg = Config.load(_two_replicates(tree))
+    source = Ensembles(cfg)
+    mol = InputMolecule.from_smiles("CC(C)O")                                 # the tree has replicate 1 only
+    md = method_dir(tree["results"], "none", mol.inchikey, "etkdg")
+    ens = source.ensemble(mol)
+    assert ens.status == "ensemble_missing" and f"run_2_{LOT}.json" in ens.reason and "run_1_" not in ens.reason
+    assert ens.record["runs"][1]["run_status"] is None
+    write_record(md.run_record(2), {"status": "done", "n_conformers": 3})
+    write_record(md.run_record(2, LOT), {"status": "failed", "error": "boom"})
+    ens = source.ensemble(mol)
+    assert ens.status == "ensemble_failed" and "run_2_" in ens.reason and "boom" in ens.reason
+    # status folds the replicates' records into one: failed wins, then running, else done with the sum
+    row = status_table(cfg).set_index("inchikey").loc[mol.inchikey]
+    assert row["search"] == "done" and row["post_opt"] == "failed" and row["n_conf"] == 6
+    write_record(md.run_record(2, LOT), {"status": "running", "phase": "refine"})
+    row = status_table(cfg).set_index("inchikey").loc[mol.inchikey]
+    assert row["post_opt"] == "running"
+    md.run_record(2, LOT).unlink()
+    row = status_table(cfg).set_index("inchikey").loc[mol.inchikey]
+    assert row["post_opt"] == "-"                                             # one replicate's record is not the stage
+    # the prepare task records the block too
+    cfg = _frozen(tree, fake_sbatch)
+    assert prepare_molecule(cfg, mol.inchikey, "CC(C)O") == "ensemble_missing"
+    assert records.load_metadata(tree["lib"], mol.inchikey)["orca_stage"]["status"] == "ensemble_missing"
+
+
+def test_aggregate_records_rules():
+    from desc_utils.submit.source import aggregate_records
+    done = {"status": "done", "n_conformers": 2}
+    assert aggregate_records([None, None]) is None
+    assert aggregate_records([done, None]) is None
+    assert aggregate_records([done, {"status": "running", "phase": "search"}])["status"] == "running"
+    assert aggregate_records([{"status": "failed", "error": "e"}, None])["status"] == "failed"
+    assert aggregate_records([{"status": "running"}, {"status": "failed"}])["status"] == "running"
+    assert aggregate_records([{"status": "not_applicable", "reason": "r"}, {"status": "running"}])["status"] == "not_applicable"
+    assert aggregate_records([done, {"status": "done", "n_conformers": 5}]) == {"status": "done", "n_conformers": 7}
+    assert aggregate_records([{"status": "done"}]) == {"status": "done"}
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "3"])
+def test_replicates_must_be_a_positive_integer(tree, value):
+    search = {"name": "etkdg", "searcher": "rdkit_etkdg", "params": {"n_confs": 3}, "replicates": value}
+    with pytest.raises(ValueError, match="replicates must be a positive integer"):
+        Config.load(_rewrite(tree, conformer_search=search))
 
 
 # --------------------------------------------------------------------------- ORCA task

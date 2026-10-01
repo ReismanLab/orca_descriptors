@@ -5,14 +5,15 @@
     library_dir, smiles, ensembles_dir, run_bceg          where things are, whether bceg is called
     transformation       1. SMILES -> structure computed (name = depth-1 folder of the ensembles)
     pre_refinement       2. pre-optimisation of the start geometry handed to the search (xtb | uma | none)
-    conformer_search     3. the searcher and its parameters (name = parameter set = method folder)
+    conformer_search     3. the searcher, its parameters (name = parameter set = method folder) and how many
+                            replicates of the search are run and pooled
     post_optimization    4. refinement of every conformer (uma | null)
     pruning              5. which conformers get an ORCA job (energy window on the stage-4 energies; null = all)
     orca, dft            6. the ORCA compound job (level_of_theory, template)
     slurm, condense      resources: setup lines, bceg's profiles (slurm.ensembles), prepare and orca profiles
 
 Stages 1 to 4 are run by bceg: ``Config.bceg_raw()`` turns the blocks into bceg's own config format
-(one transformation, one method, ``replicates: 1``). Relative paths are resolved against the config
+(one transformation, one method, ``conformer_search.replicates`` replicates). Relative paths are resolved against the config
 file. ``submit`` freezes the resolved config (plus the template it rendered from and the git commit of
 this clone) under ``<LIB>/_jobs/<timestamp>/``; every cluster task reads that snapshot.
 
@@ -59,7 +60,7 @@ XTB_PARAMS = {"gfn": "gfn2", "level": "normal"}
 EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
                   "max_metal_ligand_distance": "max_metal_ligand_distance", "max_attempts": "start_max_attempts",
                   "xtb_executable": "xtb_executable"}
-SEARCH_KEYS = {"name", "searcher", "params", "slurm"}
+SEARCH_KEYS = {"name", "searcher", "params", "slurm", "replicates"}
 POST_OPT_KEYS = {"refiner", "params", "slurm"}
 PRUNING_KEYS = {"energy_window_kcal_mol"}
 DFT_KEYS = {"calc_param_template", "level_of_theory"}
@@ -171,8 +172,11 @@ def _conformer_search(block, where: str) -> dict:
             raise ValueError(f"{where}.{key} is required")
     if block["searcher"] not in SEARCHERS:
         raise ValueError(f"{where}.searcher must be one of {sorted(SEARCHERS)}, got {block['searcher']!r}")
+    replicates = block.get("replicates", 1)
+    if isinstance(replicates, bool) or not isinstance(replicates, int) or replicates < 1:
+        raise ValueError(f"{where}.replicates must be a positive integer, got {replicates!r}")
     return {"name": str(block["name"]), "searcher": block["searcher"], "params": dict(block.get("params") or {}),
-            "slurm": dict(block.get("slurm") or {})}
+            "slurm": dict(block.get("slurm") or {}), "replicates": replicates}
 
 
 def _post_optimization(block, where: str, present: bool) -> dict | None:
@@ -218,8 +222,8 @@ def start_params(pre: dict) -> dict:
 
 def to_bceg_raw(raw: dict) -> dict:
     """bceg's config dict (what ``bceg.config.read_raw`` produces) for the stages 1 to 4 of a library:
-    one transformation, one method, ``replicates: 1``, bceg's ``slurm`` from ``slurm.ensembles`` with
-    the library's ``setup`` unless it has its own."""
+    one transformation, one method, the search block's ``replicates``, bceg's ``slurm`` from
+    ``slurm.ensembles`` with the library's ``setup`` unless it has its own."""
     t = raw["transformation"]
     spec = {k: t[k] for k in ("script", "params", "charge", "multiplicity") if t.get(k) is not None}
     search = raw["conformer_search"]
@@ -230,7 +234,7 @@ def to_bceg_raw(raw: dict) -> dict:
     return {
         "inputs": raw["smiles"],
         "results_dir": raw["ensembles_dir"],
-        "replicates": 1,
+        "replicates": search["replicates"],
         "transformations": {t["name"]: spec},
         "methods": {search["name"]: {"searcher": search["searcher"], "params": params, "slurm": dict(search["slurm"])}},
         "post_optimization": copy.deepcopy(raw["post_optimization"]),
@@ -407,12 +411,17 @@ class Config:
         return self.search["name"]
 
     @property
+    def replicates(self) -> int:
+        """Replicates of the search run by bceg and pooled into one ensemble by the prepare task."""
+        return int(self.search["replicates"])
+
+    @property
     def has_preopt(self) -> bool:
         return self.pre_refinement["method"] != "none"
 
     @property
     def lot(self) -> str | None:
-        """Level label of the post-optimisation (the file refined is ``raw_1_<lot>.xyz``), None without one."""
+        """Level label of the post-optimisation (the files refined are ``raw_<i>_<lot>.xyz``), None without one."""
         refiner = self.bceg_config().refiner
         return refiner.lot if refiner is not None else None
 
@@ -444,7 +453,8 @@ class Config:
         return hashlib.sha256(self.template_path.read_bytes()).hexdigest()
 
     def compared(self) -> dict:
-        """The six stage blocks as bceg will run them (defaults filled in), plus the template's sha256."""
+        """The six stage blocks as bceg will run them (defaults filled in), plus the template's sha256.
+        ``replicates`` stays a top-level entry so that a library with one replicate keeps its hash."""
         bcfg = self.bceg_config()
         transformation = bcfg.transformations[self.transformation_name].identity()
         searcher = bcfg.methods[self.method_name].searcher
@@ -458,7 +468,7 @@ class Config:
         dft["calc_param_template"] = {"path": str(self.template_path), "sha256": self.template_sha256()}
         return {"transformation": transformation, "pre_refinement": copy.deepcopy(self.pre_refinement),
                 "conformer_search": search, "post_optimization": post, "pruning": dict(self.pruning), "dft": dft,
-                "replicates": 1}
+                "replicates": self.replicates}
 
     def recorded(self) -> dict:
         return {"orca": self.raw["orca"], "run_bceg": self.run_bceg,
