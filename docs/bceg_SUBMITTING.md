@@ -75,7 +75,7 @@ slurm:
 ```
 
 The UMA post-optimisation runs on the CPU by default, so the `gpu:` profile above is optional: define it
-only if you set `post_optimization.params.device: cuda` (much faster) or use CREST with inline UMA. A step
+only if you set `post_optimization.params.device: cuda` (much faster) or CREST's `mlip_device: cuda` with inline UMA. A step
 that needs a GPU goes to the `gpu` profile; everything else goes to `cpu`. In `chained` mode a GPU step
 makes its whole job a GPU job, CREST search included -- use `mode: split` to avoid holding a GPU through
 the search.

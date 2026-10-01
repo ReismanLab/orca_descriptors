@@ -91,7 +91,7 @@ mlip_uma_model = "uma-s-1p2"
 charge = 0
 uhf = 0
 refine = "opt"
-mlip_device = "cuda"
+mlip_device = "cpu"
 '''
 
 

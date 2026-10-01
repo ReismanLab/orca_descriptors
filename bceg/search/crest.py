@@ -33,7 +33,7 @@ class Crest(Searcher):
         "seed_offset": 0,
         "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
         "refine_threads": None,  # threads per refinement-level instance
-        "mlip_device": "cuda",
+        "mlip_device": "cpu",  # device of the mlip levels; "cuda" sends the job to the gpu profile when an mlip level is used
         "executable": "crest",
     }
     resource_keys = {"threads", "refine_threads", "mlip_device", "executable"} | START_RESOURCE_KEYS

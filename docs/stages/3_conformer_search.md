@@ -41,7 +41,7 @@ CREST 3.x driven by a TOML input (`crest --input input.toml`); starts from the p
 | `seed_offset` | `0` | see above |
 | `threads` | job's CPUs | resource: CREST threads (`SLURM_CPUS_PER_TASK`) |
 | `refine_threads` | `null` | resource: threads per refinement-level instance |
-| `mlip_device` | `cuda` | resource: device of the `mlip` levels; anything but `cpu` sends the job to `slurm.ensembles.gpu` when an `mlip` level is used |
+| `mlip_device` | `cpu` | resource: device of the `mlip` levels; `cuda` sends the job to `slurm.ensembles.gpu` when an `mlip` level is used |
 | `executable` | `crest` | resource: which CREST binary |
 
 Output: `crest_conformers.xyz` (the full ensemble, not `crest_clustered.xyz`), so `n_conf` can be
@@ -61,7 +61,7 @@ conformer_search:
 conformer_search:
   name: crest_gfnff_uma_sp
   searcher: crest
-  params: {workhorse: gfnff, refine: sp, mlip_device: cpu}
+  params: {workhorse: gfnff, refine: sp}
 ```
 
 ## `goat`: ORCA GOAT (metals and organics)
