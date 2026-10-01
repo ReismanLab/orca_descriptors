@@ -119,9 +119,9 @@ def cmd_fetch_weights(args) -> int:
         except ImportError:
             pass
     from bceg.refine.uma import point_fairchem_cache, weights_cache_dir
-    from fairchem.core import pretrained_mlip
     cache = weights_cache_dir()
-    point_fairchem_cache(cache)
+    point_fairchem_cache(cache)                 # before fairchem is imported
+    from fairchem.core import pretrained_mlip
     if cache is None:
         print("WARNING: HF_HUB_CACHE is not set; fairchem will use its private ~/.cache/fairchem, which other "
               "users' jobs cannot read. Export HF_HUB_CACHE=<shared cache> first.", file=sys.stderr)

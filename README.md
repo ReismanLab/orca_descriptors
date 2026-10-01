@@ -86,11 +86,10 @@ login node, into a cache shared by the group and read offline by the jobs (the t
 `slurm.setup` in the example config):
 
 ```bash
-export HF_HUB_CACHE=/groups/ReismanLab/hf_cache/hub       # the shared cache (only model files; your token stays in ~/.cache/huggingface)
+export FAIRCHEM_CACHE_DIR=/groups/ReismanLab/hf_cache/hub  # the shared cache fairchem reads (only model files; your token stays in ~/.cache/huggingface)
 hf auth login                                              # once per user: the weights are gated
-orcadesc fetch-weights --model uma-s-1p2                   # once per model, into HF_HUB_CACHE (fairchem alone would use ~/.cache/fairchem);
-                                                           # sets SSL_CERT_FILE to the certifi bundle (conda's OpenSSL does not find the
-                                                           # system CA store, hence CERTIFICATE_VERIFY_FAILED otherwise)
+orcadesc fetch-weights --model uma-s-1p2                   # once per model; sets SSL_CERT_FILE to the certifi bundle (conda's OpenSSL does not
+                                                           # find the system CA store, hence CERTIFICATE_VERIFY_FAILED otherwise)
 ```
 
 Step 4 alone (condensing) needs only the Python of `module load python`. For the maintainer: `conda env
@@ -342,7 +341,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | `status` says `in_progress` but `squeue` shows nothing | a job died (walltime, node failure) before writing its end | `orcadesc submit <LIB>.yaml --force` |
 | `status` says `ensemble_missing` after the bceg jobs finished | bceg failed for that molecule; its `run_1*.json` in the method folder holds the error | fix the cause, run `orcadesc submit` again (bceg reruns only the failed replicate) |
 | a prepare log ends with `orca not found on PATH` or an ORCA job's `calcParam.out` is empty | the `slurm.setup` lines do not load the ORCA module, or NBO variables are missing | add `module load orca/6.1.0` (and the `NBOEXE` / `GENEXE` exports) to `slurm.setup`, resubmit |
-| `status` shows `post_opt failed` and `run_1_<lot>.json` says `LocalEntryNotFoundError` or `CERTIFICATE_VERIFY_FAILED` | the job tried to download the UMA weights; conda's OpenSSL cannot verify huggingface.co | `orcadesc fetch-weights` once on the login node into the shared cache (step 2), keep `HF_HUB_CACHE` / `HF_HUB_OFFLINE=1` in `slurm.setup`, then `orcadesc submit` again: only the post-optimisation reruns |
+| `status` shows `post_opt failed` and `run_1_<lot>.json` says `LocalEntryNotFoundError` or `CERTIFICATE_VERIFY_FAILED` | the job tried to download the UMA weights; conda's OpenSSL cannot verify huggingface.co | `orcadesc fetch-weights` once on the login node into the shared cache (step 2), keep `FAIRCHEM_CACHE_DIR` / `HF_HUB_OFFLINE=1` in `slurm.setup`, then `orcadesc submit` again: only the post-optimisation reruns |
 | `ImportError: /lib64/libstdc++.so.6: version CXXABI_1.3.15 not found` when importing fairchem or `sqlite3` | pip-installed torch loaded the old system libstdc++ before the env's | `export LD_LIBRARY_PATH=$CONDA_PREFIX/lib` (in `slurm.setup` in the example); in Python, `import sqlite3` before torch, which bceg does |
 | UMA post-optimisation fails with a Hugging Face authentication error on the login node | the UMA weights are gated | `huggingface-cli login` once in your account, then fetch the weights again |
 | `all_conformers_completed` is `False` | a conformer of that molecule is `running`, `failed` or `missing` in `orca_job_status`; its late descriptors (NMR, redox, Fukui) are NaN and left out of the averages | finish or resubmit the job, step 4 again (rebuilds that file), 5.1, then `all` |

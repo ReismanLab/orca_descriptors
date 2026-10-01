@@ -35,18 +35,22 @@ def weights_cache_dir() -> str | None:
 def point_fairchem_cache(cache_dir: str | None) -> None:
     """Make fairchem download / look up its checkpoints in ``cache_dir``.
 
-    fairchem ignores HF_HUB_CACHE: ``pretrained_checkpoint_path_from_name`` passes the module constant
-    ``CACHE_DIR`` (~/.cache/fairchem) to ``hf_hub_download``, and ``get_predict_unit`` does not forward
-    its own ``cache_dir`` argument to it (only to the reference-energy files). Rebinding the constant
-    at run time is the one hook that covers both.
+    fairchem ignores HF_HUB_CACHE: its ``CACHE_DIR`` (``~/.cache/fairchem``) is read from the
+    ``FAIRCHEM_CACHE_DIR`` environment variable when ``fairchem.core._config`` is imported, and
+    ``get_predict_unit`` does not forward its own ``cache_dir`` argument to the checkpoint download.
+    So the variable is set here, before fairchem is imported (the refiner imports it lazily); when
+    fairchem is already in the process the module constants are rebound as a fallback.
     """
     if not cache_dir:
         return
-    import fairchem.core._config as fc_config
-    from fairchem.core.calculate import pretrained_mlip
+    import os
+    import sys
 
-    fc_config.CACHE_DIR = cache_dir
-    pretrained_mlip.CACHE_DIR = cache_dir
+    os.environ["FAIRCHEM_CACHE_DIR"] = cache_dir
+    if "fairchem.core._config" in sys.modules:
+        sys.modules["fairchem.core._config"].CACHE_DIR = cache_dir
+    if "fairchem.core.calculate.pretrained_mlip" in sys.modules:
+        sys.modules["fairchem.core.calculate.pretrained_mlip"].CACHE_DIR = cache_dir
 
 
 def _version(pkg: str) -> str:
@@ -84,8 +88,9 @@ class UMA(Refiner):
 
     def calculator(self):
         if self._calc is None:
-            import sqlite3  # noqa: F401  -- before torch: see load_env_runtime()
-            load_env_runtime()
+            load_env_runtime()                      # the env's libstdc++ before torch's
+            cache_dir = weights_cache_dir()
+            point_fairchem_cache(cache_dir)         # FAIRCHEM_CACHE_DIR before fairchem is imported
             import torch
             from fairchem.core import FAIRChemCalculator, pretrained_mlip
 
@@ -93,8 +98,6 @@ class UMA(Refiner):
             # in, so an 8-core allocation on a 64-core node would oversubscribe eightfold. This runs
             # in-process, so run()'s OMP_NUM_THREADS never applies to it.
             torch.set_num_threads(resolve_threads(self.params["threads"]))
-            cache_dir = weights_cache_dir()
-            point_fairchem_cache(cache_dir)
             try:
                 kwargs = {"cache_dir": cache_dir} if cache_dir else {}
                 predictor = pretrained_mlip.get_predict_unit(self.params["model"], device=self.params["device"], **kwargs)
