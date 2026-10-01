@@ -420,6 +420,7 @@ def test_bceg_sbatch_failure_is_reported_cleanly(tree, monkeypatch, capsys):
         raise RuntimeError("bceg submit.sh failed (1): sbatch: error: invalid partition specified: x")
 
     monkeypatch.setattr(BcegSource, "submit", boom)
+    monkeypatch.setattr(BcegSource, "pending_tasks", lambda self: (["one task"], []))  # the fake tree's params.json is not bceg's
     assert main(["submit", str(path)]) == 1
     err = capsys.readouterr().err
     assert "bceg submission failed" in err and "Nothing was queued" in err
