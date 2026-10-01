@@ -92,6 +92,11 @@ orcadesc fetch-weights --model uma-s-1p2                   # once per model; set
                                                            # find the system CA store, hence CERTIFICATE_VERIFY_FAILED otherwise)
 ```
 
+Set `FAIRCHEM_CACHE_DIR` before fetching: fairchem reads that variable, not `HF_HUB_CACHE`, and would otherwise
+download into a private `~/.cache/fairchem`. If weights ever have to be moved from one cache to another, move
+the whole cache: the model directory `models--facebook--UMA/` and the root-level `blobs/` store next to it,
+because recent Hugging Face clients keep the data in that store and the model directory only holds symlinks.
+
 Step 4 alone (condensing) needs only the Python of `module load python`. For the maintainer: `conda env
 create -f gp_env_cluster.yml` from the root of `/groups/ReismanLab/orca_descriptors` (its `-e .` line installs
 that clone, so `git pull` there updates everyone). LoQI is part of that environment.
