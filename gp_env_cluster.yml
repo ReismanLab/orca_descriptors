@@ -22,6 +22,7 @@ dependencies:
   - pyyaml=6.0.3
   - pytest=9.1.1
   - pip=24.2
+  - libstdcxx-ng>=14       # C++ runtime for the env's own libraries (ICU 78 needs CXXABI_1.3.15); the EL9 system one is too old
   - xtb                    # GFN2-xTB pre-optimisation of the start geometries
   - crest                  # conformer search (3.0.2 on conda-forge at the time of writing)
   - pip:
