@@ -7,6 +7,14 @@ ORCA stage reads charge and multiplicity from. The block's `name` is the depth-1
 ensembles: `<ensembles_dir>/<name>/<InChIKey>/<method>/`. The InChIKey is always the one of the
 **input** SMILES, so the same ligand has the same key under every transformation.
 
+The ORCA stage records the product once more, per molecule, as soon as `orcadesc submit` sees it:
+`$LIB/<InChIKey>/structure.mol` is the RDKit molecule the transformation built (hydrogens explicit,
+atoms in the order of every `input.xyz` of the molecule, dative bonds kept; a start geometry returned by
+the script is its 3D block), and `metadata.json` carries it as `structure` (`smiles`, `charge`,
+`multiplicity`, `n_atoms`, `has_input_coords`, `mol_file`, `metadata`). `Chem.MolFromMolFile(path,
+removeHs=False)` gives the object back (`sanitize=False` for a metal complex RDKit cannot sanitise);
+`molecule_registry.json` lists the product SMILES as `transformed_smiles`.
+
 ## Keys
 
 | Key | Default | Meaning | Hashed |

@@ -19,8 +19,11 @@ import time
 import traceback
 from pathlib import Path
 
+from rdkit import Chem
+
 from bceg.inputs import InputMolecule
 from bceg.provenance import ParamsMismatch
+from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils import orca_parse as op
@@ -34,6 +37,29 @@ RUN_TIME_RE = re.compile(r"^TOTAL RUN TIME:\s*(.+?)\s*$", re.MULTILINE)
 
 def conformer_name(i: int) -> str:
     return f"conf_{i}"
+
+
+STRUCTURE_MOL = "structure.mol"
+
+
+def write_structure(mol_dir: Path, structure: Structure) -> dict:
+    """Write ``mol_dir/structure.mol``: the transformation's product as RDKit built it (hydrogens explicit,
+    atoms in the order of every xyz of the molecule, dative bonds kept). ``Chem.MolFromMolFile(path,
+    removeHs=False)`` gives the object back (``sanitize=False`` for a metal complex RDKit cannot
+    sanitise). A start geometry returned by the transformation is written as the 3D block. Returns the
+    ``structure`` record of metadata.json."""
+    mol = Chem.Mol(structure.mol)
+    if structure.coords is not None:
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        for i, xyz in enumerate(structure.coords):
+            conf.SetAtomPosition(i, [float(v) for v in xyz])
+        mol.RemoveAllConformers()
+        mol.AddConformer(conf, assignId=True)
+    mol_dir.mkdir(parents=True, exist_ok=True)
+    Chem.MolToMolFile(mol, str(mol_dir / STRUCTURE_MOL))
+    return {"smiles": structure.smiles, "charge": structure.charge, "multiplicity": structure.multiplicity,
+            "n_atoms": mol.GetNumAtoms(), "has_input_coords": structure.coords is not None,
+            "mol_file": STRUCTURE_MOL, "metadata": structure.metadata}
 
 
 # --------------------------------------------------------------------------- prepare
@@ -58,7 +84,7 @@ def energy_window(conformers: list[Conformer], ewin_kcal_mol: float | None) -> l
 
 def _registry_entry(ens: Ensemble, smiles_line: int | None = None) -> dict:
     entry = {"smiles": ens.input_smiles, "canonical_smiles": ens.canonical_smiles, "name": ens.name,
-             "source": ens.record}
+             "transformed_smiles": None if ens.structure is None else ens.structure.smiles, "source": ens.record}
     if smiles_line is not None:
         entry["smiles_line"] = smiles_line
     return entry
@@ -75,6 +101,8 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
     ens = Ensembles(cfg).ensemble(mol)
     base = {"inchikey": inchikey, "smiles": ens.input_smiles, "canonical_smiles": ens.canonical_smiles,
             "name": ens.name, "ensemble": ens.record, "pipeline": cfg.pipeline}
+    if ens.structure is not None:  # the product of stage 1, as an RDKit mol file next to metadata.json
+        base["structure"] = write_structure(mol_dir, ens.structure)
     records.register_molecule(lib, inchikey, _registry_entry(ens))
 
     if not ens.done:

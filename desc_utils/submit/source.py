@@ -28,6 +28,7 @@ from bceg.config import write_raw as bceg_write_raw
 from bceg.inputs import InputMolecule, load_inputs, update_index
 from bceg.layout import method_dir
 from bceg.provenance import ParamsMismatch, read_record
+from bceg.structure import Structure
 from bceg.xyz import Conformer, read_xyz
 
 from desc_utils.submit.config import Config
@@ -49,6 +50,7 @@ class Ensemble:
     elements: list[str] = field(default_factory=list)
     conformers: list[Conformer] = field(default_factory=list)
     record: dict[str, Any] = field(default_factory=dict)  # provenance written to metadata.json / registry
+    structure: Structure | None = None  # the transformation's product (RDKit mol in the xyz atom order); None when n/a
 
     @property
     def done(self) -> bool:
@@ -108,6 +110,7 @@ class Ensembles:
         if structure is None:
             return Ensemble(**base, status="not_applicable", record=record,
                             reason=f"transformation {self.transformation.name} does not apply to this molecule")
+        base["structure"] = structure
 
         params = read_record(md.params())
         refine_params = read_record(md.params(self.lot)) if self.lot else None

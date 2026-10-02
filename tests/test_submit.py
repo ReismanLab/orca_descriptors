@@ -11,9 +11,11 @@ import json
 import stat
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
+from rdkit import Chem
 
 from bceg.inputs import InputMolecule
 from bceg.layout import method_dir
@@ -27,7 +29,8 @@ from desc_utils.submit.config import Config
 from desc_utils.submit.source import Ensembles
 from desc_utils.submit.status import stage_statuses, status_table
 from desc_utils.submit.cost import cost_table
-from desc_utils.submit.tasks import allocated_cpus, energy_window, orca_outcome, prepare_molecule, run_orca_conformer
+from desc_utils.submit.tasks import (allocated_cpus, energy_window, orca_outcome, prepare_molecule, run_orca_conformer,
+                                     write_structure)
 
 LOT = "uma-s-1p2"
 LIGANDS = "CCO ethanol\nCC(C)O\nc1ccccc1 benzene\n"  # benzene gets no ensemble
@@ -294,6 +297,12 @@ def test_prepare_prunes_splits_and_submits(tree, fake_sbatch):
     from desc_utils.numbering.io import xyz_comment_energy
     assert xyz_comment_energy(mol_dir / "conf_1", "input.xyz", "energy", "hartree") == pytest.approx(-100.0)
     meta = records.load_metadata(tree["lib"], key)
+    # the transformation's product: an RDKit mol file in the xyz atom order, and its record
+    assert meta["structure"] == {"smiles": "CCO", "charge": 0, "multiplicity": 1, "n_atoms": 9, "has_input_coords": False,
+                                 "mol_file": "structure.mol", "metadata": {}}
+    saved = Chem.MolFromMolFile(str(mol_dir / "structure.mol"), removeHs=False)
+    assert [a.GetSymbol() for a in saved.GetAtoms()] == [line.split()[0] for line in xyz[2:11]]
+    assert Chem.MolToSmiles(Chem.RemoveHs(saved)) == "CCO"
     assert meta["dft"]["charge"] == 0 and meta["dft"]["multiplicity"] == 1
     assert meta["dft"]["pruning"] == {"energy_window_kcal_mol": 5.0}
     assert meta["dft"]["compound_steps"]["optimization"]["extra_basis"] == "Ni def2-tzvp"
@@ -313,6 +322,22 @@ def test_prepare_prunes_splits_and_submits(tree, fake_sbatch):
     # the registry now carries the ensemble provenance
     reg = records.load_registry(tree["lib"])[key]
     assert reg["source"]["method"] == "etkdg" and reg["source"]["params_sha256"] == meta["ensemble"]["params_sha256"]
+    assert reg["transformed_smiles"] == "CCO"
+
+
+def test_structure_mol_keeps_dative_bonds_and_start_geometry(tmp_path):
+    from bceg.transforms import BUILTIN_TRANSFORMS, Transformation
+    t = Transformation("NiF2", BUILTIN_TRANSFORMS / "ni_x2.py", {"x": "F"}, multiplicity=1)
+    structure = t.apply(InputMolecule.from_smiles("c1ccc(-c2ccccn2)nc1").canonical_smiles)
+    n = structure.mol.GetNumAtoms()
+    structure = Structure(structure.smiles, charge=structure.charge, multiplicity=1,
+                          coords=np.arange(3 * n, dtype=float).reshape(n, 3), metadata={"scaffold": "bipy"})
+    rec = write_structure(tmp_path, structure)
+    assert rec["charge"] == 0 and rec["n_atoms"] == n == 23 and rec["has_input_coords"] and rec["metadata"] == {"scaffold": "bipy"}
+    saved = Chem.MolFromMolFile(str(tmp_path / rec["mol_file"]), removeHs=False, sanitize=False)
+    assert [a.GetSymbol() for a in saved.GetAtoms()] == structure.elements
+    assert sum(b.GetBondType() == Chem.BondType.DATIVE for b in saved.GetBonds()) == 4
+    assert saved.GetConformer().GetAtomPosition(1).x == pytest.approx(3.0)
 
 
 def test_no_pruning_keeps_every_conformer(tree, fake_sbatch):
@@ -336,6 +361,8 @@ def test_prepare_without_ensemble(tree, fake_sbatch):
     assert meta["orca_stage"]["status"] == "ensemble_missing" and "run_1_uma-s-1p2.json" in meta["orca_stage"]["reason"]
     assert records.molecule_state(meta)[0] == "incomplete"
     assert not (tree["lib"] / key / "conf_1").exists()
+    # the product of stage 1 is recorded even before the ensemble exists
+    assert meta["structure"]["smiles"] == "c1ccccc1" and (tree["lib"] / key / "structure.mol").exists()
 
 
 def test_prepare_refuses_changed_ensemble(tree, fake_sbatch):

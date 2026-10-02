@@ -109,9 +109,11 @@ whether anything is really queued (`QUEUED`, `RUNNING`, `OK`, `FAILED` with the 
 
 `$LIB/params.json` holds the six stage blocks as run; `_jobs/<timestamp>/` the frozen config, template,
 bceg config, task lists and scripts of each submission; `molecule_registry.json` maps every InChIKey folder
-to the SMILES as submitted, its line in the list, the canonical SMILES and the bceg method folder with its
-hyper-parameter hashes (an InChIKey is a hash and cannot be turned back into a molecule). Per molecule,
-`metadata.json` records when its ensemble was queued (`ensemble_stage`), the ensemble (bceg directory,
+to the SMILES as submitted, its line in the list, the canonical SMILES, the SMILES after the transformation
+and the bceg method folder with its hyper-parameter hashes (an InChIKey is a hash and cannot be turned back
+into a molecule). Per molecule, `metadata.json` records when its ensemble was queued (`ensemble_stage`),
+the transformation's product (`structure`: SMILES, charge, multiplicity; the RDKit molecule itself is next
+to it as `structure.mol`, hydrogens explicit, in the xyz atom order), the ensemble (bceg directory,
 method, level, replicate, `params.json` hashes, program versions; bceg's own `run_1[_<lot>].json` in the
 method folder has the phase, host, wall time and errors), the clone and git commit, the DFT set-up
 (charge, multiplicity, `pruning`, template, MD5 of the rendered input, `nprocs`, `maxcore`, the
