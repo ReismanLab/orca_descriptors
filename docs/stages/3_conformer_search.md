@@ -4,7 +4,8 @@ The conformer ensemble of the transformed structure, written by bceg to
 `<ensembles_dir>/<transformation>/<InChIKey>/<name>/raw_<i>.xyz`, one file per replicate `i` (energies
 in Hartree on the comment lines when the searcher gives them). The folder also holds `params.json`
 (every parameter with the defaults filled in, hashed), `run_<i>.json` (status, phase, SLURM ids, host,
-wall time, core-hours, program versions, `details`) and `logs/` (`raw_<i>_crest.out`,
+wall time and core-hours in total and per phase under `phases` — `pre_refinement` and `search`, see
+[stage 2](2_pre_refinement.md#cost) —, program versions, `details`) and `logs/` (`raw_<i>_crest.out`,
 `raw_<i>_input.toml`, `raw_<i>_start_geometry.xyz`, ...; a failed run keeps its small files under
 `logs/raw_<i>_failed/`). With the default `replicates: 1` the only files are `raw_1.xyz` and `run_1.json`.
 
@@ -169,17 +170,39 @@ conformer_search:
   params: {n_confs: 300, ff_optimize: MMFF94s}
 ```
 
-## `loqi`: LoQI diffusion generator (organics only)
+## `loqi`: LoQI conformer generator (organics only)
 
-Called through its CLI (`loqi sample`); runs on the GPU profile. A molecule that is not organic is
-`not_applicable` for this searcher. No start geometry: `pre_refinement` must be `none`.
+Called through its CLI (`loqi sample`, the console script of the `loqi` pip package in the shared env);
+runs on the GPU profile unless `device: cpu`. A molecule that is not organic is `not_applicable` for this
+searcher. No start geometry: `pre_refinement` must be `none`. The replicate seed is passed as `--seed`
+(upstream would otherwise sample every replicate with seed 42). Flags checked against upstream
+`src/loqi/cli.py` (loqi 1.1.0) on 2026-10-02.
 
 | `params` | Default | Meaning |
 |---|---|---|
 | `n_confs` | `100` | conformers sampled |
-| `extra_args` | `[]` | additional CLI arguments (model, batch options) |
+| `model` | `loqi_flow_v1.1.0` | registered checkpoint (`loqi`, `loqi_flow`, `loqi_flow_v1.1.0`) or the path of a `.ckpt` file |
+| `config` | `null` | bundled config name or YAML path, only for a checkpoint outside the registry |
+| `steps` | `null` | sampling steps (`null`: the checkpoint's training value) |
+| `add_hs` | `true` | LoQI adds the hydrogens of the SMILES (`false`: `--no-add-hs`) |
+| `extra_args` | `[]` | additional CLI arguments, appended verbatim |
 | `seed_offset` | `0` | see above |
+| `device` | `null` | resource: torch device (`null`: cuda if available, else cpu; `cpu` sends the step to the cpu profile) |
+| `batch_atoms` | `null` | resource: atom budget per batch (GPU memory) |
+| `threads` | job's CPUs | resource: CPU threads of the torch side (`SLURM_CPUS_PER_TASK`) |
 | `executable` | `loqi` | resource: the `loqi` on PATH |
+
+**Weights.** LoQI downloads a registered checkpoint on first use into `$LOQI_CACHE_DIR` (else
+`~/.cache/loqi`). Compute nodes cannot, so fetch it once on a login node into the shared cache and keep the
+same `export` in `slurm.setup` (the example config has it):
+
+```bash
+export LOQI_CACHE_DIR=/groups/ReismanLab/loqi_cache
+loqi download --model loqi_flow_v1.1.0        # ~360 MB, SHA-256 verified; prints the cached path
+```
+
+`versions`: `loqi` (the package version). `details`: `seed`, `model`, `checkpoint`, `n_sampled`,
+`n_failed_samples` (samples upstream could not turn into a geometry). The conformers carry no energies.
 
 ```yaml
 pre_refinement: none
@@ -188,6 +211,8 @@ conformer_search:
   searcher: loqi
   params: {n_confs: 100}
 slurm:
+  setup:
+    - export LOQI_CACHE_DIR=/groups/ReismanLab/loqi_cache
   ensembles:
     gpu: {partition: gpu, time: "04:00:00", gres: "gpu:1", cpus_per_task: 4, mem: 16G}
 ```

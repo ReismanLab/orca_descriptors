@@ -41,7 +41,7 @@ External programs, none of which the shared environment can provide for you:
 | CREST methods, all start geometries | `crest`, `xtb` | in the shared env (conda-forge `crest`, currently 3.0.2) |
 | CREST with inline UMA (`+uma` methods, `refine: sp/opt`) | `crest` ≥ 3.1 and `fmlip-relay-server` | **unreleased**, so these methods are commented out in `configs/example.yaml`. 3.1 exists only on the open PR [crest-lab/crest#483](https://github.com/crest-lab/crest/pull/483) (branch `pprcht/crest@experimental`). To use it: build that branch with `-Dfmlip-relay=enabled`, `pip install '<crest-src>/subprojects/fmlip_relay[uma]'` into the env, then set `params: {executable: /abs/path/to/crest-3.1}` on those methods |
 | GOAT | ORCA | cluster module; absolute path in `orca_cmd` |
-| LoQI | `loqi` | in the shared env (`gp_env_cluster.yml`) |
+| LoQI | `loqi` | in the shared env (`gp_env_cluster.yml`, pip package `loqi`, tag v1.1); checkpoint fetched once on a login node: `export LOQI_CACHE_DIR=/groups/ReismanLab/loqi_cache` then `loqi download --model loqi_flow_v1.1.0`, same `export` in `slurm.setup` |
 
 ### Your config
 
@@ -247,8 +247,10 @@ less DATA/_jobs/<timestamp>/slurm_logs/chain_crest_gfn2_<jobid>_<index>.out
 ```
 
 Each `run_<i>.json` also records what the step cost — `wall_time_s`, `cpus`, `cpu_hours`, and `gpus` /
-`gpu_hours` with the GPU model on a GPU node — so a method's price can be totalled from the results tree
-long after the jobs have left SLURM's accounting database (see [README](README.md#compute-usage)).
+`gpu_hours` with the GPU model on a GPU node; a search record splits them under `phases` into
+`pre_refinement` and `search` — so a method's price can be totalled from the results tree long after the
+jobs have left SLURM's accounting database (see [README](README.md#compute-usage); in a library,
+`orcadesc cost` does the sum per molecule and stage).
 
 If a replicate failed, its `run_<i>.json` holds the error and traceback. `logs/raw_<i>_failed/` holds the
 files of its working directory, including every xtb pre-optimisation attempt (`preopt_<n>/`). Fix the

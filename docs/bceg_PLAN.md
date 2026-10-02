@@ -93,7 +93,7 @@ Suggested test: 1 ligand × NiF2 × {crest_gfn2, crest_gfn2+uma-opt, molassemble
 - [ ] Same question for GOAT (does ORCA expose/record a seed?). Molassembler takes the replicate seed explicitly.
 - [ ] GOAT writes `goat.finalensemble.xyz` with the energy as the first float of each comment line
 - [ ] molassembler Python API calls (`interpret.molecules`, `dg.generate_ensemble`) match the installed version
-- [ ] LoQI CLI options (`--n-confs`, seeding)
+- [x] LoQI CLI options (`--n-confs`, seeding): checked against upstream `src/loqi/cli.py` (loqi 1.1.0) on 2026-10-02; `--seed` is passed per replicate, `--model` and the `LOQI_CACHE_DIR` cache are handled
 - [ ] UMA post-optimisation on GPU (fairchem `pretrained_mlip.get_predict_unit`, charge/spin via `atoms.info`)
 - [ ] atom order identical across the 6 xyz files of each method folder; `bceg status` all done
 

@@ -102,6 +102,10 @@ The `aimnet2` refiner has its own cache: `export AIMNET_CACHE_DIR=/groups/Reisma
 needs no weights, only the g-xTB build of `xtb` on PATH or in `post_optimization.params.executable`
 ([docs/stages/4_post_optimization.md](docs/stages/4_post_optimization.md)).
 
+LoQI (`conformer_search.searcher: loqi`) caches its checkpoint the same way: `export
+LOQI_CACHE_DIR=/groups/ReismanLab/loqi_cache` then `loqi download --model loqi_flow_v1.1.0` once on the login
+node, and the same `export` in `slurm.setup` ([docs/stages/3_conformer_search.md](docs/stages/3_conformer_search.md)).
+
 Step 4 alone (condensing) needs only the Python of `module load python`. For the maintainer: `conda env
 create -f gp_env_cluster.yml` from the root of `/groups/ReismanLab/orca_descriptors` (its `-e .` line installs
 that clone, so `git pull` there updates everyone). LoQI is part of that environment.
@@ -174,6 +178,7 @@ with other parameters is refused for a library built on the old one (`ensemble_c
 
 ```bash
 orcadesc status <LIB>.yaml                                                                       # per molecule: one status per stage, conformer counts
+orcadesc cost <LIB>.yaml [--csv cost.csv]                                                        # per molecule: core-hours and GPU-hours per stage and per ORCA step, from the records
 squeue -u $USER                                                                                  # what SLURM really holds
 python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/check_jobs.py $LIB      # per conformer, from squeue and the ORCA outputs
 python3 -m json.tool $LIB/<InChIKey>/metadata.json                                               # the full record of one molecule
@@ -349,8 +354,8 @@ What the output files contain is in [What you get](#what-you-get).
 | File | One row per | Content |
 |---|---|---|
 | `<date>_<name>_atom_numbering_results.csv` | conformer | 1-based index of every label, SCF energy, SMILES, `numbering_status` |
-| `<date>_<name>_combined_descriptors.csv` | conformer | `orca_job_status` (`completed`, `running`, `failed`; `unknown` for files condensed before 2026-09-23, `missing` for a folder with no file), `n_conformer_folders` of its molecule, then every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
-| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchikey`, `smiles`, `smiles_noH` (implicit hydrogens), `n_conformers` (rows aggregated), `n_conformers_completed`, `n_conformer_folders` (folders on disk), `all_conformers_completed` (`True` / `False`; empty when a status is `unknown`), then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
+| `<date>_<name>_combined_descriptors.csv` | conformer | `orca_job_status` (`completed`, `running`, `failed`; `unknown` for files condensed before 2026-09-23, `missing` for a folder with no file), `n_conformer_folders` of its molecule, what its ORCA job cost (`orca_run_time_s`, `orca_nprocs`, `orca_cpu_hours`, `orca_step_<step>_s` per compound step; empty for files condensed before 2026-10-02), then every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
+| `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchikey`, `smiles`, `smiles_noH` (implicit hydrogens), `n_conformers` (rows aggregated), `n_conformers_completed`, `n_conformer_folders` (folders on disk), `all_conformers_completed` (`True` / `False`; empty when a status is `unknown`), `dft_cpu_hours` and `dft_<step>_cpu_hours` (core-hours of the molecule's ORCA jobs, summed; the ensemble's cost is in `orcadesc cost --csv`, joinable on `inchikey`), then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
 | `<date>_<name>_conformers_to_check.csv` | conformer needing a look | only written when there is one (today's copy is removed otherwise): `path`, `reason`, `numbering_status`, `numbering_notes`, `orca_job_status` |
 
 Conventions worth knowing when reading the spreadsheet: energies are in Hartree, HOMO/LUMO in eV,
@@ -372,6 +377,8 @@ The full list is under [Descriptors provided](#descriptors-provided).
 | a prepare log ends with `orca not found on PATH` or an ORCA job's `calcParam.out` is empty | the `slurm.setup` lines do not load the ORCA module, or NBO variables are missing | add `module load orca/6.1.0` (and the `NBOEXE` / `GENEXE` exports) to `slurm.setup`, resubmit |
 | `status` shows `post_opt failed` and `run_1_<lot>.json` says `LocalEntryNotFoundError` or `CERTIFICATE_VERIFY_FAILED` | the job tried to download the UMA weights; conda's OpenSSL cannot verify huggingface.co | `orcadesc fetch-weights` once on the login node into the shared cache (step 2), keep `FAIRCHEM_CACHE_DIR` / `HF_HUB_OFFLINE=1` in `slurm.setup`, then `orcadesc submit` again: only the post-optimisation reruns |
 | `status` shows `post_opt failed` and `run_1_<lot>.json` says `AIMNet2 weights ... not in the cache` | the job tried to download the AIMNet2 weights | `aimnet download <model>` on the login node with `AIMNET_CACHE_DIR` set to the shared cache, keep the `export` in `slurm.setup`, `orcadesc submit` again |
+| `search` is `failed` in `status` and the method folder's `run_1.json` says `'loqi' not found on PATH` | the shared `gp_env` was built before LoQI was added to it (2026-10-01) or its pip step failed | maintainer, in `gp_env`: `pip install "loqi @ git+https://github.com/isayevlab/LoQI@v1.1"` (or `conda env update -f gp_env_cluster.yml`), then `which loqi`; `orcadesc submit` again |
+| `search` is `failed` and `run_1.json` says `LoQI failed` ... `is not in the cache` | the job tried to download the LoQI checkpoint | `loqi download --model <name>` on the login node with `LOQI_CACHE_DIR` set to the shared cache, keep the `export` in `slurm.setup`, `orcadesc submit` again |
 | `status` shows `post_opt failed` and `run_1_<lot>.json` says `does not know --gxtb` | the `xtb` the job found is the standard one, not the g-xTB build | put the g-xTB `bin/` first on PATH in `slurm.setup` or set `post_optimization.params.executable` to its `xtb` |
 | `ImportError: /lib64/libstdc++.so.6: version CXXABI_1.3.15 not found` when importing fairchem or `sqlite3` | pip-installed torch loaded the old system libstdc++ before the env's | `export LD_LIBRARY_PATH=$CONDA_PREFIX/lib` (in `slurm.setup` in the example); in Python, `import sqlite3` before torch, which bceg does |
 | UMA post-optimisation fails with a Hugging Face authentication error on the login node | the UMA weights are gated | `huggingface-cli login` once in your account, then fetch the weights again |
@@ -399,7 +406,7 @@ The full list is under [Descriptors provided](#descriptors-provided).
 |---|---|
 | [DATA](DATA) | Where the libraries go on your laptop (step 5.1): `DATA/<LIB>/<InChIKey>/conf_N/`. Empty in the repository, ignored by git. |
 | [specs](specs) | One YAML spec per molecule family. `lnih2_pyox.yaml` (LNiH2 / PyOx ligand library) and `test_molecules_at1_at2.yaml` (small organic test set) are the shipped examples. |
-| [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions); `submit/` (the ORCA stage of step 3, the `orcadesc` command: `config.py`, `source.py`, `template.py` and `calcParam.inp.tmpl`, `records.py`, `slurm.py`, `tasks.py`, `status.py`). |
+| [desc_utils](desc_utils) | The pipeline: `spec.py` (spec loading and validation), `numbering/` (atom numbering backends), `extract/` (ORCA and DescriPyTor adapters), `aggregate.py` (Boltzmann aggregation, filtering), `run.py` (CLI), `orca_parse.py` (standard-library ORCA parsers, also run on the cluster), `condense.py` (condensed per-conformer file: producer, checker, loader), `orca_descriptors.py` and `data_extraction.py` (morfeus geometry, extraction functions); `submit/` (the ORCA stage of step 3, the `orcadesc` command: `config.py`, `source.py`, `template.py` and `calcParam.inp.tmpl`, `records.py`, `slurm.py`, `tasks.py`, `status.py`, `cost.py`). |
 | [DescriPyTor](DescriPyTor) | Git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor). |
 | [bceg](bceg) | Conformer ensembles (imported from [ReismanLab/B-CEG-MCD](https://github.com/ReismanLab/B-CEG-MCD) with its history): transformations (`transforms_builtin/ni_x2.py`), searchers (`search/`: CREST, GOAT, molassembler, RDKit ETKDG, LoQI), UMA post-optimisation (`refine/`), hyper-parameter logs (`provenance.py`), SLURM arrays (`slurm.py`), the `bceg` command. Its original documents are under [docs](docs). |
 | [configs](configs) | `orca_library_example.yaml`: one library in one file, one block per stage (LNiH2 level of theory); copy it next to your SMILES list (step 3). |
@@ -572,8 +579,9 @@ The result is `<date>_<name>_combined_descriptors.csv`, one row per conformer, m
 `<name>_min`, `<name>_max`, `<name>_lowE` (lowest-energy conformer) and `<name>_boltz`, the Boltzmann
 average at `temperature_K` with weights `exp(-ΔE / kB T)` computed from `energy_column` (by default the
 column of `numbering.energy`: the SCF energy of the `singlepoint` step, no thermal correction, or the
-comment-line energy of the geometry file for a geometry-only run; always Hartree). `n_conformers` and the `carry_first` columns are
-kept. This complete table is the default output. Optionally, with `filter.enabled: true` in the spec or
+comment-line energy of the geometry file for a geometry-only run; always Hartree). `n_conformers`, the `carry_first` columns,
+the completeness columns and the cost columns (`dft_cpu_hours`, `dft_<step>_cpu_hours`: the per-conformer
+`orca_*` cost columns summed, never aggregated as descriptors) are kept. This complete table is the default output. Optionally, with `filter.enabled: true` in the spec or
 `aggregate --filter`, `filter_numeric_descriptors` then removes: non-numeric and all-NaN columns, NBO orbitals whose
 Boltzmann occupancy is below `occupancy_boltz_threshold`, Rydberg orbitals (except on `metal_label`),
 metal 4f Rydbergs, core orbitals, anisotropic NMR terms, NHO φ/θ angles, near-constant columns
