@@ -1,9 +1,10 @@
 """Report the state of every ORCA job of a computation folder: queued, running, done, failed or not started.
 
-Expects the campaign layout ``<computation_folder>/<inchikey>/conf_*/`` created by launch_orca_all.py. Queued
-and running jobs are found by asking SLURM (``squeue``) for the working directory of your jobs, so run this
-on the cluster; elsewhere it falls back to how recently calcParam.out was written. Standard library only; the
-verdict on the files is ``desc_utils.orca_parse.job_status``, the same one the condensed file records.
+Expects the library layout ``<computation_folder>/<inchikey>/conf_*/`` that ``orcadesc`` (and the earlier
+submission scripts) produce. Queued and running jobs are found by asking SLURM (``squeue``) for the working
+directory of your jobs, so run this on the cluster; elsewhere it falls back to how recently calcParam.out was
+written. Standard library only; the verdict on the files is ``desc_utils.orca_parse.job_status``, the same one
+the condensed file records.
 
 Usage:
     python3 scripts-for-orca-computations/check_jobs.py [computation_folder] [--all]

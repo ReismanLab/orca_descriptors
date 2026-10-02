@@ -140,9 +140,8 @@ ORCA job), the column conventions and the optional noise filter are in
 | [bceg](bceg) | conformer ensembles: transformations, searchers (`search/`), refiners (`refine/`), hyper-parameter logs, SLURM arrays, the `bceg` command |
 | [DescriPyTor](DescriPyTor) | git submodule, [Milo-group/DescriPyTor](https://github.com/Milo-group/DescriPyTor) |
 | [configs](configs), [specs](specs), [inputs](inputs) | the example library config, one spec per molecule family, an example SMILES list |
-| [docs](docs) | the documents above; bceg's original README, SUBMITTING and PLAN as imported; [PLAN.md](PLAN.md) at the root is the plan of the merger |
+| [docs](docs) | the documents above |
 | [scripts-for-orca-computations](scripts-for-orca-computations) | cluster tools for any library: `check_jobs.py`, `list_molecules.py`, `slurm-condense.sh`, the fixed `calcParam.inp` of the LNiH2 library |
-| [submission_scripts_v3](submission_scripts_v3) | the previous submission workflow, kept for the batches still running under it |
 | [tests](tests) | unit tests (seconds) and regression tests against `tests/reference/` (minutes, need the LNiH2 library under `DATA/`) |
 | [DATA](DATA), [notebooks](notebooks) | where the libraries land on the laptop (ignored by git); exploratory notebooks, not maintained |
 

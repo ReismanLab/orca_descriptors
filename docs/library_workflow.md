@@ -122,9 +122,8 @@ the frozen template if you customised it, next to a new SMILES list.
 
 ## Other ways to produce the ORCA folders
 
-The previous workflow, [submission_scripts_v3](../submission_scripts_v3) (RDKit, CREST, UMA and ORCA from
-scripts copied into a batch directory), is kept for the batches still running under it; its records are
-not read by `orcadesc`.
+Libraries made before `orcadesc` (the LNiH2 libraries, the alkynes) were produced by earlier scripts whose
+records `orcadesc` does not read; their ORCA folders are still condensed and extracted the same way.
 
 Whatever the procedure, it must leave, somewhere on the cluster, one folder per conformer holding
 the output of an ORCA 6.1 compound job run with `calcParam.inp`:
