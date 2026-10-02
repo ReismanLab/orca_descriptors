@@ -55,7 +55,7 @@ sbatch_overrides = sbatch_resource_overrides(cfg)
 # The geometry uma_opt_confs.py wrote: optimized_<uma.model_name>.xyz.
 uma_xyz = f"optimized_{wi.get(cfg, 'uma.model_name')}.xyz"
 # Clone of orca_descriptors whose desc_utils.condense each ORCA job runs at
-# the end (README step 4). Handed to slurm-calcParam.sh through the job
+# the end (docs/condense.md). Handed to slurm-calcParam.sh through the job
 # environment, since #SBATCH scripts cannot read workflow_inputs.yaml.
 repo_path = wi.get(cfg, "environment.orca_descriptors_repo", default=None)
 if repo_path:

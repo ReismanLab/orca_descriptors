@@ -20,7 +20,7 @@
 # ~70 MB of raw ORCA output, then checks every file it wrote. The log of the run,
 # condense_<jobid>.out and .err, lands in the directory you submit from, which is not necessarily
 # the library: cd there first, or pass sbatch -o /somewhere/condense_%j.out -e ... . Only those files, plus the
-# optimization.xyz next to them, have to be copied to your laptop (step 5 of the README).
+# optimization.xyz next to them, have to be copied to your laptop (docs/condense.md, Transfer).
 #
 # Standard-library Python only: no conda environment, no pip install, just a git clone of
 # orca_descriptors. Every file records the state of its ORCA job (job.status: completed, running,

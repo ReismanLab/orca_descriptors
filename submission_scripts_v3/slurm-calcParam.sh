@@ -37,7 +37,7 @@ mark() {
 
 # ---------------------------------------------------------------------------
 # Condense the outputs into orca_condensed.json so only that file (plus the
-# geometry) has to leave the cluster (README step 4). Standard-library Python
+# geometry) has to leave the cluster (docs/condense.md). Standard-library Python
 # only: the clone needs no environment. ORCA_DESCRIPTORS_REPO comes from
 # workflow_inputs.yaml (environment.orca_descriptors_repo) through
 # launch_orca_all.py's sbatch --export. The step must never fail the job.
@@ -49,7 +49,7 @@ condense() {
         PYTHONPATH="$REPO" python -m desc_utils.condense --conf-dir "$PWD" --quiet \
             || echo "WARNING: condense failed in $PWD" >&2
     else
-        echo "WARNING: $REPO/desc_utils not found; orca_condensed.json not written (run README step 4)" >&2
+        echo "WARNING: $REPO/desc_utils not found; orca_condensed.json not written (see docs/condense.md)" >&2
     fi
 }
 
