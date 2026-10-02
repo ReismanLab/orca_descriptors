@@ -24,7 +24,7 @@ the transformation (stage 1).
 
 | `params` | Default | Meaning |
 |---|---|---|
-| `model` | `uma-s-1p2` | checkpoint name; the weights are gated on Hugging Face and fetched once on a login node with `orcadesc fetch-weights --model <name>` into `FAIRCHEM_CACHE_DIR` (README step 2) |
+| `model` | `uma-s-1p2` | checkpoint name; the weights are gated on Hugging Face and fetched once on a login node with `orcadesc fetch-weights --model <name>` into `FAIRCHEM_CACHE_DIR` ([cluster_setup.md](../cluster_setup.md)) |
 | `task` | `omol` | UMA task head (`omol` for molecules) |
 | `optimizer` | `LBFGS` | ASE optimiser: `LBFGS`, `BFGS`, `FIRE` |
 | `fmax` | `0.05` | convergence criterion on the forces, eV/Angstrom |
@@ -166,7 +166,7 @@ RDKit with `ff_optimize`) or none (molassembler, LoQI, RDKit without force field
 `post_opt` in `orcadesc status`: `n/a` without a refiner, `queued` while the search has not finished,
 `running`, `done`, `failed` (the error from `run_1_<lot>.json` is in `reason`; a missing weight cache
 (UMA, AIMNet2), an SSL error at download time or a standard `xtb` where the g-xTB build was expected
-are the usual causes, see the README's troubleshooting table). `n_conf` then counts the post-optimised
+are the usual causes, see [troubleshooting.md](../troubleshooting.md)). `n_conf` then counts the post-optimised
 conformers.
 
 ## Adding a refiner
