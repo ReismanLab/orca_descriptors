@@ -105,7 +105,7 @@ def _uma_preoptimizer(params: dict):
     from bceg.refine.ase_opt import package_version
     from bceg.refine.uma import UMA
 
-    allowed = set(UMA.defaults) - {"lot", "keep_unconverged"}
+    allowed = set(UMA.defaults) - {"lot", "keep_unconverged", "workers"}  # one geometry: no pool
     unknown = set(params["start_preopt_params"]) - allowed
     if unknown:
         raise ValueError(f"start_preopt_params: unknown UMA parameter(s) {sorted(unknown)}; allowed: {sorted(allowed)}")

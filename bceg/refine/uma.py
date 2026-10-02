@@ -62,9 +62,10 @@ class UMA(Refiner):
         "keep_unconverged": True,  # unconverged conformers are kept and flagged converged=False
         "lot": None,  # label override; defaults to the model name
         "device": "cpu",  # "cuda" sends the step (and, chained, its whole job) to the gpu profile
-        "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
+        "workers": None,  # None/0: one process per CPU of the allocation on cpu (at most 8 outside SLURM), 1 on cuda
+        "threads": None,  # None/0: torch threads per worker, the allocation's CPUs shared between the workers
     }
-    resource_keys = {"device", "threads"}
+    resource_keys = {"device", "workers", "threads"}
 
     def __init__(self, **params) -> None:
         super().__init__(**params)
@@ -109,10 +110,12 @@ class UMA(Refiner):
             self._calc = FAIRChemCalculator(predictor, task_name=self.params["task"])
         return self._calc
 
+    def make_calculator(self, structure: Structure):
+        """The hook of the shared ASE loop (charge and spin travel in ``atoms.info`` with UMA)."""
+        return self.calculator()
+
     def run(self, structure: Structure, conformers: list[Conformer], workdir: Path) -> RefineResult:
         return optimize_conformers(
-            self.calculator(), structure, conformers, workdir,
-            optimizer=self.params["optimizer"], fmax=self.params["fmax"], max_steps=self.params["max_steps"],
-            keep_unconverged=self.params["keep_unconverged"],
+            self, structure, conformers, workdir,
             versions={"fairchem-core": package_version("fairchem-core"), "ase": package_version("ase")},
         )

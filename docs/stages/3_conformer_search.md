@@ -119,7 +119,8 @@ conformer_search:
   slurm: {ntasks: 4, cpus_per_task: 1, nodes: 1}
 ```
 
-In chained mode the post-optimisation inherits this `slurm` block (one CPU per task); use
+In chained mode the post-optimisation inherits this `slurm` block: its worker pool then uses the
+`ntasks` CPUs of the allocation ([stage 4](4_post_optimization.md#cpu-parallelism-workers-and-threads)); use
 `slurm.ensembles.mode: split` to give it its own.
 
 ## `molassembler`: SCINE Molassembler distance geometry (transition-metal complexes)

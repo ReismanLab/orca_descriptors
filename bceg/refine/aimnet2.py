@@ -36,9 +36,10 @@ class AIMNet2(Refiner):
         "keep_unconverged": True,  # unconverged conformers are kept and flagged converged=False
         "lot": None,  # label override; defaults to the model name
         "device": "cpu",  # "cuda" sends the step (and, chained, its whole job) to the gpu profile
-        "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
+        "workers": None,  # None/0: one process per CPU of the allocation on cpu (at most 8 outside SLURM), 1 on cuda
+        "threads": None,  # None/0: torch threads per worker, the allocation's CPUs shared between the workers
     }
-    resource_keys = {"device", "threads"}
+    resource_keys = {"device", "workers", "threads"}
 
     def __init__(self, **params) -> None:
         super().__init__(**params)
@@ -87,10 +88,10 @@ class AIMNet2(Refiner):
                 f"{structure.multiplicity} ({structure.smiles}); use an open-shell model such as aimnet2-nse")
         return AIMNet2ASE(base, charge=structure.charge, mult=structure.multiplicity)
 
+    make_calculator = calculator  # the hook of the shared ASE loop
+
     def run(self, structure: Structure, conformers: list[Conformer], workdir: Path) -> RefineResult:
         return optimize_conformers(
-            self.calculator(structure), structure, conformers, workdir,
-            optimizer=self.params["optimizer"], fmax=self.params["fmax"], max_steps=self.params["max_steps"],
-            keep_unconverged=self.params["keep_unconverged"],
+            self, structure, conformers, workdir,
             versions={"aimnet": package_version("aimnet"), "ase": package_version("ase")},
         )

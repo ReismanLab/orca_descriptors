@@ -32,9 +32,11 @@ the transformation (stage 1).
 | `keep_unconverged` | `true` | keep conformers that did not reach `fmax` (flagged `converged: false` on their comment line); `false` drops them |
 | `lot` | model name | label used in the file names (`raw_1_<lot>.xyz`) |
 | `device` | `cpu` | resource: `cpu` or `cuda`; `cuda` sends the step (and, chained, its whole job) to `slurm.ensembles.gpu` |
-| `threads` | job's CPUs | resource: torch threads (`SLURM_CPUS_PER_TASK`) |
+| `workers` | allocation's CPUs | resource: worker processes the conformers are shared out over (`cpu`: one per CPU of the allocation, at most 8 outside SLURM; `cuda`: 1), see [CPU parallelism](#cpu-parallelism-workers-and-threads) |
+| `threads` | CPUs / `workers` | resource: torch threads per worker (all the allocation's CPUs for a single worker) |
 
-`versions`: `fairchem-core`, `ase`. Per conformer: `steps`, `fmax` (residual force).
+`versions`: `fairchem-core`, `ase`. Per conformer: `steps`, `fmax` (residual force). `details`:
+`workers` and `threads` as resolved.
 
 ```yaml
 post_optimization:
@@ -53,6 +55,29 @@ slurm:
     mode: split                                  # the search stays on CPUs, the post-optimisation goes to the gpu profile
     cpu: {time: "24:00:00", cpus_per_task: 8, mem: 16G}
     gpu: {partition: gpu, time: "02:00:00", gres: "gpu:1", cpus_per_task: 4, mem: 16G}
+```
+
+### CPU parallelism: `workers` and `threads`
+
+On CPUs the conformers of a molecule are independent, so `uma` and `aimnet2` optimise them in a pool
+of `workers` processes, each loading the model once and running torch on `threads` threads. One
+forward pass on a molecule of a few dozen atoms gains little from many threads; one single-threaded
+worker per core keeps every core busy. The defaults do that: with `cpus_per_task: 8`, eight workers of
+one thread each (with `ntasks: 4, cpus_per_task: 1`, the GOAT allocation, four workers). `workers: 1`
+restores the previous behaviour, one in-process optimisation at a time on all the threads. On a GPU
+the default is one worker: processes would only queue on the device.
+
+Every worker holds its own copy of the model, roughly 1 to 2 GB each with torch: size the step's `mem`
+for `workers` copies (the chained job's `mem` is shared with the search). A worker killed by the memory
+limit fails the step with a message naming the pool; lower `workers` or raise `mem`. Each worker writes
+its own `opt_<i>.log`; the conformers keep their input order (`source_index`) whatever finished first.
+`run_1_<lot>.json` records `details.workers` and `details.threads`, so comparing `wall_time_s` of a
+run with `workers: 1` against the default on one molecule is the benchmark:
+
+```yaml
+post_optimization:
+  refiner: uma
+  params: {model: uma-s-1p2, workers: 1}        # serial reference; drop `workers` for the pool
 ```
 
 ## `gxtb`: g-xTB (Grimme group), CPU
@@ -106,9 +131,10 @@ one (`aimnet2-nse`).
 | `keep_unconverged` | `true` | keep conformers that did not reach `fmax` (flagged `converged: false`); `false` drops them |
 | `lot` | model name | label used in the file names (`raw_1_<lot>.xyz`) |
 | `device` | `cpu` | resource: `cpu` or `cuda`; `cuda` sends the step (and, chained, its whole job) to `slurm.ensembles.gpu` |
-| `threads` | job's CPUs | resource: torch threads (`SLURM_CPUS_PER_TASK`) |
+| `workers` | allocation's CPUs | resource: worker processes, as for `uma` ([CPU parallelism](#cpu-parallelism-workers-and-threads)) |
+| `threads` | CPUs / `workers` | resource: torch threads per worker |
 
-`versions`: `aimnet`, `ase`. Per conformer: `steps`, `fmax` (residual force).
+`versions`: `aimnet`, `ase`. Per conformer: `steps`, `fmax` (residual force). `details`: `workers`, `threads`.
 
 The weights are downloaded on first use into `AIMNET_CACHE_DIR` (default `~/.cache/aimnet`). Compute
 nodes have no internet access: fetch them once on a login node into a shared cache and export the same
@@ -153,4 +179,7 @@ class in `REFINERS` (`bceg/refine/__init__.py`) makes it a valid `post_optimizat
 config, hashing and status need no change. Add its parameter table to this page (the test suite
 checks that every default of every registered refiner is documented). `gxtb` is the model for a
 program called per conformer, `uma` and `aimnet2` (both through `bceg/refine/ase_opt.py`) for an ASE
-calculator whose `device` is routed to the gpu profile.
+calculator whose `device` is routed to the gpu profile. An ASE refiner gives the shared loop a
+`make_calculator(structure)` method and the `optimizer`, `fmax`, `max_steps`, `keep_unconverged`,
+`device`, `workers` and `threads` parameters; the loop rebuilds the refiner from its parameters inside
+every worker process (spawned, so the refiner must be picklable before its model is loaded).

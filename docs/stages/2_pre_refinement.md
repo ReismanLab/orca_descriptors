@@ -50,7 +50,7 @@ conda (`gp_env_cluster.yml`).
 ### `uma`: optimisation with the UMA machine-learned potential
 
 The same refiner as stage 4 ([4_post_optimization.md](4_post_optimization.md)) run on the single
-start geometry. `params` takes the UMA keys except `lot` and `keep_unconverged`:
+start geometry. `params` takes the UMA keys except `lot`, `keep_unconverged` and `workers` (one geometry: no pool):
 
 | `params` | Default | Meaning |
 |---|---|---|

@@ -33,7 +33,7 @@ SHIPPED_REFINERS = {name: cls for name, cls in REFINERS.items() if not cls.__mod
 CASES = [
     ("1_transformation.md", config.TRANSFORMATION_KEYS | {"none", "ni_x2.py", "x", "not_applicable"}),
     ("2_pre_refinement.md", config.PRE_REFINEMENT_KEYS | set(config.XTB_PARAMS) | START_KEYS
-     | set(config.PRE_REFINEMENT_METHODS) | (set(UMA.defaults) - {"lot", "keep_unconverged"})),
+     | set(config.PRE_REFINEMENT_METHODS) | (set(UMA.defaults) - {"lot", "keep_unconverged", "workers"})),
     ("3_conformer_search.md", config.SEARCH_KEYS | set(SHIPPED)
      | {k for s in SHIPPED.values() for k in s.defaults if k not in START_KEYS}),
     ("4_post_optimization.md", config.POST_OPT_KEYS | set(SHIPPED_REFINERS) | {"null"}

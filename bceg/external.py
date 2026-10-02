@@ -33,6 +33,17 @@ def resolve_threads(value: int | None) -> int:
     return available_cpus() if not value else int(value)
 
 
+def allocated_cpus() -> int:
+    """CPUs the allocation holds on this node, whether requested as ``cpus_per_task`` or ``ntasks``:
+    ``SLURM_CPUS_ON_NODE``, else ``SLURM_NTASKS x SLURM_CPUS_PER_TASK``, else the machine's CPU count."""
+    env = os.environ
+    if env.get("SLURM_CPUS_ON_NODE"):
+        return int(env["SLURM_CPUS_ON_NODE"])
+    if env.get("SLURM_NTASKS") or env.get("SLURM_CPUS_PER_TASK"):
+        return int(env.get("SLURM_NTASKS") or 1) * int(env.get("SLURM_CPUS_PER_TASK") or 1)
+    return os.cpu_count() or 1
+
+
 @lru_cache(maxsize=1)
 def cpu_model() -> str | None:
     """Marketing name of the node's CPU, e.g. 'AMD EPYC 7763 64-Core Processor'."""
