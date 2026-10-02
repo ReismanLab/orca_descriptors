@@ -1,0 +1,6 @@
+# one SMILES per line, optional name after it
+c1ccc(-c2ccccn2)nc1                       bpy
+CC(C)(C)c1ccnc(-c2cc(C(C)(C)C)ccn2)c1     dtbbpy
+CC(C)(C)[C@@H]1COC(c2ccccn2)=N1           tBu-pyox
+CC1(C)COC(CC2=NC(C)(C)CO2)=N1             Me2-box
+C1COC(C2=NCCO2)=N1                        biox

@@ -12,7 +12,7 @@ import pytest
 from desc_utils import orca_descriptors as od
 from desc_utils.data_extraction import _collect_selected_nbo_results
 
-from conftest import LNIH2_ROOT
+from tests.conftest import LNIH2_ROOT
 
 REAL_OUT = LNIH2_ROOT / "AATATIAROAAKIN-SNVBAGLBSA-N" / "conf_1" / "calcParam.out"
 

@@ -1,0 +1,55 @@
+# Cluster environment: gp_env (the descriptor pipeline, see gp_env.yml) plus what the conformer
+# ensembles (bceg/) and the ORCA stage (desc_utils.submit) need on the compute nodes.
+#
+# Maintainer only, run FROM THE ROOT OF THE SHARED CLONE (the `-e .` line below installs that clone),
+# on a filesystem the compute nodes mount:
+#   cd /groups/ReismanLab/orca_descriptors
+#   source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
+#   conda env create -f gp_env_cluster.yml
+# `git pull` in the clone then updates every user; nobody else pip-installs into the env.
+# Users: `conda activate gp_env`; the commands `orcadesc` and `bceg` are on PATH.
+#
+# Not installed here:
+#   ORCA (DFT, GOAT)   -> cluster module (module load orca/6.1.0 in the config's slurm.setup)
+#   NBO 7              -> /resnick/groups/ReismanLab/nbo7 (NBOEXE / GENEXE exported in slurm.setup)
+#   CREST >= 3.1       -> only needed for the `+uma` inline-refinement methods; build from source
+#                         (crest-lab/crest#483) and set params.executable
+name: gp_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11            # scine-molassembler 3.0.1 wheels: cp38-cp312, Linux x86_64 only; fairchem-core: >= 3.11
+  - pyyaml=6.0.3
+  - pytest=9.1.1
+  - pip=24.2
+  - libstdcxx-ng>=14       # C++ runtime for the env's own libraries (ICU 78 needs CXXABI_1.3.15); the EL9 system one is too old
+  - xtb                    # GFN2-xTB pre-optimisation of the start geometries
+  - crest                  # conformer search (3.0.2 on conda-forge at the time of writing)
+  - pip:
+      # --- gp_env.yml, unchanged ---
+      - numpy==2.3.4
+      - pandas==2.3.3
+      - scipy==1.15.0
+      - pyarrow==23.0.1
+      - tqdm==4.67.3
+      - morfeus-ml==0.7.2
+      - rdkit==2026.3.6
+      - dbstep==1.1.0
+      - cclib==1.8.1
+      - openbabel-wheel==3.1.1.23
+      - networkx==3.6.1
+      - plotly==7.1.0
+      # --- bceg: UMA post-optimisation (fairchem + ASE) and molassembler ---
+      - fairchem-core           # UMA models (uma-s-1p2); weights are gated: `huggingface-cli login` once per user
+      - ase
+      # --- bceg: AIMNet2 post-optimisation (refiner `aimnet2`); weights: `aimnet download aimnet2` into AIMNET_CACHE_DIR.
+      #     Resolved 2026-10-01 with `uv pip compile --python-platform x86_64-manylinux_2_28`: aimnet 0.2.0 adds only
+      #     h5py, warp-lang and nvalchemi-toolkit-ops next to the torch / fairchem-core / LoQI set already here.
+      - "aimnet[ase]"
+      - scine-molassembler==3.0.1
+      - scine-utilities==10.1.0 # same SCINE release as molassembler 3.0.1
+      # --- bceg: LoQI conformer generator (organics only); needs rdkit >= 2026.3.1, torch >= 2.8. Release v1.1 (2026-10-01)
+      #     provides the `loqi` console script that bceg/search/loqi.py calls; checkpoints: see README step 2 (LOQI_CACHE_DIR).
+      - "loqi @ git+https://github.com/isayevlab/LoQI@v1.1"
+      # --- this repository, editable: desc_utils + bceg, console scripts orcadesc and bceg ---
+      - -e .

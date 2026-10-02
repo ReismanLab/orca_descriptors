@@ -48,33 +48,61 @@ def _meta_columns(spec: Spec, df_num: pd.DataFrame) -> list[str]:
     return [c for c in dict.fromkeys(keep) if c in df_num.columns]
 
 
+#: per-conformer ORCA cost columns (``job.timings`` of the condensed file); ``orca_step_<step>_s`` joins them
+COST_COLUMNS = ("orca_run_time_s", "orca_nprocs", "orca_cpu_hours")
+
+
+def cost_columns_of(job: dict) -> dict:
+    """The cost columns of one conformer from its ``job`` entry (empty when the entry has no timings).
+
+    ``orca_run_time_s`` is ORCA's total run time, ``orca_nprocs`` its ``%pal`` setting, ``orca_cpu_hours``
+    their product in hours (the core-hours the job cost, assuming the allocation matched ``nprocs``),
+    ``orca_step_<step>_s`` the wall time of every compound step (``optimization``, ``frequency``, ...).
+    """
+    timings = (job or {}).get("timings") or {}
+    if not timings:
+        return {}
+    run, nprocs = timings.get("total_run_time_s"), timings.get("nprocs")
+    out = {"orca_run_time_s": run, "orca_nprocs": nprocs,
+           "orca_cpu_hours": round(run * nprocs / 3600, 5) if run is not None and nprocs else None}
+    for step, st in (timings.get("steps") or {}).items():
+        out[f"orca_step_{step}_s"] = st.get("wall_s")
+    return out
+
+
 def job_status_columns(paths: Iterable[str], spec: Spec, repo_root: Path) -> pd.DataFrame:
-    """Two bookkeeping columns per conformer, so nothing downstream mistakes a dead job for a small library.
+    """Bookkeeping columns per conformer, so nothing downstream mistakes a dead job for a small library,
+    and what the job cost, so accuracy can be weighed against price.
 
     ``orca_job_status``: ``completed`` / ``running`` / ``failed`` as recorded in the condensed file
     (``unknown`` for files condensed before the status existed, ``missing`` when the folder has neither a
     condensed file nor ``calcParam.out``). ``n_conformer_folders``: how many ``conformer_glob`` folders the
     molecule folder holds on disk, finished or not; NaN for the flat layout. The aggregation compares
-    the two to flag molecules whose conformer set is incomplete.
+    the two to flag molecules whose conformer set is incomplete. Then the cost columns of
+    :func:`cost_columns_of` (NaN when the condensed file predates the timings).
     """
-    from desc_utils.condense import conformer_job_status
+    from desc_utils.condense import conformer_job_entry
 
     condensed = spec.data.get("condensed_file")
     glob = spec.data["conformer_glob"]
     per_molecule = spec.data["layout"] != "flat"
     folder_counts: dict[Path, int] = {}
-    statuses, counts = [], []
+    rows = []
     for key in paths:
         conf_dir = Path(key) if Path(key).is_absolute() else Path(repo_root) / key
-        statuses.append(conformer_job_status(conf_dir, condensed) if conf_dir.is_dir() else "missing")
+        job = conformer_job_entry(conf_dir, condensed) if conf_dir.is_dir() else {"status": "missing"}
+        row = {"path": key, "orca_job_status": job["status"], "n_conformer_folders": np.nan}
         if per_molecule and conf_dir.is_dir():
             mol = conf_dir.parent
             if mol not in folder_counts:
                 folder_counts[mol] = sum(1 for p in mol.iterdir() if p.is_dir() and fnmatch.fnmatch(p.name, glob))
-            counts.append(folder_counts[mol])
-        else:
-            counts.append(np.nan)
-    return pd.DataFrame({"path": list(paths), "orca_job_status": statuses, "n_conformer_folders": counts})
+            row["n_conformer_folders"] = folder_counts[mol]
+        rows.append(row | cost_columns_of(job))
+    df = pd.DataFrame(rows, columns=["path", "orca_job_status", "n_conformer_folders"] if not rows else None)
+    for c in COST_COLUMNS:   # always present, so a table without timings has the same shape
+        if c not in df.columns:
+            df[c] = np.nan
+    return df
 
 
 #: ``orca_job_status`` values that do not call for a look: the job finished, or the file predates the status

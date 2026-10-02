@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orca-descriptors"
+version = "0.2.0"
+description = "Conformer ensembles (bceg), ORCA compound jobs and descriptor libraries, with the records to reproduce them"
+readme = "README.md"
+requires-python = ">=3.11"
+# The exact versions the test suite and the reference CSVs were produced with are pinned in
+# gp_env.yml (laptop) and gp_env_cluster.yml (cluster); these are the floors the code needs.
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "scipy>=1.14",
+    "pyyaml>=6",
+    "rdkit>=2024.3",
+    "morfeus-ml>=0.7",
+    "tqdm>=4",
+]
+
+[project.optional-dependencies]
+# descriptor extraction beyond the morfeus family (DescriPyTor block, NBO parsing, xyz -> sdf numbering)
+descriptors = ["dbstep>=1.1", "cclib>=1.8", "openbabel-wheel>=3.1", "networkx>=3", "plotly>=5", "pyarrow>=15"]
+# conformer ensembles on the cluster: UMA and AIMNet2 post-optimisation, molassembler and LoQI (xtb, CREST and the
+# g-xTB build of xtb are binaries: conda or the g-xTB release)
+cluster = ["fairchem-core", "ase", "aimnet[ase]", "scine-molassembler==3.0.1", "scine-utilities==10.1.0", "loqi @ git+https://github.com/isayevlab/LoQI"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+orcadesc = "desc_utils.submit.cli:main"   # the ORCA stage: submit / status / cost / prepare-task / orca-task
+bceg = "bceg.cli:main"                    # conformer ensembles on their own: submit / run / status
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["desc_utils*", "bceg*"]
+
+[tool.setuptools.package-data]
+"desc_utils.submit" = ["*.tmpl"]
+"bceg.transforms_builtin" = ["*.md"]

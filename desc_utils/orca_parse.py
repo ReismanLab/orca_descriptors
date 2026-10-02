@@ -1590,3 +1590,84 @@ def job_status(conf_dir, text=None, output_name="calcParam.out"):
     result.update(status=JOB_RUNNING,
                   detail=f"no termination line in {output_name}: still running, or killed without a message")
     return result
+
+# --------------------------------------------------------------------------- run times
+COMPOUND_JOB_RE = re.compile(r"^\s*COMPOUND JOB\s+(MainJOB|\d+)\s*$", re.MULTILINE)
+_BASE_RE = re.compile(r'%base\s+"([^"]+)"')
+_NPROCS_RE = re.compile(r"\bnprocs\s+(\d+)", re.IGNORECASE)
+MODULE_TIMINGS_HEADER = "Timings for individual modules:"
+_MODULE_LINE_RE = re.compile(r"^\s*(?P<name>[A-Za-z][^.]*?)\s*\.{3,}\s*(?P<sec>\d+(?:\.\d+)?)\s*sec\b")
+_TOTAL_RUN_TIME_RE = re.compile(r"TOTAL RUN TIME:\s*(\d+) days (\d+) hours (\d+) minutes (\d+) seconds (\d+) msec")
+
+
+def run_time_seconds(text) -> Optional[float]:
+    """ORCA's ``TOTAL RUN TIME`` line (the last one in ``text``) in seconds; None when there is none."""
+    matches = _TOTAL_RUN_TIME_RE.findall(text)
+    if not matches:
+        return None
+    d, h, m, sec, ms = (int(x) for x in matches[-1])
+    return round(((d * 24 + h) * 60 + m) * 60 + sec + ms / 1000, 3)
+
+
+def _module_timings(segment) -> Optional[dict]:
+    """The ``Timings for individual modules`` block of one ORCA run: ``{"wall_s", "modules"}``, None if absent."""
+    start = segment.rfind(MODULE_TIMINGS_HEADER)
+    if start < 0:
+        return None
+    wall, modules = None, {}
+    for line in segment[start + len(MODULE_TIMINGS_HEADER):].splitlines():
+        if not line.strip():
+            if modules or wall is not None:
+                break
+            continue
+        m = _MODULE_LINE_RE.match(line)
+        if not m:
+            break
+        name, sec = m.group("name").strip(), float(m.group("sec"))
+        if name == "Sum of individual times":
+            wall = sec
+        else:
+            modules[name] = sec
+    return {"wall_s": wall, "modules": modules}
+
+
+def compound_step_timings(text) -> dict:
+    """How long each step of a ``calcParam.out`` took, from ORCA's own timing blocks.
+
+    Returns ``{"total_run_time_s", "nprocs", "steps": {<%base name>: {"index", "wall_s", "modules"}}}``.
+    Each ``COMPOUND JOB N`` block ends with a ``Timings for individual modules`` table whose
+    ``Sum of individual times`` is the step's wall time (``wall_s``; None for a step that did not get
+    there) and whose other lines (``SCF iterations``, ``SCF Gradient evaluation``, ...) are kept under
+    ``modules``. Steps are keyed by the ``%base`` name echoed in the step's input (``optimization``,
+    ``frequency``, ``singlepoint``, ``nmr``, ``oxidation``, ``reduction`` in the library template), a
+    repeated name gets ``_2``, ``_3``...; a step without a ``%base`` is ``step_N``. ``nprocs`` is the
+    ``%pal`` setting echoed in the main input, so ``total_run_time_s x nprocs`` is the job's core-seconds.
+    ``calcParam.out`` is appended to on resubmission: only the last run (from its last ``COMPOUND JOB
+    MainJOB`` header) is read. A plain, non-compound output gives one step named ``main``.
+    """
+    last_main = text.rfind("COMPOUND JOB MainJOB")
+    if last_main >= 0:
+        text = text[max(0, text.rfind("\n", 0, last_main)):]
+    out = {"total_run_time_s": run_time_seconds(text), "nprocs": None, "steps": {}}
+    m = _NPROCS_RE.search(text)
+    if m:
+        out["nprocs"] = int(m.group(1))
+    headers = list(COMPOUND_JOB_RE.finditer(text))
+    if not headers:
+        block = _module_timings(text)
+        if block is not None:
+            out["steps"]["main"] = {"index": 0, **block}
+        return out
+    for i, h in enumerate(headers):
+        if h.group(1) == "MainJOB":
+            continue
+        segment = text[h.end(): headers[i + 1].start() if i + 1 < len(headers) else len(text)]
+        index = int(h.group(1))
+        base_m = _BASE_RE.search(segment)
+        name = base_m.group(1) if base_m else f"step_{index}"
+        key, n = name, 1
+        while key in out["steps"]:
+            n += 1
+            key = f"{name}_{n}"
+        out["steps"][key] = {"index": index, **(_module_timings(segment) or {"wall_s": None, "modules": {}})}
+    return out

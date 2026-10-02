@@ -35,7 +35,10 @@ Schema version 1 (units in key names, ``null`` = not available)::
                     {columns, rows}; open-shell rows carry a ``spin`` field (alpha rows before beta rows).
     notes           parser messages emitted while condensing
     job             status: completed | failed | running, detail, checked_utc  (``orca_parse.job_status`` of the
-                    folder when it was condensed; files written before 2026-09-23 lack the key -> ``unknown``)
+                    folder when it was condensed; files written before 2026-09-23 lack the key -> ``unknown``),
+                    timings{total_run_time_s, nprocs, steps{<step>: {index, wall_s, modules{<module>: s}}}}
+                    (``orca_parse.compound_step_timings``: what every compound step cost, from ORCA's own
+                    timing tables; files written before 2026-10-02 lack it)
 
 A file is written as soon as ``optimization.xyz``, ``singlepoint.property.json`` and one complete NBO
 block exist, so a job that died or is still running after the singlepoint gets a file too, with its
@@ -318,7 +321,8 @@ def build_condensed(conf_dir, mo_states=("singlepoint",), nbo_full_blocks=(0,), 
 
 def _job_entry(conf_dir, text):
     js = op.job_status(conf_dir, text)
-    return {"status": js["status"], "detail": js["detail"], "checked_utc": _utc()}
+    return {"status": js["status"], "detail": js["detail"], "checked_utc": _utc(),
+            "timings": op.compound_step_timings(text)}
 
 
 def stored_job_status(cond) -> str:
@@ -326,13 +330,38 @@ def stored_job_status(cond) -> str:
     return ((cond or {}).get("job") or {}).get("status") or JOB_UNKNOWN
 
 
-def _read_job_status(path) -> str:
-    """``job.status`` stored in the condensed file at ``path`` (``unknown`` when unreadable or absent)."""
+def _read_job_entry(path) -> dict:
+    """The ``job`` entry stored in the condensed file at ``path`` (``{"status": "unknown"}`` when unreadable or absent)."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            return stored_job_status(json.load(fh))
+            job = dict((json.load(fh) or {}).get("job") or {})
     except Exception:
-        return JOB_UNKNOWN
+        job = {}
+    job.setdefault("status", JOB_UNKNOWN)
+    return job
+
+
+def _read_job_status(path) -> str:
+    """``job.status`` stored in the condensed file at ``path`` (``unknown`` when unreadable or absent)."""
+    return _read_job_entry(path)["status"]
+
+
+def conformer_job_entry(conf_dir, condensed_file: Optional[str] = CONDENSED_FILENAME) -> dict:
+    """The ``job`` entry of one conformer folder: status plus, when the file carries them, the step timings.
+
+    From the condensed file when there is one (``status`` is ``unknown`` for a file that predates the key,
+    ``timings`` absent for one that predates 2026-10-02), else judged from the raw ``calcParam.out``
+    (status and timings), else ``{"status": "missing"}``.
+    """
+    conf_dir = Path(conf_dir)
+    cond = find_condensed(conf_dir, condensed_file)
+    if cond is not None:
+        return _read_job_entry(cond)
+    out = conf_dir / "calcParam.out"
+    if out.is_file():
+        text = out.read_text(errors="replace")
+        return {"status": op.job_status(conf_dir, text)["status"], "timings": op.compound_step_timings(text)}
+    return {"status": JOB_MISSING}
 
 
 def conformer_job_status(conf_dir, condensed_file: Optional[str] = CONDENSED_FILENAME) -> str:
