@@ -118,6 +118,7 @@ and the hardware it ran on:
 | `cpu_hours` | `wall_time_s` x `cpus`, in hours |
 | `gpus` | names of the GPUs the job could see, e.g. `["NVIDIA A100-SXM4-80GB"]`; `[]` on a CPU node |
 | `gpu_hours` | `wall_time_s` x number of GPUs; absent when there is none |
+| `phases` | search records only: the same three figures for `pre_refinement` (start geometry: embedding, force field, xtb or UMA pre-optimisation, rejected attempts included) and `search` (the searcher proper), so the two can be priced apart; a task that died before a geometry was accepted has only `pre_refinement` |
 | `cpu_model`, `host`, `platform`, `slurm_partition`, `slurm_job_id`, `slurm_array_task_id` | where it ran |
 
 `cpu_hours` is the **allocation** the step occupied, which is what a cluster bills, not the cores the

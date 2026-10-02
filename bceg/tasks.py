@@ -178,17 +178,34 @@ def _env_record() -> dict:
     }
 
 
-def _usage(record: dict, t0: float) -> dict:
+def _usage(record: dict, wall: float) -> dict:
     """Wall time and the allocation it occupied: core-hours, and GPU-hours if the node had GPUs.
 
     ``cpu_hours`` is wall time x the CPUs allocated to the job, not the CPUs the program
     kept busy: it is the cost of the run, not its parallel efficiency (use ``seff`` for that).
     """
-    wall = round(time.time() - t0, 2)  # the hours are derived from it, so the record agrees with itself
+    wall = round(wall, 2)  # the hours are derived from it, so the record agrees with itself
     usage = {"wall_time_s": wall, "cpu_hours": round(wall / 3600 * record["cpus"], 5)}
     if record["gpus"]:
         usage["gpu_hours"] = round(wall / 3600 * len(record["gpus"]), 5)
     return usage
+
+
+def _search_usage(record: dict, t0: float, t_split: float | None, phase: str) -> dict:
+    """Usage of a search task: the total, and the same figures per phase under ``phases``.
+
+    ``pre_refinement`` is the time until the start geometry was accepted (embedding, force field, xtb
+    or UMA pre-optimisation, every rejected attempt included); ``search`` is the searcher proper.
+    ``t_split`` is when the start-geometry callback fired; without one (no start step, or the task
+    died before a geometry was accepted) the whole time goes to ``phase``, the phase the task ended in.
+    """
+    t_end = time.time()
+    total = _usage(record, t_end - t0)
+    if t_split is None:
+        phases = {phase: dict(total)}
+    else:
+        phases = {PRE_REFINEMENT: _usage(record, t_split - t0), SEARCH: _usage(record, t_end - t_split)}
+    return total | {"phases": phases}
 
 
 def _write_xyz_atomic(path: Path, elements, conformers) -> None:
@@ -278,15 +295,19 @@ def _run_search(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
 
     # phase: "pre_refinement" while the start geometry is embedded and pre-optimised (CREST, GOAT,
     # molassembler), "search" once the searcher proper runs. Lets a status reader tell the two apart.
-    phase = {"phase": PRE_REFINEMENT if searcher.has_start_step() else SEARCH}
+    split = searcher.has_start_step()  # a start step: time it apart from the search (run record "phases")
+    phase = {"phase": PRE_REFINEMENT if split else SEARCH}
     write_record(rec_path, record | {"status": RUNNING} | phase)
+    t0 = time.time()
+    t_split: list[float | None] = [None]
 
     def _start_geometry_done(info: dict) -> None:
+        if split:
+            t_split[0] = time.time()
         phase["phase"] = SEARCH
         write_record(rec_path, record | {"status": RUNNING, "phase": SEARCH, "start_geometry": info})
 
     searcher.on_start_geometry = _start_geometry_done
-    t0 = time.time()
     try:
         with workdir(prefix=f"{task.method}_{task.replicate}_") as wd:
             try:
@@ -294,7 +315,7 @@ def _run_search(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
                 _write_xyz_atomic(xyz, structure.elements, result.conformers)
             except Exception as exc:
                 _keep_failed_workdir(wd, md, task.replicate)
-                write_record(rec_path, record | _usage(record, t0) | phase | {
+                write_record(rec_path, record | _search_usage(record, t0, t_split[0], phase["phase"]) | phase | {
                     "status": FAILED, "error": repr(exc), "traceback": traceback.format_exc()[-5000:],
                     "failed_files": f"logs/raw_{task.replicate}_failed/"})
                 return FAILED
@@ -304,7 +325,7 @@ def _run_search(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
             _copy_logs(result.log_files, md, f"raw_{task.replicate}")
     finally:
         searcher.on_start_geometry = None
-    write_record(rec_path, record | _usage(record, t0) | phase | {
+    write_record(rec_path, record | _search_usage(record, t0, t_split[0], phase["phase"]) | phase | {
         "status": DONE, "n_conformers": len(result.conformers),
         "versions": result.versions, "details": result.details,
         "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -334,10 +355,10 @@ def _run_refine(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
             result = cfg.refiner.run(structure, conformers, wd)
             _write_xyz_atomic(xyz, structure.elements, result.conformers)
         except Exception as exc:
-            write_record(rec_path, record | _usage(record, t0) | {
+            write_record(rec_path, record | _usage(record, time.time() - t0) | {
                 "status": FAILED, "error": repr(exc), "traceback": traceback.format_exc()[-5000:]})
             return FAILED
-    write_record(rec_path, record | _usage(record, t0) | {
+    write_record(rec_path, record | _usage(record, time.time() - t0) | {
         "status": DONE, "n_conformers": len(result.conformers),
         "versions": result.versions, "details": result.details,
         "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),

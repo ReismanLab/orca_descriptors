@@ -10,8 +10,8 @@ import pytest
 
 from desc_utils import condense as c
 from desc_utils import orca_parse as op
-from desc_utils.aggregate import aggregate_conformers, completeness
-from desc_utils.extract import job_status_columns
+from desc_utils.aggregate import aggregate_conformers, apply_filter, completeness, cost_summary
+from desc_utils.extract import cost_columns_of, job_status_columns
 from desc_utils.spec import validate_spec
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +122,62 @@ def test_condense_records_status_and_rebuilds_unfinished(tmp_path):
     assert c.job_status_line(s6["job_status"]) == "job status: failed 1"
 
 
+# --------------------------------------------------------------------------- run times
+
+def _compound(steps, nprocs=8, total="TOTAL RUN TIME: 0 days 0 hours 1 minutes 5 seconds 500 msec\n"):
+    """A compound output: ``steps`` is [(base or None, wall or None, {module: s})]."""
+    text = "                                COMPOUND JOB MainJOB \nBasename: calcParam_Compound_0\n"
+    text += f"|  2>  %pal\n|  3>      nprocs {nprocs}\n|  4>  end\n"
+    for i, (base, wall, modules) in enumerate(steps, start=1):
+        text += f"\n                                COMPOUND JOB  {i} \nBasename: calcParam_Compound_{i}\n"
+        if base:
+            text += f'|  1>       %base "{base}"\n'
+        text += "| 3> ! pbe0 Opt\nTotal time                  ....     167.461 sec\nSum of individual times     ....     161.649 sec  ( 96.5%)\n"
+        if wall is not None:
+            text += "\nTimings for individual modules:\n\n"
+            text += f"Sum of individual times          ...      {wall:.3f} sec (=   {wall / 60:.3f} min)\n"
+            for name, sec in modules.items():
+                text += f"{name:<33}...      {sec:.3f} sec (=   {sec / 60:.3f} min)  50.0 %\n"
+            text += "\n\n"
+    return text + NORMAL + total
+
+
+def test_compound_step_timings():
+    text = _compound([("optimization", 299.507, {"Startup calculation": 13.959, "SCF iterations": 248.393}),
+                      ("singlepoint", 616.38, {"SCF iterations": 177.796}),
+                      ("singlepoint", 10.0, {}),                 # a repeated %base name
+                      (None, 4.0, {}),                           # a step without %base
+                      ("nmr", None, {})])                        # did not reach its timings: unfinished
+    t = op.compound_step_timings(text)
+    assert t["total_run_time_s"] == 65.5 and t["nprocs"] == 8
+    assert list(t["steps"]) == ["optimization", "singlepoint", "singlepoint_2", "step_4", "nmr"]
+    assert t["steps"]["optimization"] == {"index": 1, "wall_s": 299.507,
+                                          "modules": {"Startup calculation": 13.959, "SCF iterations": 248.393}}
+    assert t["steps"]["singlepoint"]["wall_s"] == 616.38 and t["steps"]["singlepoint_2"]["wall_s"] == 10.0
+    assert t["steps"]["nmr"] == {"index": 5, "wall_s": None, "modules": {}}
+    # calcParam.out is appended to on resubmission: only the last run counts
+    first = _compound([("optimization", 1.0, {})], nprocs=2, total="TOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds 0 msec\n")
+    t2 = op.compound_step_timings(first + text)
+    assert t2["nprocs"] == 8 and t2["total_run_time_s"] == 65.5 and t2["steps"]["optimization"]["wall_s"] == 299.507
+    # a plain (non-compound) output: one step called main; nothing at all: empty
+    plain = "stuff\nTimings for individual modules:\n\nSum of individual times          ...        9.000 sec (=   0.150 min)\nSCF iterations                   ...        8.000 sec (=   0.133 min)  88.9 %\n\n" + NORMAL
+    assert op.compound_step_timings(plain)["steps"] == {"main": {"index": 0, "wall_s": 9.0, "modules": {"SCF iterations": 8.0}}}
+    assert op.compound_step_timings("SCF ITERATIONS\n") == {"total_run_time_s": None, "nprocs": None, "steps": {}}
+    assert op.run_time_seconds("TOTAL RUN TIME: 1 days 2 hours 3 minutes 4 seconds 5 msec") == 93784.005
+    assert op.run_time_seconds("no") is None
+
+
+@needs_fixture
+def test_condensed_file_records_step_timings():
+    cond = c.build_condensed(FIXTURE)
+    t = cond["job"]["timings"]
+    assert isinstance(t["nprocs"], int) and t["total_run_time_s"] > 0
+    assert {"optimization", "singlepoint"} <= set(t["steps"])
+    assert all(st["wall_s"] > 0 for st in t["steps"].values())
+    assert abs(sum(st["wall_s"] for st in t["steps"].values()) - t["total_run_time_s"]) < 0.05 * t["total_run_time_s"]
+    assert cost_columns_of(cond["job"])["orca_cpu_hours"] == round(t["total_run_time_s"] * t["nprocs"] / 3600, 5)
+
+
 # --------------------------------------------------------------------------- extract / aggregate
 
 SPEC = validate_spec({
@@ -149,6 +205,64 @@ def test_job_status_columns_count_folders_on_disk(tmp_path):
     assert list(df.loc[paths, "orca_job_status"]) == ["completed", "running", "completed", "missing"]
     assert list(df.loc[paths[:3], "n_conformer_folders"]) == [3, 3, 1]    # M1: conf_3 has no file but is a folder
     assert np.isnan(df.loc[paths[3], "n_conformer_folders"])
+
+
+def test_job_status_columns_carry_cost(tmp_path):
+    root = tmp_path / "LIB"
+    timings = {"total_run_time_s": 3600.0, "nprocs": 8,
+               "steps": {"optimization": {"index": 1, "wall_s": 1000.0, "modules": {}},
+                         "singlepoint": {"index": 2, "wall_s": 2500.0, "modules": {}}}}
+    for conf, job in {"conf_1": {"status": "completed", "timings": timings},
+                      "conf_2": {"status": "completed"},                                   # condensed before 2026-10-02
+                      "conf_3": {"status": "failed", "timings": {"total_run_time_s": None, "nprocs": 8, "steps": {
+                          "optimization": {"index": 1, "wall_s": 500.0, "modules": {}}}}}}.items():
+        d = root / "M1" / conf
+        d.mkdir(parents=True)
+        (d / c.CONDENSED_FILENAME).write_text(json.dumps({"job": job}))
+    raw = root / "M1" / "conf_4"
+    raw.mkdir()
+    (raw / "calcParam.out").write_text(_compound([("optimization", 100.0, {})], nprocs=4))
+    paths = [str(root / "M1" / f"conf_{i}") for i in (1, 2, 3, 4)]
+    df = job_status_columns(paths, SPEC, REPO_ROOT).set_index("path")
+    assert list(df.columns[:2]) == ["orca_job_status", "n_conformer_folders"]
+    r1 = df.loc[paths[0]]
+    assert r1["orca_run_time_s"] == 3600.0 and r1["orca_nprocs"] == 8 and r1["orca_cpu_hours"] == 8.0
+    assert r1["orca_step_optimization_s"] == 1000.0 and r1["orca_step_singlepoint_s"] == 2500.0
+    assert df.loc[paths[1], ["orca_run_time_s", "orca_nprocs", "orca_cpu_hours", "orca_step_optimization_s"]].isna().all()
+    r3 = df.loc[paths[2]]
+    assert np.isnan(r3["orca_cpu_hours"]) and r3["orca_step_optimization_s"] == 500.0 and np.isnan(r3["orca_step_singlepoint_s"])
+    r4 = df.loc[paths[3]]                                        # raw folder: read from calcParam.out
+    assert r4["orca_job_status"] == "completed" and r4["orca_nprocs"] == 4 and r4["orca_step_optimization_s"] == 100.0
+    assert r4["orca_cpu_hours"] == round(65.5 * 4 / 3600, 5)
+    # a table without any timing has the three fixed columns anyway, NaN
+    empty = job_status_columns([str(root / "M1" / "conf_2")], SPEC, REPO_ROOT)
+    assert {"orca_run_time_s", "orca_nprocs", "orca_cpu_hours"} <= set(empty.columns) and empty["orca_cpu_hours"].isna().all()
+
+
+def test_cost_summary_and_aggregation():
+    df = pd.DataFrame({
+        "path": ["DATA/x/M1/conf_1", "DATA/x/M1/conf_2", "DATA/x/M2/conf_1"], "inchikey": ["M1", "M1", "M2"],
+        "SCF_energy": [-1.0, -1.0, -2.0], "A": [1, 1, 1], "B": [2, 2, 2], "charge_NBO_A": [0.1, 0.3, 0.5],
+        "smiles": ["s", "s", "t"], "orca_job_status": ["completed", "completed", "completed"],
+        "n_conformer_folders": [2, 2, 1],
+        "orca_run_time_s": [3600.0, 1800.0, np.nan], "orca_nprocs": [8, 8, np.nan], "orca_cpu_hours": [8.0, 4.0, np.nan],
+        "orca_step_optimization_s": [1000.0, 500.0, np.nan], "orca_step_singlepoint_s": [2000.0, np.nan, np.nan],
+    })
+    assert cost_summary(df[df["inchikey"] == "M1"]) == {
+        "dft_cpu_hours": 12.0, "dft_optimization_cpu_hours": round(1500 * 8 / 3600, 5),
+        "dft_singlepoint_cpu_hours": round(2000 * 8 / 3600, 5)}
+    m2 = cost_summary(df[df["inchikey"] == "M2"])
+    assert all(np.isnan(v) for v in m2.values()) and set(m2) == {"dft_cpu_hours", "dft_optimization_cpu_hours",
+                                                                   "dft_singlepoint_cpu_hours"}
+    agg = aggregate_conformers(df, SPEC).set_index("inchikey")
+    assert agg.loc["M1", "dft_cpu_hours"] == 12.0 and np.isnan(agg.loc["M2", "dft_cpu_hours"])
+    assert "charge_NBO_A_boltz" in agg.columns
+    # the per-conformer cost columns are bookkeeping, not descriptors
+    assert not [col for col in agg.columns if col.startswith("orca_")]
+    # and the molecule's cost survives the descriptor filter
+    filtered, _ = apply_filter(agg.reset_index(), SPEC)
+    assert {"dft_cpu_hours", "dft_optimization_cpu_hours", "dft_singlepoint_cpu_hours"} <= set(filtered.columns)
+    assert list(filtered["dft_cpu_hours"])[:1] == [12.0]
 
 
 def test_completeness_flag():

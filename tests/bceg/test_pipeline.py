@@ -258,3 +258,37 @@ def test_search_record_phases(project, fake_xtb, monkeypatch):
     cfg3 = Config.load(write("{n_confs: 2}", transformations="{none: null}"))
     run_local(cfg3)
     assert json.loads((md / "run_1.json").read_text())["phase"] == "search"
+
+
+def test_search_usage_is_split_by_phase(project, fake_xtb, monkeypatch):
+    """run_<i>.json carries the usage per phase under ``phases``, adding up to the total."""
+    from bceg import geometry
+
+    root, write = project
+    monkeypatch.setattr("bceg.tasks.available_cpus", lambda: 4)
+    monkeypatch.setattr("bceg.tasks.gpu_names", lambda: ("GPU-X",))
+    md = root / "results" / "none" / BUTANE / "etkdg"
+
+    run_local(Config.load(write("{}", searcher="single_start", transformations="{none: null}")))
+    rec = json.loads((md / "run_1.json").read_text())
+    ph = rec["phases"]
+    assert set(ph) == {"pre_refinement", "search"}
+    for part in ph.values():
+        assert part["cpu_hours"] == round(part["wall_time_s"] / 3600 * 4, 5)
+        assert part["gpu_hours"] == round(part["wall_time_s"] / 3600, 5)
+    assert abs(ph["pre_refinement"]["wall_time_s"] + ph["search"]["wall_time_s"] - rec["wall_time_s"]) < 0.05
+    assert "phases" not in json.loads((md / "run_1_fake-lot.json").read_text())   # one step, no split
+
+    # died while making the start geometry: everything was pre-refinement
+    monkeypatch.setattr(geometry, "coordination_problems", lambda *a: ["forced"])
+    (root / "results").rename(root / "results_done")
+    run_local(Config.load(write("{start_max_attempts: 1}", searcher="single_start", transformations="{none: null}")))
+    rec = json.loads((md / "run_1.json").read_text())
+    assert rec["status"] == "failed" and list(rec["phases"]) == ["pre_refinement"]
+    assert rec["phases"]["pre_refinement"]["wall_time_s"] == rec["wall_time_s"]
+
+    # no start step: everything is search
+    (root / "results").rename(root / "results_failed")
+    run_local(Config.load(write("{n_confs: 2}", transformations="{none: null}")))
+    rec = json.loads((md / "run_1.json").read_text())
+    assert list(rec["phases"]) == ["search"] and rec["phases"]["search"]["cpu_hours"] == rec["cpu_hours"]

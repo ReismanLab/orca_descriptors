@@ -23,6 +23,7 @@ from bceg.inputs import InputMolecule
 from bceg.provenance import ParamsMismatch
 from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
+from desc_utils import orca_parse as op
 from desc_utils.submit import records, slurm, template
 from desc_utils.submit.config import Config
 from desc_utils.submit.source import Ensemble, Ensembles
@@ -177,17 +178,39 @@ def _read_tail(path: Path, nbytes: int = 8192) -> str:
         return f.read().decode("utf-8", errors="replace")
 
 
+def allocated_cpus(default: int | None = None) -> int:
+    """CPUs the SLURM allocation gives this ORCA job on its node, for the core-hours it costs.
+
+    ``SLURM_CPUS_ON_NODE`` (what the allocation holds on this node, whether requested as ``ntasks`` or
+    ``cpus_per_task``), else ``SLURM_NTASKS x SLURM_CPUS_PER_TASK``, else ``default`` (the ``nprocs``
+    recorded for the molecule), else the machine's CPU count.
+    """
+    env = os.environ
+    if env.get("SLURM_CPUS_ON_NODE"):
+        return int(env["SLURM_CPUS_ON_NODE"])
+    if env.get("SLURM_NTASKS") or env.get("SLURM_CPUS_PER_TASK"):
+        return int(env.get("SLURM_NTASKS") or 1) * int(env.get("SLURM_CPUS_PER_TASK") or 1)
+    return int(default or os.cpu_count() or 1)
+
+
 def orca_outcome(out_path: Path, exit_code: int | None) -> dict:
     """``completed`` only if ORCA exited 0 AND printed its termination banner (ORCA can exit 0 after
-    a Compound sub-job quietly died)."""
-    terminated, run_time = None, None
+    a Compound sub-job quietly died). ``orca_run_time`` is ORCA's ``TOTAL RUN TIME`` line as printed,
+    ``orca_run_time_s`` the same in seconds, ``orca_steps_s`` the wall time of every compound step
+    (``%base`` name -> seconds, None for a step that did not finish; see
+    :func:`desc_utils.orca_parse.compound_step_timings`)."""
+    terminated, run_time, run_time_s, steps = None, None, None, None
     if out_path.exists():
         tail = _read_tail(out_path)
         terminated = TERMINATION_BANNER in tail
         m = RUN_TIME_RE.search(tail)
         run_time = m.group(1) if m else None
+        timings = op.compound_step_timings(out_path.read_text(errors="replace"))
+        run_time_s = timings["total_run_time_s"]
+        steps = {name: st["wall_s"] for name, st in timings["steps"].items()}
     status = "completed" if exit_code == 0 and terminated else "failed"
-    return {"status": status, "exit_code": exit_code, "orca_terminated_normally": terminated, "orca_run_time": run_time}
+    return {"status": status, "exit_code": exit_code, "orca_terminated_normally": terminated, "orca_run_time": run_time,
+            "orca_run_time_s": run_time_s, "orca_steps_s": steps}
 
 
 def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str | None = None) -> str:
@@ -200,8 +223,10 @@ def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str
     if not orca:
         raise FileNotFoundError("orca not found on PATH; load the module in slurm.setup or set slurm.orca_cmd")
 
+    nprocs = (records.load_metadata(lib, inchikey).get("dft") or {}).get("nprocs")
+    cpus = allocated_cpus(nprocs)
     job_env = {"slurm_job_id": os.environ.get("SLURM_JOB_ID"), "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
-               "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"), "host": os.uname().nodename}
+               "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"), "host": os.uname().nodename, "cpus": cpus}
     records.update_metadata(lib, inchikey, {"conformers": {conformer: {
         "status": "running", "started_at": records.now(), "orca_cmd": orca, **job_env}}})
 
@@ -225,6 +250,7 @@ def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str
     if timed_out["flag"]:
         outcome["status"] = "timeout"
     outcome["wall_time_s"] = round(time.time() - t0, 1)
+    outcome["cpu_hours"] = round(outcome["wall_time_s"] / 3600 * cpus, 5)  # the allocation's cost, as in bceg's records
     outcome["finished_at"] = records.now()
 
     if cfg.condense:

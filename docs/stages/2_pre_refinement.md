@@ -96,3 +96,12 @@ bceg job waits, `running` while the search task is in this phase (`run_1.json` s
 `phase: pre_refinement`), `done` once the geometry was accepted, `failed` when no acceptable geometry
 was found within `max_attempts` (the `reason` column carries the error; the attempts are under
 `logs/raw_1_failed/`).
+
+## Cost
+
+The time this stage took is kept apart from the search's: `run_<i>.json` has, next to the task's total
+`wall_time_s` / `cpu_hours` / `gpu_hours`, the same three figures per phase under `phases.pre_refinement`
+(embedding, force field and pre-optimisation, every rejected attempt included) and `phases.search`. A
+task that died before a geometry was accepted has only `phases.pre_refinement`. `orcadesc cost` sums
+them per molecule (`pre_refinement_cpu_h`, `pre_refinement_gpu_h`), so the price of `xtb` against `uma`
+can be read off the records after the fact.

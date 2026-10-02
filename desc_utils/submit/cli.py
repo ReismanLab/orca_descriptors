@@ -1,4 +1,4 @@
-"""``python -m desc_utils.submit {submit,status,prepare-task,orca-task}``."""
+"""``python -m desc_utils.submit {submit,status,cost,fetch-weights,prepare-task,orca-task}``."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from bceg.provenance import ParamsMismatch, check_or_write
 
 from desc_utils.submit import records, slurm
 from desc_utils.submit.config import Config
+from desc_utils.submit.cost import print_cost
 from desc_utils.submit.source import Ensembles
 from desc_utils.submit.status import print_status
 from desc_utils.submit.tasks import prepare_molecule, run_orca_conformer
@@ -173,6 +174,11 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_cost(args) -> int:
+    print_cost(Config.load(args.config), csv=args.csv)
+    return 0
+
+
 def cmd_prepare_task(args) -> int:
     cfg = Config.load(args.config)
     task = slurm.read_task(Path(args.tasks), args.index)
@@ -209,6 +215,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="state of every molecule of the input list, from the records")
     p.add_argument("config")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("cost", help="core-hours and GPU-hours per molecule and stage, from the records")
+    p.add_argument("config")
+    p.add_argument("--csv", help="also write the table to this CSV (one row per molecule, joinable on inchikey)")
+    p.set_defaults(func=cmd_cost)
 
     p = sub.add_parser("prepare-task", help="(cluster) split one molecule's ensemble and submit its ORCA array")
     p.add_argument("config")

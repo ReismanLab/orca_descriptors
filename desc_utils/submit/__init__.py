@@ -3,6 +3,7 @@ per conformer, with the record needed to reproduce the library.
 
     python -m desc_utils.submit submit  configs/orca_library.yaml [--dry-run] [--force] [--no-sbatch]
     python -m desc_utils.submit status  configs/orca_library.yaml
+    python -m desc_utils.submit cost    configs/orca_library.yaml [--csv cost.csv]
 
 Layout of a library (``library_dir``)::
 
@@ -18,5 +19,7 @@ jobs, a ``prepare`` array with one element per molecule that prunes the ensemble
 ``conf_N/`` folders and submits that molecule's ORCA array. ``orca: off`` stops after bceg; the same
 command later with ``orca: on`` refines the finished ensembles. The search's replicates
 (``conformer_search.replicates``, default 1) are pooled into one ensemble before pruning.
-``status`` reports one status per stage (queued / running / done / failed) per molecule.
+``status`` reports one status per stage (queued / running / done / failed) per molecule; ``cost`` the
+core-hours and GPU-hours each molecule has taken per stage (and per ORCA compound step), from the
+same records, so a library's accuracy can be weighed against its price.
 """

@@ -35,9 +35,36 @@ def molecule_folder(path: str) -> str:
 
 
 #: per-conformer bookkeeping columns that are summarised, never aggregated as descriptors
-JOB_COLUMNS = ("n_conformer_folders",)
+JOB_COLUMNS = ("n_conformer_folders", "orca_run_time_s", "orca_nprocs", "orca_cpu_hours")
+_STEP_COLUMN = re.compile(r"^orca_step_(.+)_s$")
 #: the summary columns ``completeness`` adds to every aggregated row
 COMPLETENESS_COLUMNS = ("n_conformers_completed", "n_conformer_folders", "all_conformers_completed")
+
+
+def is_cost_column(name: str) -> bool:
+    """Aggregated cost column: ``dft_cpu_hours`` or ``dft_<step>_cpu_hours`` (see :func:`cost_summary`)."""
+    return name == "dft_cpu_hours" or (name.startswith("dft_") and name.endswith("_cpu_hours"))
+
+
+def cost_summary(g: pd.DataFrame) -> dict:
+    """What the ORCA jobs of one molecule cost, summed over its conformer rows.
+
+    ``dft_cpu_hours``: sum of ``orca_cpu_hours`` (ORCA's run time x ``nprocs``). ``dft_<step>_cpu_hours``
+    for every ``orca_step_<step>_s`` column: that step's wall time x ``nprocs``, summed. NaN when no
+    conformer carries the figure (files condensed before the timings were recorded).
+    """
+    out: dict = {}
+    if "orca_cpu_hours" in g:
+        v = pd.to_numeric(g["orca_cpu_hours"], errors="coerce")
+        out["dft_cpu_hours"] = round(float(v.sum()), 5) if v.notna().any() else np.nan
+    nprocs = pd.to_numeric(g["orca_nprocs"], errors="coerce") if "orca_nprocs" in g else None
+    for col in g.columns:
+        m = _STEP_COLUMN.match(col)
+        if not m or nprocs is None:
+            continue
+        s = pd.to_numeric(g[col], errors="coerce") * nprocs / 3600
+        out[f"dft_{m.group(1)}_cpu_hours"] = round(float(s.sum()), 5) if s.notna().any() else np.nan
+    return out
 
 
 def completeness(g: pd.DataFrame) -> dict:
@@ -75,11 +102,13 @@ def aggregate_frame(
     ``n_conformer_folders`` and the flag ``all_conformers_completed``: True when every conformer
     folder of the molecule holds a completed ORCA job, False when at least one is running, failed
     or absent, and empty (NA) when a status is ``unknown`` (files condensed before the status
-    was recorded) so that an old library is not reported as broken.
+    was recorded) so that an old library is not reported as broken; and the cost columns of
+    :func:`cost_summary` (``dft_cpu_hours``, ``dft_<step>_cpu_hours``), summed over the conformers.
+    The per-conformer cost columns themselves are bookkeeping, never aggregated as descriptors.
     """
     if energy_column not in df.columns:
         raise KeyError(f"energy column {energy_column!r} not found; available: {list(df.columns)[:10]}...")
-    exclude = set(exclude_columns) | {group_by} | set(JOB_COLUMNS)
+    exclude = set(exclude_columns) | {group_by} | set(JOB_COLUMNS) | {c for c in df.columns if _STEP_COLUMN.match(c)}
     has_status = "orca_job_status" in df.columns
     # Numeric columns with at least one value. Descriptors that are empty for every conformer (e.g.
     # Enthalpy without a thermochemistry step) are dropped here so the library is the same whether the
@@ -97,6 +126,7 @@ def aggregate_frame(
         out: dict = {group_by: key, "n_conformers": int(len(g))}
         if has_status:
             out.update(completeness(g))
+            out.update(cost_summary(g))
         for c in carry_first:
             out[c] = g[c].iloc[0]
         for col in numeric_cols:
@@ -164,9 +194,10 @@ def apply_filter(agg: pd.DataFrame, spec: Spec) -> tuple[pd.DataFrame, dict]:
     """Run ``filter_numeric_descriptors`` and re-attach the non-numeric metadata columns."""
     from desc_utils.data_extraction import filter_numeric_descriptors
 
-    filtered, report = filter_numeric_descriptors(agg, **filter_kwargs_from_spec(spec))
+    cost = [c for c in agg.columns if is_cost_column(c)]   # bookkeeping: kept, but not a descriptor to filter
+    filtered, report = filter_numeric_descriptors(agg.drop(columns=cost), **filter_kwargs_from_spec(spec))
     meta = [c for c in ["smiles", spec.aggregate["group_by"], "inchikey_folder", "ligand_class", "n_conformers",
-                        *COMPLETENESS_COLUMNS]
+                        *COMPLETENESS_COLUMNS, *cost]
             if c in agg.columns and c not in filtered.columns]
     for c in meta:
         filtered[c] = agg[c].values

@@ -29,7 +29,7 @@ cluster = ["fairchem-core", "ase", "aimnet[ase]", "scine-molassembler==3.0.1", "
 dev = ["pytest>=8"]
 
 [project.scripts]
-orcadesc = "desc_utils.submit.cli:main"   # the ORCA stage: submit / status / prepare-task / orca-task
+orcadesc = "desc_utils.submit.cli:main"   # the ORCA stage: submit / status / cost / prepare-task / orca-task
 bceg = "bceg.cli:main"                    # conformer ensembles on their own: submit / run / status
 
 [tool.setuptools.packages.find]

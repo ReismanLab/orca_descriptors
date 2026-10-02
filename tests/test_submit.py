@@ -11,12 +11,13 @@ import json
 import stat
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 
 from bceg.inputs import InputMolecule
 from bceg.layout import method_dir
-from bceg.provenance import make_params, write_record
+from bceg.provenance import make_params, read_record, write_record
 from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
@@ -25,7 +26,8 @@ from desc_utils.submit.cli import main
 from desc_utils.submit.config import Config
 from desc_utils.submit.source import Ensembles
 from desc_utils.submit.status import stage_statuses, status_table
-from desc_utils.submit.tasks import energy_window, orca_outcome, prepare_molecule, run_orca_conformer
+from desc_utils.submit.cost import cost_table
+from desc_utils.submit.tasks import allocated_cpus, energy_window, orca_outcome, prepare_molecule, run_orca_conformer
 
 LOT = "uma-s-1p2"
 LIGANDS = "CCO ethanol\nCC(C)O\nc1ccccc1 benzene\n"  # benzene gets no ensemble
@@ -441,8 +443,28 @@ def test_replicates_must_be_a_positive_integer(tree, value):
 
 
 # --------------------------------------------------------------------------- ORCA task
+#: what a two-step compound job prints, as far as the timing parser is concerned
+FAKE_COMPOUND_OUT = """\
+                                COMPOUND JOB MainJOB
+|  3>      nprocs 4
+                                COMPOUND JOB  1
+|  1>       %base "optimization"
+Timings for individual modules:
+
+Sum of individual times          ...       10.000 sec (=   0.167 min)
+SCF iterations                   ...        8.000 sec (=   0.133 min)  80.0 %
+
+                                COMPOUND JOB  2
+|  1>       %base "singlepoint"
+Timings for individual modules:
+
+Sum of individual times          ...        5.000 sec (=   0.083 min)
+SCF iterations                   ...        4.000 sec (=   0.067 min)  80.0 %
+"""
+
+
 def _fake_orca(path: Path, exit_code: int = 0, banner: bool = True) -> Path:
-    body = "#!/bin/bash\necho 'fake orca'\n"
+    body = "#!/bin/bash\necho 'fake orca'\n" + "".join(f"echo '{line}'\n" for line in FAKE_COMPOUND_OUT.splitlines())
     if banner:
         body += "echo '                             ****ORCA TERMINATED NORMALLY****'\necho 'TOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds 234 msec'\n"
     body += f"exit {exit_code}\n"
@@ -455,11 +477,29 @@ def test_orca_outcome_requires_banner(tmp_path):
     out = tmp_path / "calcParam.out"
     out.write_text("...\n****ORCA TERMINATED NORMALLY****\nTOTAL RUN TIME: 0 days 1 hours 2 minutes 3 seconds 0 msec\n")
     assert orca_outcome(out, 0) == {"status": "completed", "exit_code": 0, "orca_terminated_normally": True,
-                                    "orca_run_time": "0 days 1 hours 2 minutes 3 seconds 0 msec"}
+                                    "orca_run_time": "0 days 1 hours 2 minutes 3 seconds 0 msec",
+                                    "orca_run_time_s": 3723.0, "orca_steps_s": {}}
     out.write_text("died quietly\n")
     assert orca_outcome(out, 0)["status"] == "failed"
     assert orca_outcome(tmp_path / "missing.out", 1) == {"status": "failed", "exit_code": 1,
-                                                          "orca_terminated_normally": None, "orca_run_time": None}
+                                                          "orca_terminated_normally": None, "orca_run_time": None,
+                                                          "orca_run_time_s": None, "orca_steps_s": None}
+    out.write_text(FAKE_COMPOUND_OUT + "****ORCA TERMINATED NORMALLY****\nTOTAL RUN TIME: 0 days 0 hours 0 minutes 20 seconds 0 msec\n")
+    oc = orca_outcome(out, 0)
+    assert oc["status"] == "completed" and oc["orca_run_time_s"] == 20.0
+    assert oc["orca_steps_s"] == {"optimization": 10.0, "singlepoint": 5.0}
+
+
+def test_allocated_cpus_rules(monkeypatch):
+    for var in ("SLURM_CPUS_ON_NODE", "SLURM_NTASKS", "SLURM_CPUS_PER_TASK"):
+        monkeypatch.delenv(var, raising=False)
+    assert allocated_cpus(16) == 16                      # no SLURM: the molecule's nprocs
+    monkeypatch.setenv("SLURM_NTASKS", "8")
+    assert allocated_cpus(16) == 8                       # ntasks x cpus_per_task (unset = 1)
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    assert allocated_cpus(16) == 16
+    monkeypatch.setenv("SLURM_CPUS_ON_NODE", "32")
+    assert allocated_cpus(16) == 32                      # what the allocation holds on this node wins
 
 
 def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch, capsys):
@@ -468,6 +508,7 @@ def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch, 
     prepare_molecule(cfg, key, "CCO")
     monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "1002")
     monkeypatch.setenv("SLURM_ARRAY_TASK_ID", "0")
+    monkeypatch.setenv("SLURM_CPUS_ON_NODE", "4")
     good = _fake_orca(tmp_path / "orca_ok")
     bad = _fake_orca(tmp_path / "orca_bad", exit_code=0, banner=False)
     assert run_orca_conformer(cfg, key, "conf_1", orca_cmd=str(good)) == "completed"
@@ -476,7 +517,11 @@ def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch, 
     c1, c2 = meta["conformers"]["conf_1"], meta["conformers"]["conf_2"]
     assert c1["status"] == "completed" and c1["exit_code"] == 0 and c1["orca_terminated_normally"] is True
     assert c1["orca_run_time"].startswith("0 days") and c1["slurm_array_job_id"] == "1002" and "condensed" not in c1
+    # what it cost: the allocation's CPUs, core-hours from the wall time, ORCA's own run time, per compound step
+    assert c1["cpus"] == 4 and c1["cpu_hours"] == round(c1["wall_time_s"] / 3600 * 4, 5)
+    assert c1["orca_run_time_s"] == 1.234 and c1["orca_steps_s"] == {"optimization": 10.0, "singlepoint": 5.0}
     assert c2["status"] == "failed" and c2["orca_terminated_normally"] is False
+    assert c2["cpu_hours"] > 0 and c2["orca_steps_s"] == {"optimization": 10.0, "singlepoint": 5.0}  # a failure costs too
     assert "fake orca" in (tree["lib"] / key / "conf_1" / "calcParam.out").read_text()
     assert records.molecule_state(meta) == ("incomplete", "conformer(s) not completed: conf_2=failed")
 
@@ -502,6 +547,60 @@ def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch, 
     assert run_orca_conformer(cfg, key, "conf_2", orca_cmd=str(good)) == "completed"
     assert records.molecule_state(records.load_metadata(tree["lib"], key))[0] == "complete"
     assert status_table(cfg).set_index("inchikey").loc[key]["dft"] == "done"
+
+
+def _usage(wall: float, cpus: int, gpus: int = 0) -> dict:
+    u = {"wall_time_s": wall, "cpus": cpus, "cpu_hours": round(wall / 3600 * cpus, 5)}
+    if gpus:
+        u["gpu_hours"] = round(wall / 3600 * gpus, 5)
+    return u
+
+
+def test_cost_per_molecule_and_stage(tree, fake_sbatch, tmp_path, monkeypatch, capsys):
+    """``cost`` sums bceg's phases, the post-optimisation and the ORCA conformers (per compound step) per molecule."""
+    cfg = _frozen(tree, fake_sbatch)
+    key = tree["keys"]["CCO"]
+    md = method_dir(tree["results"], "none", key, "etkdg")
+    search = read_record(md.run_record(1)) | _usage(360.0, 2) | {
+        "phases": {"pre_refinement": _usage(60.0, 2), "search": _usage(300.0, 2)}}
+    write_record(md.run_record(1), search)
+    write_record(md.run_record(1, LOT), read_record(md.run_record(1, LOT)) | _usage(36.0, 1, gpus=1))
+    # the other molecule's records predate the phases and the usage of the post-optimisation: total -> search
+    key2 = tree["keys"]["CC(C)O"]
+    md2 = method_dir(tree["results"], "none", key2, "etkdg")
+    write_record(md2.run_record(1), read_record(md2.run_record(1)) | _usage(720.0, 2))
+
+    prepare_molecule(cfg, key, "CCO")
+    monkeypatch.setenv("SLURM_CPUS_ON_NODE", "4")
+    good = _fake_orca(tmp_path / "orca_ok")
+    assert run_orca_conformer(cfg, key, "conf_1", orca_cmd=str(good)) == "completed"
+    assert run_orca_conformer(cfg, key, "conf_2", orca_cmd=str(good)) == "completed"
+    meta = records.load_metadata(tree["lib"], key)
+    dft_h = sum(meta["conformers"][c]["cpu_hours"] for c in ("conf_1", "conf_2"))
+
+    df = cost_table(cfg).set_index("inchikey")
+    row = df.loc[key]
+    assert row["pre_refinement_cpu_h"] == round(60 / 3600 * 2, 4) and row["search_cpu_h"] == round(300 / 3600 * 2, 4)
+    assert row["post_opt_cpu_h"] == 0.01 and row["post_opt_gpu_h"] == 0.01 and row["total_gpu_h"] == 0.01
+    assert row["dft_cpu_h"] == round(dft_h, 4) and row["n_dft_runs"] == 2 and row["n_ensemble_runs"] == 2
+    assert row["dft_optimization_cpu_h"] == round(2 * 10 * 4 / 3600, 4)      # 2 conformers x 10 s x 4 CPUs
+    assert row["dft_singlepoint_cpu_h"] == round(2 * 5 * 4 / 3600, 4)
+    assert row["total_cpu_h"] == round(0.2 + 0.01 + dft_h, 4)
+    row2 = df.loc[key2]
+    assert row2["pre_refinement_cpu_h"] == 0 and row2["search_cpu_h"] == 0.4 and row2["post_opt_cpu_h"] == 0
+    assert row2["n_ensemble_runs"] == 1 and row2["dft_cpu_h"] == 0 and row2["n_dft_runs"] == 0
+    benzene = df.loc[tree["keys"]["c1ccccc1"]]
+    assert benzene["total_cpu_h"] == 0 and benzene["n_ensemble_runs"] == 0
+    assert list(df.index[:2]) == [key2, key] or list(df.index[:2]) == [key, key2]   # sorted by total, benzene last
+    assert df.index[-1] == tree["keys"]["c1ccccc1"]
+
+    csv = tree["root"] / "out" / "cost.csv"
+    assert main(["cost", str(cfg.path), "--csv", str(csv)]) == 0
+    out = capsys.readouterr().out
+    assert "total   :" in out and "per mol :" in out and "gpu     : post_opt 0.01" in out
+    assert "search_gpu_h" not in out                      # all-zero GPU columns are not printed...
+    written = pd.read_csv(csv)
+    assert "search_gpu_h" in written.columns and len(written) == 3   # ...but are in the CSV
 
 
 def test_registry_keeps_first_smiles_and_aliases(tmp_path, capsys):

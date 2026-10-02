@@ -85,7 +85,24 @@ dft:
 `level_of_theory` as validated, and `compound_steps`: for every step (`optimization`, `frequency`,
 `singlepoint`, `nmr`, `oxidation`, `reduction`) whether it runs, its method, solvent, extra basis,
 charge and multiplicity. Per conformer: SLURM ids, host, start and end, `exit_code`,
-`orca_terminated_normally`, `orca_run_time`, `wall_time_s`, `condensed` (`ok` or the error).
+`orca_terminated_normally`, `orca_run_time` (ORCA's `TOTAL RUN TIME` line) and `orca_run_time_s` (the same
+in seconds), `wall_time_s`, `cpus` (what the SLURM allocation holds on the node: `SLURM_CPUS_ON_NODE`,
+else `ntasks` x `cpus_per_task`, else `nprocs`), `cpu_hours` (`wall_time_s` x `cpus`, the allocation's
+cost as in bceg's records), `orca_steps_s` (wall time of every compound step by its `%base` name, from
+ORCA's own `Timings for individual modules` tables; `null` for a step that did not finish), `condensed`
+(`ok` or the error).
+
+## Cost
+
+Every record is written for a failed or timed-out job too: it was paid for. `orcadesc cost <LIB>.yaml`
+sums the records per molecule and stage (`pre_refinement_cpu_h`, `search_cpu_h`, `post_opt_cpu_h`,
+`dft_cpu_h`, one `dft_<step>_cpu_h` per compound step, the `_gpu_h` counterparts, `total_cpu_h`), prints
+the table with totals and, with `--csv`, writes it, one row per molecule joinable on `inchikey` to the
+descriptor spreadsheet. The condensed file carries the same step timings under `job.timings`
+(`total_run_time_s`, `nprocs`, `steps`), which is how the laptop side gets them: the per-conformer table
+has `orca_run_time_s`, `orca_nprocs`, `orca_cpu_hours` and `orca_step_<step>_s`, the aggregated spreadsheet
+`dft_cpu_hours` and `dft_<step>_cpu_hours` summed over the molecule's conformers (bookkeeping columns, never
+aggregated or filtered as descriptors). Records and files written before 2026-10-02 lack these fields.
 
 ## Status
 
