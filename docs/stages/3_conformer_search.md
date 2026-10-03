@@ -22,6 +22,7 @@ YAML points at one of them.
 | `name` | required | method folder; letters, digits, `_`, `-`, `.` | yes |
 | `searcher` | required | `crest`, `goat`, `molassembler`, `rdkit_etkdg`, `loqi` | yes |
 | `params` | `{}` | the searcher's parameters, tables below; an unknown key is refused at load | yes, except the resource keys marked |
+| `constraints` | none | atoms frozen and bonds, angles, dihedrals held during the search (`crest`, `goat`), [below](#constraints) | yes, when given |
 | `replicates` | `1` | how many times the search runs, each replicate from its own seed (and start geometry); the ORCA stage pools them, see below | yes, in the library's `params.json` (not in the method folder's) |
 | `slurm` | `{}` | overrides of `slurm.ensembles.cpu` (or `.gpu`) for this step: `partition`, `time`, `cpus_per_task`, `ntasks`, `mem`, `mem_per_cpu`, `nodes`, `gres`, `extra`, ... | no |
 
@@ -56,6 +57,82 @@ happened to be done. `orcadesc submit` again resubmits only the unfinished repli
 `replicates` is part of the library's `params.json` (a library with 1 and one with 3 are two libraries),
 but not of the method folder's: bceg records the count without comparing it, so a shared `ensembles_dir`
 can hold three replicates of a method and serve a library that pools one as well as one that pools three.
+
+## Constraints
+
+A cheap search level can distort what it describes badly, e.g. GFN2-xTB or GFN-FF around a transition
+metal. The usual remedy: pre-optimise with UMA ([stage 2](2_pre_refinement.md), `method: uma`), then
+search with the metal and its first shell held where UMA put them. `constraints` says which atoms, in
+terms of the molecule (SMARTS or elements), never as atom numbers, so one block serves the whole
+library. CREST and GOAT take it; the other searchers refuse it at load.
+
+```yaml
+pre_refinement:
+  method: uma
+conformer_search:
+  name: crest_gfn2_fixNi1              # constraints are part of the parameter set: a new set needs a new name
+  searcher: crest
+  constraints:
+    freeze:
+      - {element: Ni, neighbors: 1}    # Ni and every atom bound to it (dative bonds included)
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `freeze` | `[]` | atoms kept at their start-geometry positions: every atom of every match, plus those within `neighbors` bonds |
+| `bonds` | `[]` | one distance constraint per match of a 2-atom selection |
+| `angles` | `[]` | one angle constraint per match of a 3-atom selection |
+| `dihedrals` | `[]` | one dihedral constraint per match of a 4-atom selection |
+| `force_constant` | `null` | strength of every constraint below that sets none, see [strength](#strength) |
+
+Each entry of the four lists is a SMARTS string, or a mapping:
+
+| Entry key | Default | Meaning |
+|---|---|---|
+| `smarts` | | the atoms, e.g. `"[Ni]"`, `"[Ni]~[#7]"`; with atom maps (`"[#7:1]~[Ni:2]~[#7:3]"`) only the mapped atoms count, in map order |
+| `element` | | instead of `smarts`: a symbol or a list of symbols, e.g. `Ni` or `[Ni, Pd]` |
+| `neighbors` | `0` | `freeze` only: also freeze the atoms within this many bonds of the matched ones |
+| `value` | start geometry | `bonds`, `angles`, `dihedrals`: the target, Angstrom or degrees; by default the value in the start geometry |
+| `force_constant` | top-level `force_constant` | this entry's strength |
+| `optional` | `false` | `true`: a molecule where the selection matches nothing runs unconstrained; `false`: its search fails with the selection named |
+
+The selection is resolved per molecule when the search runs, on the start geometry handed to the
+search. A bond, angle or dihedral whose atoms are all frozen is dropped (it is fixed already). The
+outcome is recorded in `run_<i>.json` under `details.constraints`: `freeze` (0-based atom indices, the
+order of every xyz file), `bonds`, `angles`, `dihedrals` (`atoms`, `value`, `force_constant`), and
+`labels` (`"4": "Ni4"`, ...). The searcher's input file in `logs/` shows what the program received.
+
+What the constraints do **not** touch: the stage 2 pre-optimisation (it produces the geometry that is
+frozen, so pair the constraints with `pre_refinement: uma` or with `start_geometry: input`; with
+`xtb` the atoms are frozen where xtb put them) and the stage 4 post-optimisation, which relaxes every
+conformer freely.
+
+### Strength
+
+Without a force constant every constraint is as strict as the program makes it: frozen atoms are
+exact in both (CREST's `freeze` zeroes their gradient, also in the MD; ORCA's `{C i C}`); bonds,
+angles and dihedrals are exact in GOAT and harmonic in CREST at its default 0.01. `force_constant`
+(top level for all entries, per entry to override) makes them harmonic restraints of that strength, in
+Eh/Bohr² for distances and Eh/rad² for angles and dihedrals; for reference, xtb's `$constrain`
+default is 0.5. A frozen group with a force constant becomes a restraint on every distance within
+the group (xtb's `$constrain atoms:`), so it keeps its shape but may move and turn as a whole.
+
+GOAT's constraints are always exact: a `force_constant` with `searcher: goat` is refused.
+
+| | `freeze` | `freeze` + `force_constant` | `bonds` / `angles` / `dihedrals` | + `force_constant` |
+|---|---|---|---|---|
+| `crest` | `[calculation] freeze` (exact) | `[[calculation.constraints]]` bonds within the group | `[[calculation.constraints]]`, CREST's default strength | that strength |
+| `goat` | `%geom Constraints { C i C }` | refused | `{ B i j d C }`, `{ A ... }`, `{ D ... }` (exact) | refused |
+
+```yaml
+constraints:
+  force_constant: 0.5                              # Eh/Bohr^2, Eh/rad^2
+  freeze: [{smarts: "[Ni]", neighbors: 1}]         # restrained, not frozen, because of force_constant
+  bonds: ["[Ni]~[#7]"]                             # every Ni-N distance at its start value
+  angles: [{smarts: "[#7]~[Ni]~[#7]", value: 90}]  # the bite angle, at 90 degrees
+  dihedrals:
+    - {smarts: "[#7:1]~[#6:2]~[#6:3]~[#7:4]", force_constant: 1.0, optional: true}
+```
 
 ## `crest`: CREST iMTD-GC (metals and organics)
 

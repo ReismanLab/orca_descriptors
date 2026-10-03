@@ -5,8 +5,9 @@
     library_dir, smiles, ensembles_dir, run_bceg          where things are, whether bceg is called
     transformation       1. SMILES -> structure computed (name = depth-1 folder of the ensembles)
     pre_refinement       2. pre-optimisation of the start geometry handed to the search (xtb | uma | none)
-    conformer_search     3. the searcher, its parameters (name = parameter set = method folder) and how many
-                            replicates of the search are run and pooled
+    conformer_search     3. the searcher, its parameters (name = parameter set = method folder), the atoms
+                            frozen or bonds constrained during the search, and how many replicates of the
+                            search are run and pooled
     post_optimization    4. refinement of every conformer (uma | null)
     pruning              5. which conformers get an ORCA job (energy window on the stage-4 energies; null = all)
     orca, dft            6. the ORCA compound job (level_of_theory, template)
@@ -42,6 +43,7 @@ import yaml
 from bceg.config import SLURM_KEYS as BCEG_SLURM_KEYS
 from bceg.config import Config as BcegConfig
 from bceg.config import _script_path
+from bceg.constraints import validate as validate_constraints
 from bceg.provenance import make_params
 from bceg.refine import REFINERS
 from bceg.search import SEARCHERS
@@ -60,7 +62,7 @@ XTB_PARAMS = {"gfn": "gfn2", "level": "normal"}
 EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
                   "max_metal_ligand_distance": "max_metal_ligand_distance", "max_attempts": "start_max_attempts",
                   "xtb_executable": "xtb_executable"}
-SEARCH_KEYS = {"name", "searcher", "params", "slurm", "replicates"}
+SEARCH_KEYS = {"name", "searcher", "params", "constraints", "slurm", "replicates"}
 POST_OPT_KEYS = {"refiner", "params", "slurm"}
 PRUNING_KEYS = {"energy_window_kcal_mol"}
 DFT_KEYS = {"calc_param_template", "level_of_theory"}
@@ -175,8 +177,14 @@ def _conformer_search(block, where: str) -> dict:
     replicates = block.get("replicates", 1)
     if isinstance(replicates, bool) or not isinstance(replicates, int) or replicates < 1:
         raise ValueError(f"{where}.replicates must be a positive integer, got {replicates!r}")
+    if "constraints" in (block.get("params") or {}):
+        raise ValueError(f"{where}: put `constraints` in the conformer_search block, not in its params")
+    constraints = validate_constraints(block.get("constraints"), f"{where}.constraints")
+    if constraints and not SEARCHERS[block["searcher"]].supports_constraints():
+        raise ValueError(f"{where}.constraints: searcher {block['searcher']!r} takes no constraints "
+                         f"(only {sorted(s for s, cls in SEARCHERS.items() if cls.supports_constraints())} do)")
     return {"name": str(block["name"]), "searcher": block["searcher"], "params": dict(block.get("params") or {}),
-            "slurm": dict(block.get("slurm") or {}), "replicates": replicates}
+            "constraints": dict(constraints), "slurm": dict(block.get("slurm") or {}), "replicates": replicates}
 
 
 def _post_optimization(block, where: str, present: bool) -> dict | None:
@@ -228,6 +236,8 @@ def to_bceg_raw(raw: dict) -> dict:
     spec = {k: t[k] for k in ("script", "params", "charge", "multiplicity") if t.get(k) is not None}
     search = raw["conformer_search"]
     params = dict(search["params"])
+    if search.get("constraints"):
+        params["constraints"] = copy.deepcopy(search["constraints"])
     if searcher_has_start_step(search["searcher"]):
         params.update(start_params(raw["pre_refinement"]))
     slurm = {"setup": list(raw["slurm"]["setup"]), **copy.deepcopy(raw["slurm"]["ensembles"])}

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from bceg import constraints
 from bceg.refine import REFINERS
 from bceg.refine.uma import UMA
 from bceg.search import SEARCHERS
@@ -34,7 +35,7 @@ CASES = [
     ("1_transformation.md", config.TRANSFORMATION_KEYS | {"none", "ni_x2.py", "x", "not_applicable"}),
     ("2_pre_refinement.md", config.PRE_REFINEMENT_KEYS | set(config.XTB_PARAMS) | START_KEYS
      | set(config.PRE_REFINEMENT_METHODS) | (set(UMA.defaults) - {"lot", "keep_unconverged", "workers"})),
-    ("3_conformer_search.md", config.SEARCH_KEYS | set(SHIPPED)
+    ("3_conformer_search.md", config.SEARCH_KEYS | set(SHIPPED) | constraints.TOP_KEYS | constraints.ENTRY_KEYS
      | {k for s in SHIPPED.values() for k in s.defaults if k not in START_KEYS}),
     ("4_post_optimization.md", config.POST_OPT_KEYS | set(SHIPPED_REFINERS) | {"null"}
      | {k for r in SHIPPED_REFINERS.values() for k in r.defaults}),

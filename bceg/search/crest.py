@@ -9,13 +9,14 @@ https://crest-lab.github.io/crest-docs/page/examples/composite.html
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 from bceg.external import find_executable, program_version, resolve_threads, run
-from bceg.search.base import START_DEFAULTS, START_RESOURCE_KEYS, SearchResult, Searcher
+from bceg.search.base import CONSTRAINT_DEFAULTS, START_DEFAULTS, START_RESOURCE_KEYS, SearchResult, Searcher
 from bceg.structure import Structure
-from bceg.xyz import Conformer, read_xyz, write_xyz
+from bceg.xyz import BOHR_TO_ANGSTROM, Conformer, read_xyz, write_xyz
 
 UMA_LEVEL = {"method": "mlip", "mlip_backend": "uma", "mlip_uma_task": "omol", "mlip_uma_model": "uma-s-1p2"}
 
@@ -29,6 +30,7 @@ class Crest(Searcher):
         "refine": None,  # None | "sp" | "opt" (| "add" | "freq")
         "refine_level": dict(UMA_LEVEL),  # level used for the inline refinement
         "toml_extra": {},  # deep-merged into the TOML document (e.g. {"cregen": {"ewin": 6.0}})
+        **CONSTRAINT_DEFAULTS,
         **START_DEFAULTS,
         "seed_offset": 0,
         "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
@@ -45,7 +47,7 @@ class Crest(Searcher):
         )
         return "gpu" if uses_mlip and p["mlip_device"] != "cpu" else "cpu"
 
-    def build_input(self, structure: Structure) -> dict[str, Any]:
+    def build_input(self, structure: Structure, constraints: dict | None = None) -> dict[str, Any]:
         p = self.params
         electronic = {"charge": structure.charge, "uhf": structure.uhf}
         workhorse = {"method": p["workhorse"]} if isinstance(p["workhorse"], str) else dict(p["workhorse"])
@@ -61,14 +63,17 @@ class Crest(Searcher):
             levels[0]["mlip_device"] = p["mlip_device"]
         doc = {"input": "input.xyz", "runtype": p["runtype"], "threads": resolve_threads(p["threads"]),
                "calculation": {"level": levels}}
+        if constraints:
+            doc["calculation"].update(constraint_toml(constraints))
         return _deep_merge(doc, p["toml_extra"])
 
     def run(self, structure: Structure, replicate: int, workdir: Path) -> SearchResult:
         exe = find_executable(self.params["executable"])
         seed = self.seed(replicate)
         coords, start = self.start_geometry(structure, seed, workdir)
+        constraints = self.resolve_constraints(structure, coords)
         write_xyz(workdir / "input.xyz", structure.elements, [Conformer(coords)])
-        (workdir / "input.toml").write_text(to_toml(self.build_input(structure)))
+        (workdir / "input.toml").write_text(to_toml(self.build_input(structure, constraints)))
 
         proc = run([exe, "--input", "input.toml"], workdir, threads=resolve_threads(self.params["threads"]), log_name="crest.out")
         out = workdir / "crest_conformers.xyz"
@@ -81,9 +86,33 @@ class Crest(Searcher):
         return SearchResult(
             confs,
             versions={"crest": program_version([exe, "--version"]) or "unknown"},
-            details={"seed": seed, "start_geometry": start},
+            details={"seed": seed, "start_geometry": start} | ({"constraints": constraints} if constraints else {}),
             log_files=logs,
         )
+
+
+CREST_CONSTRAINT_TYPE = {"bonds": "bond", "angles": "angle", "dihedrals": "dihedral"}
+
+
+def constraint_toml(constraints: dict) -> dict[str, Any]:
+    """``[calculation]`` keys for resolved constraints (bceg.constraints.resolve): ``freeze`` (exact; an
+    atom list, 1-based) and one ``[[calculation.constraints]]`` table per bond, angle or dihedral. CREST
+    keeps references in atomic units, so distances go in Bohr and angles in radians; without ``fc``
+    CREST's default force constant applies."""
+    out: dict[str, Any] = {}
+    if constraints["freeze"]:
+        out["freeze"] = ",".join(str(i + 1) for i in constraints["freeze"])
+    tables = []
+    for kind, crest_type in CREST_CONSTRAINT_TYPE.items():
+        for c in constraints[kind]:
+            ref = c["value"] / BOHR_TO_ANGSTROM if kind == "bonds" else math.radians(c["value"])
+            table = {"type": crest_type, "atoms": [i + 1 for i in c["atoms"]], "ref": round(ref, 6)}
+            if c["force_constant"] is not None:
+                table["fc"] = c["force_constant"]
+            tables.append(table)
+    if tables:
+        out["constraints"] = tables
+    return out
 
 
 def _deep_merge(base: dict, extra: dict) -> dict:
