@@ -65,6 +65,8 @@ class Crest(Searcher):
                "calculation": {"level": levels}}
         if constraints:
             doc["calculation"].update(constraint_toml(constraints))
+            if constraints["freeze"]:
+                doc["dynamics"] = dict(FROZEN_DYNAMICS)
         return _deep_merge(doc, p["toml_extra"])
 
     def run(self, structure: Structure, replicate: int, workdir: Path) -> SearchResult:
@@ -75,7 +77,8 @@ class Crest(Searcher):
         write_xyz(workdir / "input.xyz", structure.elements, [Conformer(coords)])
         (workdir / "input.toml").write_text(to_toml(self.build_input(structure, constraints)))
 
-        proc = run([exe, "--input", "input.toml"], workdir, threads=resolve_threads(self.params["threads"]), log_name="crest.out")
+        frozen = bool(constraints and constraints["freeze"])
+        proc = run([exe, "--input", "input.toml", *(FROZEN_FLAGS if frozen else [])], workdir, threads=resolve_threads(self.params["threads"]), log_name="crest.out")
         out = workdir / "crest_conformers.xyz"
         logs = [workdir / "input.toml", workdir / "start_geometry.xyz", workdir / "crest.out"]
         if proc.returncode != 0 or not out.exists():
@@ -90,6 +93,15 @@ class Crest(Searcher):
             log_files=logs,
         )
 
+
+# SHAKE holds bond lengths by moving both atoms of a bond, frozen or not (CREST 3.0.2 constrains all
+# bonds but those to a metal), so frozen atoms bonded to free ones drift during the MD and the
+# optimisations keep them where it left them. Off whenever atoms are frozen, with a time step the MD
+# survives without it (CREST keeps its 5 fs for GFN2, which blows up); toml_extra can override both.
+FROZEN_DYNAMICS = {"shake": 0, "tstep": 2.0}
+# The genetic crossing (GC) mixes the Cartesian coordinates of aligned conformers, frozen atoms
+# included (up to 0.02 A on a Ni first shell); the TOML input has no key for it, so a flag.
+FROZEN_FLAGS = ["-nocross"]
 
 CREST_CONSTRAINT_TYPE = {"bonds": "bond", "angles": "angle", "dihedrals": "dihedral"}
 

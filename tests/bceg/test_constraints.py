@@ -130,6 +130,19 @@ def test_crest_toml(nih2):
     assert "constraints" not in Crest().build_input(structure)["calculation"]
 
 
+def test_crest_turns_shake_off_when_atoms_are_frozen(nih2):
+    """SHAKE moves frozen atoms bonded to free ones: off with freeze, untouched otherwise."""
+    structure, coords, *_ = nih2
+    def dynamics(**params):
+        crest = Crest(**params)
+        return crest.build_input(structure, crest.resolve_constraints(structure, coords)).get("dynamics")
+    assert dynamics(constraints={"freeze": ["[Ni]"]}) == {"shake": 0, "tstep": 2.0}
+    assert dynamics(constraints={"freeze": ["[Ni]"]}, toml_extra={"dynamics": {"tstep": 1.0}}) == {"shake": 0, "tstep": 1.0}
+    assert dynamics(constraints={"bonds": ["[Ni]~[#7]"]}) is None
+    assert dynamics(constraints={"freeze": [{"element": "Ni", "force_constant": 0.5}], "bonds": ["[Ni]~[#7]"]}) is None
+    assert dynamics() is None
+
+
 def test_goat_geom_block_and_exact_only(nih2):
     structure, coords, ni, _, h = nih2
     goat = Goat(constraints={"freeze": ["[Ni]"], "bonds": [{"smarts": "[Ni]~[#1]", "value": 1.45}]})
@@ -153,6 +166,7 @@ def test_crest_run_writes_constraints_and_records_them(nih2, tmp_path, monkeypat
         import shutil, sys
         if "--version" in sys.argv:
             print("Version 3.0.2"); sys.exit(0)
+        open("argv.txt", "w").write(" ".join(sys.argv[1:]))
         shutil.copy("input.xyz", "crest_conformers.xyz")
         """))
     exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
@@ -164,4 +178,9 @@ def test_crest_run_writes_constraints_and_records_them(nih2, tmp_path, monkeypat
     shell = sorted([ni, *n, *h])
     assert result.details["constraints"]["freeze"] == shell
     assert f'freeze = "{",".join(str(i + 1) for i in shell)}"' in (workdir / "input.toml").read_text()
+    assert (workdir / "argv.txt").read_text() == "--input input.toml -nocross"   # GC moves frozen atoms
     json.dumps(result.details)   # recorded in run_<i>.json as it is
+    free = tmp_path / "free"
+    free.mkdir()
+    Crest(start_preopt="none", start_ff="none", threads=1).run(structure, 1, free)
+    assert (free / "argv.txt").read_text() == "--input input.toml"

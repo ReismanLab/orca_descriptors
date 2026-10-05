@@ -119,6 +119,20 @@ the group (xtb's `$constrain atoms:`), so it keeps its shape but may move and tu
 
 GOAT's constraints are always exact: a `force_constant` with `searcher: goat` is refused.
 
+With frozen atoms, CREST 3.0.2 needs three changes to keep them in place, all made automatically:
+
+- `[dynamics] shake = 0`. SHAKE keeps bond lengths fixed in the MD by moving both atoms of each
+  bond, frozen or not. With it on (CREST constrains every bond except those to a metal), a frozen
+  atom bonded to a free one drifts: the N donors of a frozen Ni first shell moved by up to 0.3 Å.
+- `[dynamics] tstep = 2.0` (fs). Without SHAKE, CREST's 5 fs step for GFN2 blows the MD up.
+  Measured on a pyox-NiH2 with GFN2: 9 min at 2 fs, 25 min at 1 fs, both exact.
+- `crest --input input.toml -nocross`: no genetic crossing (GC), which mixes the Cartesian
+  coordinates of aligned conformers, frozen atoms included (up to 0.02 Å). The ensemble then
+  comes from the MTDs alone. CREST's TOML input has no key for this, hence the flag.
+
+`toml_extra: {dynamics: {shake: ..., tstep: ...}}` overrides the first two. Bonds, angles and
+dihedrals without frozen atoms change none of this.
+
 | | `freeze` | `freeze` + `force_constant` | `bonds` / `angles` / `dihedrals` | + `force_constant` |
 |---|---|---|---|---|
 | `crest` | `[calculation] freeze` (exact) | `[[calculation.constraints]]` bonds within the group | `[[calculation.constraints]]`, CREST's default strength | that strength |
