@@ -166,8 +166,23 @@ def _matches(mol: Chem.Mol, entry: dict, where: str) -> list[tuple[int, ...]]:
             out.append(atoms)
     if not out and not entry.get("optional", False):
         raise ValueError(f"{where}: {entry.get('smarts') or entry.get('element')!r} matches no atom of the "
-                         f"structure (add `optional: true` if it may not apply to every molecule)")
+                         f"structure (add `optional: true` if it may not apply to every molecule){_any_bond_hint(mol, pattern)}")
     return out
+
+
+def _any_bond_hint(mol: Chem.Mol, pattern: Chem.Mol) -> str:
+    """The pattern with every bond as ``~`` when that matches: metal bonds are usually dative, which
+    ``-`` (single) does not match."""
+    if not pattern.GetNumBonds():
+        return ""
+    relaxed = Chem.RWMol(pattern)
+    any_bond = Chem.MolFromSmarts("*~*").GetBondWithIdx(0)
+    for bond in pattern.GetBonds():
+        relaxed.ReplaceBond(bond.GetIdx(), any_bond, preserveProps=False)
+    if not mol.HasSubstructMatch(relaxed):
+        return ""
+    return (f"; it matches with any bond type, {Chem.MolToSmarts(relaxed)!r}: `~` is any bond, while `-` is single "
+            f"only and bonds to a metal are usually dative (`<-` from the metal's side)")
 
 
 def _within(mol: Chem.Mol, atoms: set[int], shells: int) -> set[int]:

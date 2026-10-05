@@ -79,6 +79,11 @@ def test_selection_matching_nothing(nih2):
     with pytest.raises(ValueError, match="matches no atom"):
         cons.resolve({"freeze": ["[Pd]"]}, structure.mol, coords)
     assert cons.is_empty(cons.resolve({"freeze": [{"smarts": "[Pd]", "optional": True}]}, structure.mol, coords))
+    with pytest.raises(ValueError, match=r"matches with any bond type, '\[#28\]~\*'"):   # Ni-L bonds are dative
+        cons.resolve({"freeze": ["[Ni]-*"]}, structure.mol, coords)
+    with pytest.raises(ValueError, match="matches no atom") as info:                       # no bond to relax
+        cons.resolve({"bonds": ["[Ni]-[Pd]"]}, structure.mol, coords)
+    assert "any bond" not in str(info.value)
 
 
 @pytest.mark.parametrize("spec, message", [

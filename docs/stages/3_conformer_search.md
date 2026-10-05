@@ -89,7 +89,7 @@ Each entry of the four lists is a SMARTS string, or a mapping:
 
 | Entry key | Default | Meaning |
 |---|---|---|
-| `smarts` | | the atoms, e.g. `"[Ni]"`, `"[Ni]~[#7]"`; with atom maps (`"[#7:1]~[Ni:2]~[#7:3]"`) only the mapped atoms count, in map order |
+| `smarts` | | the atoms, e.g. `"[Ni]"`, `"[Ni]~[#7]"`; with atom maps (`"[#7:1]~[Ni:2]~[#7:3]"`) only the mapped atoms count, in map order. Bonds to a metal are dative, so write them `~` (any bond): `-` (single) matches none of them |
 | `element` | | instead of `smarts`: a symbol or a list of symbols, e.g. `Ni` or `[Ni, Pd]` |
 | `neighbors` | `0` | `freeze` only: also freeze the atoms within this many bonds of the matched ones |
 | `value` | start geometry | `bonds`, `angles`, `dihedrals`: the target, Angstrom or degrees; by default the value in the start geometry |
