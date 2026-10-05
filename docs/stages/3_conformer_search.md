@@ -110,7 +110,7 @@ conformer freely.
 ### Strength
 
 Without a force constant every constraint is as strict as the program makes it: frozen atoms are
-exact in both (CREST's `freeze` zeroes their gradient, also in the MD; ORCA's `{C i C}`); bonds,
+exact (ORCA's `{C i C}`; CREST's `freeze` zeroes their gradient, but see SHAKE below); bonds,
 angles and dihedrals are exact in GOAT and harmonic in CREST at its default 0.01. `force_constant`
 (top level for all entries, per entry to override) makes them harmonic restraints of that strength, in
 Eh/Bohr² for distances and Eh/rad² for angles and dihedrals; for reference, xtb's `$constrain`
@@ -119,23 +119,26 @@ the group (xtb's `$constrain atoms:`), so it keeps its shape but may move and tu
 
 GOAT's constraints are always exact: a `force_constant` with `searcher: goat` is refused.
 
-With frozen atoms, CREST 3.0.2 needs three changes to keep them in place, all made automatically:
+With CREST's defaults, frozen atoms are **not** exact: CREST 3.0.2 runs the MD with SHAKE on every
+bond except bonds to a metal, and SHAKE moves both atoms of a bond, frozen or not. A frozen atom
+bonded to a free one drifts (the N donors of a frozen Ni first shell: Ni-N 1.83-2.15 Å from a
+2.00 Å start), and the genetic crossing (GC) mixes the coordinates of conformers, frozen atoms
+included (up to 0.02 Å). bceg leaves CREST's defaults alone; for exact frozen atoms set all three
+CREST parameters (measured on a pyox-NiH2 with GFN2, 16 cores: exact, 8 min):
 
-- `[dynamics] shake = 0`. SHAKE keeps bond lengths fixed in the MD by moving both atoms of each
-  bond, frozen or not. With it on (CREST constrains every bond except those to a metal), a frozen
-  atom bonded to a free one drifts: the N donors of a frozen Ni first shell moved by up to 0.3 Å.
-- `[dynamics] tstep = 2.0` (fs). Without SHAKE, CREST's 5 fs step for GFN2 blows the MD up.
-  Measured on a pyox-NiH2 with GFN2: 9 min at 2 fs, 25 min at 1 fs, both exact.
-- `crest --input input.toml -nocross`: no genetic crossing (GC), which mixes the Cartesian
-  coordinates of aligned conformers, frozen atoms included (up to 0.02 Å). The ensemble then
-  comes from the MTDs alone. CREST's TOML input has no key for this, hence the flag.
-
-`toml_extra: {dynamics: {shake: ..., tstep: ...}}` overrides the first two. Bonds, angles and
-dihedrals without frozen atoms change none of this.
+```yaml
+conformer_search:
+  searcher: crest
+  constraints: {freeze: [{element: Ni, neighbors: 1}]}
+  params:
+    shake: 0          # SHAKE off
+    tstep: 2.0        # fs; without SHAKE, CREST's 5 fs step for GFN2 blows the MD up
+    crossing: false   # crest -nocross: the ensemble comes from the MTDs alone
+```
 
 | | `freeze` | `freeze` + `force_constant` | `bonds` / `angles` / `dihedrals` | + `force_constant` |
 |---|---|---|---|---|
-| `crest` | `[calculation] freeze` (exact) | `[[calculation.constraints]]` bonds within the group | `[[calculation.constraints]]`, CREST's default strength | that strength |
+| `crest` | `[calculation] freeze` (exact with `shake: 0`, `crossing: false`, below) | `[[calculation.constraints]]` bonds within the group | `[[calculation.constraints]]`, CREST's default strength | that strength |
 | `goat` | `%geom Constraints { C i C }` | refused | `{ B i j d C }`, `{ A ... }`, `{ D ... }` (exact) | refused |
 
 ```yaml
@@ -159,7 +162,10 @@ CREST 3.x driven by a TOML input (`crest --input input.toml`); starts from the p
 | `workhorse_extra` | `{}` | extra keys of the workhorse level (e.g. `{alpb: toluene}`) |
 | `refine` | `null` | CREST's inline refinement of the final ensemble: `null`, `sp`, `opt` (`add`, `freq`) |
 | `refine_level` | UMA through CREST's `mlip` calculator (`mlip_backend: uma`, `mlip_uma_task: omol`, `mlip_uma_model: uma-s-1p2`) | level used by `refine`; needs `fmlip-relay-server` on PATH |
-| `toml_extra` | `{}` | deep-merged into the TOML document, e.g. `{cregen: {ewin: 6.0}}` for CREST's own energy window (kcal/mol) |
+| `shake` | `null` | `[dynamics] shake`: `0` off, `1` bonds to H, `2` all bonds; `null` leaves CREST's choice (all bonds except to a metal) |
+| `tstep` | `null` | `[dynamics] tstep`, MD time step in fs; `null` leaves CREST's choice (5 fs for GFN2, which needs SHAKE) |
+| `crossing` | `true` | genetic crossing (GC) after the MTDs; `false` runs `crest -nocross` |
+| `toml_extra` | `{}` | deep-merged into the TOML document, e.g. `{cregen: {ewin: 6.0}}` for CREST's own energy window (kcal/mol); applied last, so it wins over `shake` and `tstep` |
 | `seed_offset` | `0` | see above |
 | `threads` | job's CPUs | resource: CREST threads (`SLURM_CPUS_PER_TASK`) |
 | `refine_threads` | `null` | resource: threads per refinement-level instance |

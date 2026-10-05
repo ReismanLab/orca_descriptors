@@ -130,17 +130,27 @@ def test_crest_toml(nih2):
     assert "constraints" not in Crest().build_input(structure)["calculation"]
 
 
-def test_crest_turns_shake_off_when_atoms_are_frozen(nih2):
-    """SHAKE moves frozen atoms bonded to free ones: off with freeze, untouched otherwise."""
+def test_crest_md_settings_are_crests_unless_given(nih2):
+    """shake, tstep and crossing: CREST's own behaviour by default, frozen atoms or not; out of the
+    hash until set, so existing ensembles keep theirs."""
     structure, coords, *_ = nih2
-    def dynamics(**params):
+    def doc(**params):
         crest = Crest(**params)
-        return crest.build_input(structure, crest.resolve_constraints(structure, coords)).get("dynamics")
-    assert dynamics(constraints={"freeze": ["[Ni]"]}) == {"shake": 0, "tstep": 2.0}
-    assert dynamics(constraints={"freeze": ["[Ni]"]}, toml_extra={"dynamics": {"tstep": 1.0}}) == {"shake": 0, "tstep": 1.0}
-    assert dynamics(constraints={"bonds": ["[Ni]~[#7]"]}) is None
-    assert dynamics(constraints={"freeze": [{"element": "Ni", "force_constant": 0.5}], "bonds": ["[Ni]~[#7]"]}) is None
-    assert dynamics() is None
+        return crest.build_input(structure, crest.resolve_constraints(structure, coords))
+    assert "dynamics" not in doc() and "dynamics" not in doc(constraints={"freeze": ["[Ni]"]})
+    assert Crest().command("crest") == Crest(constraints={"freeze": ["[Ni]"]}).command("crest") == ["crest", "--input", "input.toml"]
+    assert not {"shake", "tstep", "crossing"} & set(Crest().compared_params())
+    frozen = dict(constraints={"freeze": ["[Ni]"]}, shake=0, tstep=2, crossing=False)
+    assert doc(**frozen)["dynamics"] == {"shake": 0, "tstep": 2.0}
+    assert Crest(**frozen).command("crest")[-1] == "-nocross"
+    assert {k: Crest(**frozen).compared_params()[k] for k in ("shake", "tstep", "crossing")} == {"shake": 0, "tstep": 2.0, "crossing": False}
+    assert doc(shake=0, toml_extra={"dynamics": {"shake": 1}})["dynamics"] == {"shake": 1}   # toml_extra last
+
+
+@pytest.mark.parametrize("params", [{"shake": 3}, {"shake": True}, {"tstep": 0}, {"tstep": "2"}, {"crossing": None}, {"crossing": "no"}])
+def test_crest_md_settings_are_checked(params):
+    with pytest.raises((ValueError, TypeError)):
+        Crest(**params)
 
 
 def test_goat_geom_block_and_exact_only(nih2):
@@ -171,14 +181,15 @@ def test_crest_run_writes_constraints_and_records_them(nih2, tmp_path, monkeypat
         """))
     exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{bindir}:{__import__('os').environ['PATH']}")
-    crest = Crest(start_preopt="none", start_ff="none", threads=1, constraints={"freeze": [{"element": "Ni", "neighbors": 1}]})
+    crest = Crest(start_preopt="none", start_ff="none", threads=1, constraints={"freeze": [{"element": "Ni", "neighbors": 1}]},
+                  crossing=False)
     workdir = tmp_path / "run"
     workdir.mkdir()
     result = crest.run(structure, 1, workdir)
     shell = sorted([ni, *n, *h])
     assert result.details["constraints"]["freeze"] == shell
     assert f'freeze = "{",".join(str(i + 1) for i in shell)}"' in (workdir / "input.toml").read_text()
-    assert (workdir / "argv.txt").read_text() == "--input input.toml -nocross"   # GC moves frozen atoms
+    assert (workdir / "argv.txt").read_text() == "--input input.toml -nocross"
     json.dumps(result.details)   # recorded in run_<i>.json as it is
     free = tmp_path / "free"
     free.mkdir()

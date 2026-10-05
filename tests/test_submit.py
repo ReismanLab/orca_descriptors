@@ -21,6 +21,7 @@ from bceg.inputs import InputMolecule
 from bceg.layout import method_dir
 from bceg.provenance import make_params, read_record, write_record
 from bceg.structure import Structure
+from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils.submit import records, slurm, template
@@ -831,3 +832,15 @@ def test_conformer_search_constraints(tree):
     ]:
         with pytest.raises(ValueError, match=message):
             Config.load(_rewrite(tree, pre_refinement=DELETE, conformer_search=block))
+
+
+def test_crest_md_settings_for_exact_freezing(tree):
+    """The block of docs/stages/3_conformer_search.md: constraints beside params, the MD settings in them."""
+    search = {"name": "crest_fixNi", "searcher": "crest", "constraints": {"freeze": [{"element": "Ni", "neighbors": 1}]}}
+    default = Config.load(_rewrite(tree, pre_refinement={"method": "uma"}, conformer_search=search))
+    exact = Config.load(_rewrite(tree, pre_refinement={"method": "uma"}, conformer_search={
+        **search, "params": {"shake": 0, "tstep": 2.0, "crossing": False}}))
+    crest = exact.bceg_config().methods["crest_fixNi"].searcher
+    assert crest.command("crest")[-1] == "-nocross" and crest.build_input(Structure("CCO"))["dynamics"] == {"shake": 0, "tstep": 2.0}
+    assert "-nocross" not in default.bceg_config().methods["crest_fixNi"].searcher.command("crest")
+    assert exact.params()["sha256"] != default.params()["sha256"]
