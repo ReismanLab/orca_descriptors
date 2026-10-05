@@ -335,7 +335,8 @@ def test_uma_runs_through_the_shared_ase_loop(fake_aimnet, tmp_path):
     uma = REFINERS["uma"]()
     uma._calc = sys.modules["aimnet.calculators"].AIMNet2ASE(None)   # any ASE-like calculator will do
     structure = Structure("CCO")
-    result = uma.run(structure, _conformers(structure, 1), tmp_path)   # one conformer: in-process
+    result = uma.run(structure, _conformers(structure, 1), tmp_path / "preopt_0")   # created by the loop
+    assert (tmp_path / "preopt_0" / "opt_0.log").is_file()
     assert result.conformers[0].energy == pytest.approx(-100.0 + 0.1) and result.conformers[0].info["converged"]
     assert set(result.versions) == {"fairchem-core", "ase"}
 

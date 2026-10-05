@@ -64,7 +64,7 @@ The config has one block per stage. Every block is documented with all its optio
 |---|---|---|
 | 1 | `transformation` | the structure computed from each SMILES: as is, or L-NiH2 via `ni_x2.py`, or your script; charge and multiplicity ([docs/stages/1_transformation.md](docs/stages/1_transformation.md)) |
 | 2 | `pre_refinement` | the pre-optimisation of the start geometry: `xtb`, `uma` or `none` ([docs/stages/2_pre_refinement.md](docs/stages/2_pre_refinement.md)) |
-| 3 | `conformer_search` | the searcher (`crest`, `goat`, `molassembler`, `rdkit_etkdg`, `loqi`), its parameters, replicates ([docs/stages/3_conformer_search.md](docs/stages/3_conformer_search.md)) |
+| 3 | `conformer_search` | the searcher (`crest`, `goat`, `molassembler`, `rdkit_etkdg`, `loqi`), its parameters, replicates, atoms frozen during the search (e.g. Ni and its first shell, by SMARTS) ([docs/stages/3_conformer_search.md](docs/stages/3_conformer_search.md)) |
 | 4 | `post_optimization` | the refiner every conformer goes through: `uma`, `gxtb`, `aimnet2` or none ([docs/stages/4_post_optimization.md](docs/stages/4_post_optimization.md)) |
 | 5 | `pruning` | which conformers go to ORCA: all, or an energy window ([docs/stages/5_pruning.md](docs/stages/5_pruning.md)) |
 | 6 | `dft` | the compound steps and their level of theory; `orca: off` stops after the ensembles ([docs/stages/6_dft.md](docs/stages/6_dft.md)) |

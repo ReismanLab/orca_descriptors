@@ -71,6 +71,10 @@ pre_refinement:
 The model is loaded once per bceg job; a chained job (search then post-optimisation) loads it a
 second time for stage 4.
 
+With `conformer_search.constraints` the UMA geometry is also what the search keeps fixed, e.g. the
+metal and its first shell, which xtb describes poorly
+([3_conformer_search.md](3_conformer_search.md#constraints)).
+
 ### `none`
 
 ```yaml

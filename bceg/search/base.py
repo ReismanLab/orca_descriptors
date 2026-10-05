@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from bceg import constraints as cons
 from bceg.geometry import make_start_geometry
 from bceg.params import Configurable
 from bceg.structure import Structure
@@ -27,6 +28,9 @@ START_DEFAULTS = {
 }
 START_RESOURCE_KEYS = {"xtb_executable"}
 
+# Searchers that honour geometric constraints during the search (CREST, GOAT); see bceg.constraints.
+CONSTRAINT_DEFAULTS = {"constraints": {}}  # freeze / bonds / angles / dihedrals selected by SMARTS, force_constant
+
 
 @dataclass
 class SearchResult:
@@ -40,6 +44,33 @@ class Searcher(Configurable):
     #: Optional callback ``f(info)`` run once the start geometry is accepted (bceg.tasks uses it to move
     #: the run record from phase "pre_refinement" to "search").
     on_start_geometry = None
+    #: True when the program's constraints are exact and take no force constant (GOAT).
+    exact_constraints_only = False
+
+    def __init__(self, **params: Any) -> None:
+        super().__init__(**params)
+        if "constraints" in self.params:
+            spec = cons.validate(self.params["constraints"], f"{self.name}.constraints")
+            if self.exact_constraints_only and cons.has_force_constant(spec):
+                raise ValueError(f"{self.name}.constraints: the constraints of {self.name} are exact, "
+                                 f"remove `force_constant`")
+
+    @classmethod
+    def supports_constraints(cls) -> bool:
+        return "constraints" in cls.defaults
+
+    def compared_params(self) -> dict[str, Any]:
+        """No ``constraints`` key when there are none, so the hash of an unconstrained search is unchanged."""
+        out = super().compared_params()
+        if "constraints" in out and not out["constraints"]:
+            del out["constraints"]
+        return out
+
+    def resolve_constraints(self, structure: Structure, coords: np.ndarray) -> dict | None:
+        """The constraints for this molecule and start geometry (0-based indices), None without any."""
+        if not self.params.get("constraints"):
+            return None
+        return cons.resolve(self.params["constraints"], structure.mol, coords)
 
     def has_start_step(self) -> bool:
         """True when this searcher starts from one pre-optimised geometry (CREST, GOAT, molassembler)."""

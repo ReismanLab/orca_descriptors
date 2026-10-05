@@ -21,6 +21,7 @@ from bceg.inputs import InputMolecule
 from bceg.layout import method_dir
 from bceg.provenance import make_params, read_record, write_record
 from bceg.structure import Structure
+from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils.submit import records, slurm, template
@@ -806,3 +807,40 @@ def test_library_config_with_the_gxtb_and_aimnet2_refiners(tree):
     assert "device" not in cfg.compared()["post_optimization"]["params"]
     with pytest.raises(ValueError, match="post_optimization.refiner"):
         Config.load(_rewrite(tree, post_optimization={"refiner": "g-xtb"}))
+
+
+def test_conformer_search_constraints(tree):
+    """`conformer_search.constraints` reaches the searcher's params and the library's hash; only CREST and
+    GOAT take it, and a library without constraints hashes as before."""
+    search = {"name": "crest_fixNi", "searcher": "crest"}
+    plain = Config.load(_rewrite(tree, pre_refinement=DELETE, conformer_search=search))
+    assert "constraints" not in plain.bceg_raw()["methods"]["crest_fixNi"]["params"]
+    assert "constraints" not in plain.compared()["conformer_search"]["params"]
+
+    freeze = {"freeze": [{"element": "Ni", "neighbors": 1}]}
+    cfg = Config.load(_rewrite(tree, pre_refinement={"method": "uma"}, conformer_search={**search, "constraints": freeze}))
+    assert cfg.bceg_raw()["methods"]["crest_fixNi"]["params"]["constraints"] == freeze
+    assert cfg.compared()["conformer_search"]["params"]["constraints"] == freeze
+    assert cfg.params()["sha256"] != plain.params()["sha256"]
+    assert cfg.bceg_config().methods["crest_fixNi"].searcher.params["constraints"] == freeze
+
+    for block, message in [
+        ({"name": "e", "searcher": "rdkit_etkdg", "constraints": freeze}, "takes no constraints"),
+        ({**search, "params": {"constraints": freeze}}, "not in its params"),
+        ({**search, "constraints": {"freeze": [{"smarts": "[Ni"}]}}, "not a valid SMARTS"),
+        ({"name": "g", "searcher": "goat", "constraints": {**freeze, "force_constant": 0.5}}, "exact"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            Config.load(_rewrite(tree, pre_refinement=DELETE, conformer_search=block))
+
+
+def test_crest_md_settings_for_exact_freezing(tree):
+    """The block of docs/stages/3_conformer_search.md: constraints beside params, the MD settings in them."""
+    search = {"name": "crest_fixNi", "searcher": "crest", "constraints": {"freeze": [{"element": "Ni", "neighbors": 1}]}}
+    default = Config.load(_rewrite(tree, pre_refinement={"method": "uma"}, conformer_search=search))
+    exact = Config.load(_rewrite(tree, pre_refinement={"method": "uma"}, conformer_search={
+        **search, "params": {"shake": 0, "tstep": 2.0, "crossing": False}}))
+    crest = exact.bceg_config().methods["crest_fixNi"].searcher
+    assert crest.command("crest")[-1] == "-nocross" and crest.build_input(Structure("CCO"))["dynamics"] == {"shake": 0, "tstep": 2.0}
+    assert "-nocross" not in default.bceg_config().methods["crest_fixNi"].searcher.command("crest")
+    assert exact.params()["sha256"] != default.params()["sha256"]

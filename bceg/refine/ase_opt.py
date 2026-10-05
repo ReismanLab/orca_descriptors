@@ -144,6 +144,7 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
     settings = {"optimizer": p["optimizer"], "fmax": p["fmax"], "max_steps": p["max_steps"]}
     workers = resolve_workers(p["workers"], p["device"], len(conformers))
     threads = threads_per_worker(p["threads"], workers)
+    workdir.mkdir(parents=True, exist_ok=True)   # e.g. preopt_<attempt> of start_preopt: uma
     if workers == 1:
         calc = refiner.make_calculator(structure)
         raw = [_optimize(calc, structure, i, c.coords, workdir, **settings) for i, c in enumerate(conformers)]

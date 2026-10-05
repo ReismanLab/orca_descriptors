@@ -38,6 +38,12 @@ conformer_search:
   params:
     workhorse: gfn2                              # threads: default = the job's cpus_per_task
     toml_extra: {cregen: {ewin: 6.0}}            # CREST's own energy window, kcal/mol
+    # shake: 0                                   # crest with freeze: these three keep frozen atoms exact
+    # tstep: 2.0                                 #   (unset: CREST's defaults, under which they drift)
+    # crossing: false
+  # constraints:                                 # crest | goat: hold atoms during the search (pre_refinement: uma first)
+  #   freeze: [{element: Ni, neighbors: 1}]      # Ni and every atom bound to it; SMARTS work too: {smarts: "[Ni]~[#7]"}
+  #   force_constant: 0.5                        # optional, crest only: harmonic (Eh/Bohr^2) instead of exact
   # slurm: {ntasks: 4, cpus_per_task: 1}         # overrides of slurm.ensembles.cpu for this step (GOAT wants MPI ranks)
 
 # ---- 4. post-optimisation: every conformer -> raw_1_<lot>.xyz (docs/stages/4_post_optimization.md)
