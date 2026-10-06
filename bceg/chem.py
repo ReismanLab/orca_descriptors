@@ -46,6 +46,13 @@ def embed(mol: Chem.Mol, seed: int, ff: str = "auto", max_iters: int = 2000) -> 
 
     ``ff``: "auto" (MMFF94s if parametrised, else none), "MMFF94", "MMFF94s", "UFF", or "none".
     UFF is not used automatically: with dative Ni bonds it can collapse ligands (e.g. H-H in NiH2).
+
+    RDKit's chirality enforcement rejects every embedding of some chelates with two stereocentres
+    next to the donor atoms (C2-symmetric bis(oxazoline)/bis(imidazoline) on Ni), although the
+    unenforced embedding has the right configuration. So when the enforced embeddings fail, the
+    embedding is repeated without enforcement and its stereocentres are checked against the
+    template from the 3D coordinates; a mismatch is an embedding failure (the caller moves to the
+    next seed).
     """
     mol = Chem.Mol(mol)
     params = AllChem.ETKDGv3()
@@ -58,6 +65,11 @@ def embed(mol: Chem.Mol, seed: int, ff: str = "auto", max_iters: int = 2000) -> 
         params.useRandomCoords = True
         cid = AllChem.EmbedMolecule(mol, params)
     if cid < 0:
+        params.enforceChirality = False
+        cid = AllChem.EmbedMolecule(mol, params)
+        if cid >= 0 and not stereo_matches(mol):
+            raise RuntimeError("ETKDG embedding failed (unenforced embedding has the wrong configuration)")
+    if cid < 0:
         raise RuntimeError("ETKDG embedding failed")
     ff = ff_for(mol) if ff == "auto" else ff
     if ff.startswith("MMFF"):
@@ -65,6 +77,18 @@ def embed(mol: Chem.Mol, seed: int, ff: str = "auto", max_iters: int = 2000) -> 
     elif ff == "UFF":
         AllChem.UFFOptimizeMolecule(mol, maxIters=max_iters)
     return np.array(mol.GetConformer().GetPositions())
+
+
+def stereo_centers(mol: Chem.Mol) -> list[tuple[int, str]]:
+    """(atom index, CIP label or '?') of every tetrahedral stereocentre, from the graph's tags."""
+    return Chem.FindMolChiralCenters(mol, includeUnassigned=True, useLegacyImplementation=False)
+
+
+def stereo_matches(mol: Chem.Mol) -> bool:
+    """True if the stereocentres read from ``mol``'s conformer agree with its tags (SMILES)."""
+    from_3d = Chem.Mol(mol)
+    Chem.AssignStereochemistryFrom3D(from_3d, confId=mol.GetConformer().GetId(), replaceExistingTags=True)
+    return stereo_centers(from_3d) == stereo_centers(mol)
 
 
 def ff_for(mol: Chem.Mol) -> str:

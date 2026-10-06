@@ -171,6 +171,7 @@ CREST 3.x driven by a TOML input (`crest --input input.toml`); starts from the p
 | `refine_threads` | `null` | resource: threads per refinement-level instance |
 | `mlip_device` | `cpu` | resource: device of the `mlip` levels; `cuda` sends the job to `slurm.ensembles.gpu` when an `mlip` level is used |
 | `executable` | `crest` | resource: which CREST binary |
+| `md_retries` | `2` | resource: when CREST's trial MD fails (`Automatic MD restart failed`, e.g. a hydride leaving the Ni at GFN2), rerun from a new start geometry up to this many times; the failed logs are kept as `raw_<i>_crest_md_failed_<k>.out`, the attempts in `details.md_retries` |
 
 Output: `crest_conformers.xyz` (the full ensemble, not `crest_clustered.xyz`), so `n_conf` can be
 large; stage 5 and CREST's `ewin` are how the count going to ORCA is kept in hand. CREST prints an

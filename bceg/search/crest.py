@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from bceg.external import find_executable, program_version, resolve_threads, run
+from bceg.geometry import SEED_STRIDE
 from bceg.search.base import CONSTRAINT_DEFAULTS, START_DEFAULTS, START_RESOURCE_KEYS, SearchResult, Searcher
 from bceg.structure import Structure
 from bceg.xyz import BOHR_TO_ANGSTROM, Conformer, read_xyz, write_xyz
@@ -27,6 +28,11 @@ MD_DEFAULTS = {
 }
 
 UMA_LEVEL = {"method": "mlip", "mlip_backend": "uma", "mlip_uma_task": "omol", "mlip_uma_model": "uma-s-1p2"}
+
+# CREST's message when its trial MD blows up (e.g. a hydride leaving a Ni at GFN2, 5 fs, no SHAKE on
+# metal bonds). CREST 3.0.2's own six restarts stop at once after the first, so the run dies; the
+# outcome depends on the MD velocities, and a run from a new start geometry usually passes.
+TRIAL_MD_FAILED = "Automatic MD restart failed"
 
 
 class Crest(Searcher):
@@ -46,8 +52,9 @@ class Crest(Searcher):
         "refine_threads": None,  # threads per refinement-level instance
         "mlip_device": "cpu",  # device of the mlip levels; "cuda" sends the job to the gpu profile when an mlip level is used
         "executable": "crest",
+        "md_retries": 2,  # resource: reruns from a new start geometry when CREST's trial MD fails (not hashed)
     }
-    resource_keys = {"threads", "refine_threads", "mlip_device", "executable"} | START_RESOURCE_KEYS
+    resource_keys = {"threads", "refine_threads", "mlip_device", "executable", "md_retries"} | START_RESOURCE_KEYS
 
     def __init__(self, **params: Any) -> None:
         super().__init__(**params)
@@ -103,23 +110,42 @@ class Crest(Searcher):
     def run(self, structure: Structure, replicate: int, workdir: Path) -> SearchResult:
         exe = find_executable(self.params["executable"])
         seed = self.seed(replicate)
-        coords, start = self.start_geometry(structure, seed, workdir)
-        constraints = self.resolve_constraints(structure, coords)
-        write_xyz(workdir / "input.xyz", structure.elements, [Conformer(coords)])
-        (workdir / "input.toml").write_text(to_toml(self.build_input(structure, constraints)))
+        retries: list[dict[str, Any]] = []
+        for attempt in range(self.params["md_retries"] + 1):
+            # a retry embeds a new start geometry: its seed lies beyond the re-embedding seeds of the
+            # attempts before it (bceg.geometry: seed + k * SEED_STRIDE, k < start_max_attempts)
+            attempt_seed = seed + attempt * SEED_STRIDE * self.params["start_max_attempts"]
+            wd = workdir if attempt == 0 else workdir / f"md_retry_{attempt}"
+            wd.mkdir(exist_ok=True)
+            coords, start = self.start_geometry(structure, attempt_seed, wd)
+            constraints = self.resolve_constraints(structure, coords)
+            write_xyz(wd / "input.xyz", structure.elements, [Conformer(coords)])
+            (wd / "input.toml").write_text(to_toml(self.build_input(structure, constraints)))
 
-        proc = run(self.command(exe), workdir, threads=resolve_threads(self.params["threads"]), log_name="crest.out")
-        out = workdir / "crest_conformers.xyz"
-        logs = [workdir / "input.toml", workdir / "start_geometry.xyz", workdir / "crest.out"]
-        if proc.returncode != 0 or not out.exists():
-            raise RuntimeError(f"CREST failed (exit {proc.returncode}):\n{proc.stdout[-3000:]}")
+            proc = run(self.command(exe), wd, threads=resolve_threads(self.params["threads"]), log_name="crest.out")
+            out = wd / "crest_conformers.xyz"
+            logs = [wd / "input.toml", wd / "start_geometry.xyz", wd / "crest.out"]
+            if proc.returncode == 0 and out.exists():
+                break
+            if TRIAL_MD_FAILED not in proc.stdout or attempt == self.params["md_retries"]:
+                raise RuntimeError(f"CREST failed (exit {proc.returncode}):\n{proc.stdout[-3000:]}")
+            failed_log = wd / f"crest_md_failed_{attempt + 1}.out"
+            (wd / "crest.out").rename(failed_log)
+            retries.append({"seed": attempt_seed, "start_geometry": start, "error": "trial MD failed",
+                            "log": failed_log.name})
         elements, confs = read_xyz(out)
         if elements != structure.elements:
             raise RuntimeError("CREST output atom order differs from the input")
+        details = {"seed": attempt_seed, "start_geometry": start}
+        if retries:
+            details["md_retries"] = retries
+            logs += [workdir / r["log"] if i == 0 else workdir / f"md_retry_{i}" / r["log"] for i, r in enumerate(retries)]
+        if constraints:
+            details["constraints"] = constraints
         return SearchResult(
             confs,
             versions={"crest": program_version([exe, "--version"]) or "unknown"},
-            details={"seed": seed, "start_geometry": start} | ({"constraints": constraints} if constraints else {}),
+            details=details,
             log_files=logs,
         )
 
