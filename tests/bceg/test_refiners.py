@@ -6,10 +6,12 @@ A fake ``xtb`` on PATH (modelled on ``fake_xtb`` in conftest) stands in for the 
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import stat
 import sys
 import textwrap
+import time
 import types
 from pathlib import Path
 
@@ -282,6 +284,7 @@ def test_workers_default_to_the_allocation_on_cpu_and_to_one_on_a_gpu(monkeypatc
     assert ase_opt.resolve_workers(None, "cpu", 40) == 8
 
 
+
 def test_pool_workers_load_the_model_with_their_share_of_the_threads(fake_aimnet, tmp_path, monkeypatch):
     """Each worker rebuilds the refiner with threads = its share and pins the numerical libraries to it;
     the parent's environment is left as it was."""
@@ -310,11 +313,15 @@ def test_a_worker_exception_fails_the_step_and_a_dead_worker_is_explained(fake_a
     with pytest.raises(ValueError, match="not implemented"):
         REFINERS["aimnet2"](workers=2).run(structure, _conformers(structure), tmp_path)
 
-    def die(atoms):
-        os._exit(137)   # what the OOM killer leaves behind
+    def die(atoms):     # one worker killed (what the OOM killer leaves behind), the others still busy
+        if atoms.positions[0, 0] < 0.5:   # conformer 0
+            os._exit(137)
+        time.sleep(0.3)
+        return 0.0
     monkeypatch.setattr(sys.modules["aimnet.calculators"].AIMNet2ASE, "energy", staticmethod(die))
-    with pytest.raises(RuntimeError, match="worker process died.*2 workers x 1 threads.*`mem`"):
-        REFINERS["aimnet2"](workers=2, threads=1).run(structure, _conformers(structure), tmp_path)
+    with pytest.raises(RuntimeError, match="worker process died.*4 workers x 1 threads.*`mem`"):
+        REFINERS["aimnet2"](workers=4, threads=1).run(structure, _conformers(structure, 12), tmp_path)
+    assert multiprocessing.active_children() == []   # the survivors are killed: none left to hang the job at exit
 
 
 def test_aimnet2_download_failure_points_to_the_cache(fake_aimnet):

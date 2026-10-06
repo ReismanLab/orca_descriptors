@@ -66,6 +66,9 @@ class UMA(Refiner):
         "threads": None,  # None/0: torch threads per worker, the allocation's CPUs shared between the workers
     }
     resource_keys = {"device", "workers", "threads"}
+    # uma-s-1p2 on CPU, measured on the cluster: ~2.0 GB per process up to ~100 atoms, then roughly
+    # +15 kB x atoms^2 (+0.7 GB at 200 atoms, +1.6 GB at 300); 3.6 GB holds molecules up to ~300 atoms.
+    worker_mem_gb = 3.6
 
     def __init__(self, **params) -> None:
         super().__init__(**params)

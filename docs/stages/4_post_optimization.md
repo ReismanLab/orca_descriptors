@@ -67,9 +67,14 @@ one thread each (with `ntasks: 4, cpus_per_task: 1`, the GOAT allocation, four w
 restores the previous behaviour, one in-process optimisation at a time on all the threads. On a GPU
 the default is one worker: processes would only queue on the device.
 
-Every worker holds its own copy of the model, roughly 1 to 2 GB each with torch: size the step's `mem`
-for `workers` copies (the chained job's `mem` is shared with the search). A worker killed by the memory
-limit fails the step with a message naming the pool; lower `workers` or raise `mem`. Each worker writes
+Every worker holds its own copy of the model, and the job's own process may hold one more (a `uma`
+pre-refinement). uma-s-1p2 on CPU takes ~2.0 GB per process up to ~100 atoms, then roughly
++15 kB x atoms² (+0.7 GB at 200 atoms, +1.6 GB at 300); loading the checkpoint briefly takes ~5 GB, so
+the workers load it one at a time. For `uma` on `cpu`, a job profile without `mem` gets it from its
+CPUs: `(workers + 1) x 3.6 GB + 2 GB`, enough up to ~300 atoms, `workers` being one per CPU unless set,
+i.e. `35G` for `cpus_per_task: 8` (the chained job's `mem` is shared with the search, which needs less). An explicit `mem` is kept; `submit` warns when it is below
+that. A worker killed by the memory limit fails the step with a message naming the pool, the other
+workers are killed and the job ends; raise `mem` or lower `workers`. Each worker writes
 its own `opt_<i>.log`; the conformers keep their input order (`source_index`) whatever finished first.
 `run_1_<lot>.json` records `details.workers` and `details.threads`, so comparing `wall_time_s` of a
 run with `workers: 1` against the default on one molecule is the benchmark:

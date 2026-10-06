@@ -17,12 +17,18 @@ Config (``slurm:`` block)::
 
 Methods and ``post_optimization`` may override the profile with their own ``slurm:`` mapping
 (in chained mode both apply, the method's taking precedence).
+
+A job that runs a CPU pool of model copies (``uma``) gets ``mem`` from its CPUs when the profile sets
+none: ``(workers + 1) x worker_mem_gb + 2 GB``, ``workers`` being one per CPU unless set. An explicit
+``mem`` below that is kept, with a warning.
 """
 
 from __future__ import annotations
 
 import math
+import re
 import shlex
+import warnings
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +49,30 @@ def _directives(profile: dict) -> list[str]:
         elif k not in _SBATCH_KEYS:
             raise ValueError(f"Unknown slurm key {k!r}; allowed: {sorted(_SBATCH_KEYS | {'extra'})}")
     return lines
+
+
+def _mem_gb(value) -> float:
+    """A SLURM ``--mem`` value in GB: ``16G``, ``16000M``, ``16000`` (MB, SLURM's default unit)."""
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([KMGT]?)B?\s*", str(value), re.IGNORECASE)
+    if not m:
+        raise ValueError(f"slurm mem {value!r}: expected a number with an optional K/M/G/T unit")
+    return float(m[1]) * {"K": 2**-20, "": 2**-10, "M": 2**-10, "G": 1, "T": 1024}[m[2].upper()]
+
+
+def with_pool_mem(profile: dict, refiner, name: str) -> dict:
+    """``profile`` with ``mem`` sized for the refiner's CPU pool (see the module docstring)."""
+    cpus = int(profile.get("ntasks") or 1) * int(profile.get("cpus_per_task") or 1)
+    need = refiner.pool_mem_gb(cpus) if refiner is not None else None
+    if need is None:
+        return profile
+    need = math.ceil(round(need, 3))   # whole GB, no float noise (5 x 2.2 + 2 is 13, not 14)
+    if profile.get("mem") is None:
+        return {**profile, "mem": f"{need}G"}
+    if _mem_gb(profile["mem"]) < need:
+        warnings.warn(f"{name}: mem {profile['mem']} is below the ~{need}G the {refiner.name} pool of "
+                      f"{cpus} CPUs wants (one model copy per worker plus the job's own); a worker may be killed. "
+                      f"Drop `mem` to have it sized from the CPUs, or lower `workers`.", stacklevel=2)
+    return profile
 
 
 def new_jobdir(cfg: Config) -> Path:
@@ -78,6 +108,8 @@ def write_jobs(cfg: Config, tasks: list[Task], jobdir: Path | None = None) -> Pa
             overrides = cfg.methods[label].slurm
         resource = "gpu" if any(t.resource == "gpu" for t in group) else "cpu"
         profile = {**s.get(resource, {}), **overrides}
+        if kind in ("refine", "chain"):
+            profile = with_pool_mem(profile, cfg.refiner, name)
         array = f"0-{n_jobs - 1}" + (f"%{throttle}" if throttle else "")
         script = [
             "#!/bin/bash",

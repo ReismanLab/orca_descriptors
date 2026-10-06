@@ -292,3 +292,22 @@ def test_search_usage_is_split_by_phase(project, fake_xtb, monkeypatch):
     run_local(Config.load(write("{n_confs: 2}", transformations="{none: null}")))
     rec = json.loads((md / "run_1.json").read_text())
     assert list(rec["phases"]) == ["search"] and rec["phases"]["search"]["cpu_hours"] == rec["cpu_hours"]
+
+
+def test_pool_mem_is_sized_from_the_cpus():
+    import pytest
+
+    from bceg.refine import REFINERS
+    from bceg.slurm import _mem_gb, with_pool_mem
+
+    uma = REFINERS["uma"]()
+    assert with_pool_mem({"cpus_per_task": 8}, uma, "chain")["mem"] == "35G"       # (8 + 1) x 3.6 + 2
+    assert with_pool_mem({"ntasks": 4, "cpus_per_task": 1}, uma, "chain")["mem"] == "20G"
+    assert with_pool_mem({"cpus_per_task": 8}, REFINERS["uma"](workers=2), "c")["mem"] == "13G"
+    assert "mem" not in with_pool_mem({"cpus_per_task": 8}, REFINERS["uma"](device="cuda"), "c")
+    assert "mem" not in with_pool_mem({"cpus_per_task": 8}, REFINERS["aimnet2"](), "c")   # no estimate
+    assert "mem" not in with_pool_mem({"cpus_per_task": 8}, None, "c")
+    assert with_pool_mem({"cpus_per_task": 8, "mem": "48G"}, uma, "c")["mem"] == "48G"
+    with pytest.warns(UserWarning, match="mem 16G is below the ~35G"):
+        assert with_pool_mem({"cpus_per_task": 8, "mem": "16G"}, uma, "c")["mem"] == "16G"   # kept, but said
+    assert _mem_gb("16G") == 16 and _mem_gb("16384") == 16 and _mem_gb("16384M") == 16 and _mem_gb("1T") == 1024

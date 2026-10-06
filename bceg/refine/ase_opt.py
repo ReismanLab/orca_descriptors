@@ -83,13 +83,18 @@ def _optimize(calc, structure: Structure, i: int, coords: np.ndarray, workdir: P
 _WORKER: dict[str, Any] = {}  # calculator and settings of this worker process, filled by _init_worker
 
 
-def _init_worker(refiner_cls, params: dict, structure: Structure, workdir: Path, settings: dict) -> None:
+def _init_worker(refiner_cls, params: dict, structure: Structure, workdir: Path, settings: dict, load_lock) -> None:
     """Pin the numerical libraries to the worker's share of the CPUs, then build the refiner and its
-    calculator (the model is loaded once per worker; ``params['threads']`` is already the share)."""
+    calculator (the model is loaded once per worker; ``params['threads']`` is already the share).
+
+    The workers load their model one at a time: loading the UMA checkpoint briefly takes ~5 GB in the
+    process (~2 GB once loaded), so eight simultaneous loads would need ~40 GB at the pool's start."""
     for var in _THREAD_VARS:
         os.environ[var] = str(params["threads"])
     refiner = refiner_cls(**params)
-    _WORKER.update(calc=refiner.make_calculator(structure), structure=structure, workdir=workdir, settings=settings)
+    with load_lock:
+        calc = refiner.make_calculator(structure)
+    _WORKER.update(calc=calc, structure=structure, workdir=workdir, settings=settings)
 
 
 def _optimize_in_worker(i: int, coords: np.ndarray) -> dict[str, Any]:
@@ -115,18 +120,38 @@ def _thread_env(threads: int):
 
 def _optimize_in_pool(refiner, structure: Structure, conformers: list[Conformer], workdir: Path,
                       workers: int, threads: int, settings: dict) -> list[dict[str, Any]]:
+    """Futures are submitted one by one and never cancelled: on Python 3.11, ``pool.map`` cancels the
+    pending futures when a worker dies, the pool's manager thread then fails on them
+    (``InvalidStateError``) before terminating the surviving workers, and the job hangs at exit
+    waiting for them. On any failure the workers still alive are killed here, before the shutdown."""
     params = {**refiner.params, "threads": threads}
     context = multiprocessing.get_context(START_METHOD)
+    before = set(multiprocessing.active_children())
+    with _thread_env(threads):
+        pool = ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_init_worker,
+                                   initargs=(type(refiner), params, structure, workdir, settings, context.Lock()))
     try:
-        with _thread_env(threads), ProcessPoolExecutor(
-                max_workers=workers, mp_context=context, initializer=_init_worker,
-                initargs=(type(refiner), params, structure, workdir, settings)) as pool:
-            return list(pool.map(_optimize_in_worker, range(len(conformers)), [c.coords for c in conformers]))
+        futures = [pool.submit(_optimize_in_worker, i, c.coords) for i, c in enumerate(conformers)]
+        out = [f.result() for f in futures]
     except BrokenProcessPool as exc:
+        _kill_workers(before)
         raise RuntimeError(
             f"{refiner.name}: a post-optimisation worker process died ({workers} workers x {threads} threads); "
             f"every worker holds its own copy of the model, so this is usually the job's memory limit. Raise "
             f"the step's `mem` or lower `workers` in post_optimization.params.") from exc
+    except BaseException:
+        _kill_workers(before)
+        raise
+    finally:
+        pool.shutdown(wait=True)
+    return out
+
+
+def _kill_workers(before: set) -> None:
+    """SIGKILL the pool's processes still alive (children started since ``before``) and reap them."""
+    for p in set(multiprocessing.active_children()) - before:
+        p.kill()
+        p.join(timeout=30)
 
 
 # ---------------------------------------------------------------------------------------- the loop
