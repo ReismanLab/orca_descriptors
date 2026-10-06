@@ -14,12 +14,18 @@ come from the config, so one script can serve several transformations::
 
 ``charge`` / ``multiplicity`` given in the config override whatever the script
 returns (and also apply to ``none``). Multiplicity defaults to 1.
+
+The transformation's identity (hashed into every params.json) includes ``script_sha256``: the
+SHA-256 of the script file, or the string ``IDENTITY`` the script declares. A declared ``IDENTITY``
+lets a script grow (new scaffolds) without invalidating the results of the molecules it already
+handled; it must change whenever the product of any input it handled before changes.
 """
 
 from __future__ import annotations
 
 import hashlib
 import importlib.util
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -48,7 +54,19 @@ class Transformation:
 
     @property
     def sha256(self) -> str | None:
-        return None if self.script is None else hashlib.sha256(self.script.read_bytes()).hexdigest()
+        """The script's declared ``IDENTITY`` if it has one, else the SHA-256 of the file."""
+        if self.script is None:
+            return None
+        declared = self.declared_identity()
+        return declared if declared is not None else hashlib.sha256(self.script.read_bytes()).hexdigest()
+
+    def declared_identity(self) -> str | None:
+        """``IDENTITY = "..."`` at the top level of the script, read without importing it."""
+        for line in self.script.read_text().splitlines():
+            m = re.match(r'IDENTITY\s*=\s*["\']([^"\']+)["\']', line)
+            if m:
+                return m.group(1)
+        return None
 
     def identity(self) -> dict:
         return {"name": self.name, "script": None if self.script is None else self.script.name,

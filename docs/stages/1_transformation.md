@@ -26,8 +26,12 @@ removeHs=False)` gives the object back (`sanitize=False` for a metal complex RDK
 | `multiplicity` | `1` | overrides what the script returns; checked against the electron count; used by every later stage (xtb, CREST, GOAT, UMA, ORCA) | yes |
 
 The identity hashed into `params.json` is `{name, script, script_sha256, params, charge, multiplicity}`
-(`bceg/transforms.py`, `Transformation.identity`). Editing a script after results exist changes its
-SHA-256 and the next submit is refused: give the transformation a new `name`.
+(`bceg/transforms.py`, `Transformation.identity`). `script_sha256` is the SHA-256 of the script file,
+unless the script declares `IDENTITY = "<string>"` at its top level, which is used instead. Without a
+declared identity, editing a script after results exist changes its SHA-256 and the next submit is
+refused: give the transformation a new `name`. With one, the script may be extended (new scaffolds,
+`ni_x2.py` does this) and the results of the ligands it handled before stay valid; the author must
+change `IDENTITY` whenever the product of an input handled so far changes.
 
 ## Options
 

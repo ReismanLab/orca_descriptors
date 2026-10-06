@@ -177,10 +177,11 @@ def test_missing_script_names_every_location_tried(tmp_path):
 
 
 def test_moving_the_script_did_not_change_its_identity(tmp_path):
-    """script_sha256 goes into params.json: the move must not invalidate existing results."""
+    """script_sha256 goes into params.json: neither the move nor later scaffold additions may invalidate
+    existing results, so the script declares the identity the libraries were built with."""
     t = Transformation("NiF2", BUILTIN_TRANSFORMS / "ni_x2.py", {"x": "F"})
     assert t.identity()["script"] == "ni_x2.py"
-    assert t.identity()["script_sha256"] == hashlib.sha256((BUILTIN_TRANSFORMS / "ni_x2.py").read_bytes()).hexdigest()
+    assert t.identity()["script_sha256"] == "09430bac6eb225569e2a784a0930dda360ce4f591c8b1b37ef4de11e3a61f3c3"
 
 
 def test_uma_defaults_to_cpu_so_no_gpu_profile_is_needed():

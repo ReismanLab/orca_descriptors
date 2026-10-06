@@ -16,6 +16,9 @@ LIGANDS = {
     "box": "CC1(C)COC(CC2=NC(C)(C)CO2)=N1",
     "biox": "C1COC(C2=NCCO2)=N1",
     "bilm": "C1CNC(C2=NCCN2)=N1",
+    "phen": "c1cnc2c(c1)ccc1cccnc12",
+    "pyim": "CC(C)(C)[C@@H]1CN(c2ccccc2)C(c2ccc(C(F)(F)F)cn2)=N1",
+    "quinim": "CC(C)(C)[C@H]1CN(c2ccccc2)C(c2cccc3cccnc23)=N1",
 }
 
 
@@ -35,6 +38,28 @@ def test_ni_x2_complex(scaffold, smiles, x):
     assert sorted(n.GetSymbol() for n in ni.GetNeighbors()) == sorted(["N", "N", x, x])
     # stereocentres of the ligand survive
     assert len(Chem.FindMolChiralCenters(s.mol)) == len(Chem.FindMolChiralCenters(Chem.MolFromSmiles(smiles)))
+
+
+def test_declared_identity_replaces_the_file_hash():
+    import hashlib
+
+    t = Transformation("NiH2", SCRIPT, {"x": "H"})
+    assert t.declared_identity() == t.sha256 == "09430bac6eb225569e2a784a0930dda360ce4f591c8b1b37ef4de11e3a61f3c3"
+    assert t.sha256 != hashlib.sha256(SCRIPT.read_bytes()).hexdigest()  # the file grew since, the identity did not
+
+
+def test_script_without_declared_identity_is_hashed(tmp_path):
+    import hashlib
+
+    script = tmp_path / "t.py"
+    script.write_text("def transform(smiles):\n    return smiles\n")
+    assert Transformation("t", script).sha256 == hashlib.sha256(script.read_bytes()).hexdigest()
+
+
+def test_phenanthroline_is_phen_not_bipy_and_bipy_still_bipy():
+    t = Transformation("NiH2", SCRIPT, {"x": "H"})
+    assert t.apply("c1cnc2c(c1)ccc1cccnc12").metadata["scaffold"] == "phen"
+    assert t.apply("c1ccc(-c2ccccn2)nc1").metadata["scaffold"] == "bipy"
 
 
 def test_unknown_ligand_is_skipped():
