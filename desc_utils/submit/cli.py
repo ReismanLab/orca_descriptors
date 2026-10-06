@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -33,12 +34,15 @@ def cmd_submit(args) -> int:
     lib.mkdir(parents=True, exist_ok=True)
 
     # 1. the library's compared settings: written once, refused ever after if they differ
+    #    (one exception: more replicates, see grow_replicates)
     try:
         verdict = check_or_write(cfg.library_params_path(), cfg.params(),
                                  rename_hint="Different settings mean a different library_dir.", write=not args.dry_run)
     except ParamsMismatch as exc:
-        print(f"REFUSED\n{exc}", file=sys.stderr)
-        return 2
+        verdict = grow_replicates(cfg.library_params_path(), cfg.params(), write=not args.dry_run)
+        if verdict is None:
+            print(f"REFUSED\n{exc}", file=sys.stderr)
+            return 2
     print(f"library {lib} ({verdict} params.json)")
     print("pipeline: " + pipeline_line(cfg))
 
@@ -59,11 +63,17 @@ def cmd_submit(args) -> int:
         # new bceg jobs; prepare_molecule is idempotent, so an old array still pending does no harm.
         waiting_on_bceg = (state == "in_progress" and not (meta.get("conformers") or {})
                            and mol.inchikey in bceg_pending)
-        if state in SKIP_STATES and not args.force and not waiting_on_bceg:
+        # A molecule prepared with fewer replicates than the library now has: prepare it again, which adds
+        # the new replicates' conformers after the existing conf_N and leaves the completed ones alone.
+        n_prepared = (meta.get("orca_stage") or {}).get("n_replicates")
+        fewer_replicates = bool(meta.get("conformers")) and (n_prepared or 1) < cfg.replicates
+        if state in SKIP_STATES and not args.force and not waiting_on_bceg and not fewer_replicates:
             skipped.append((mol, state, reason))
             continue
         if waiting_on_bceg:
             reason = "prepare re-queued behind the new bceg job(s)"
+        elif fewer_replicates and not args.force:
+            reason = f"prepared with {n_prepared or 1} replicate(s), the library now has {cfg.replicates}"
         selected.append({"inchikey": mol.inchikey, "input_smiles": mol.input_smiles, "name": mol.name,
                          "state": state, "reason": reason, "smiles_line": i})
     for mol, state, reason in skipped:
@@ -128,6 +138,27 @@ def cmd_submit(args) -> int:
                            "submitted_at": records.now()}})
     print(f"prepare array {job_id} ({len(selected)} molecule(s))" + (f" after bceg jobs {', '.join(bceg_ids)}" if bceg_ids else ""))
     return 0
+
+
+def grow_replicates(path: Path, params: dict, write: bool = True) -> str | None:
+    """Accept a library whose only change is a larger ``replicates``; None for any other change.
+
+    Replicates are pooled in order and conf_N numbers the pooled position, so the new replicates' conformers
+    come after the existing conf_N: what was computed stays valid, the new conformers are prepared next to it.
+    params.json is rewritten with the new count; the earlier ones are kept under ``replicates_history``."""
+    old = json.loads(path.read_text())
+    before, after = dict(old.get("compared", {})), dict(params["compared"])
+    n_old, n_new = before.pop("replicates", 1), after.pop("replicates", 1)
+    if before != after or not n_new > n_old:
+        return None
+    print(f"replicates {n_old} -> {n_new}: the library grows, existing conformers are kept")
+    if write:
+        history = old.get("replicates_history", []) + [{"replicates": n_old, "sha256": old.get("sha256"),
+                                                         "until": records.now()}]
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(params | {"replicates_history": history}, indent=2, sort_keys=True))
+        tmp.replace(path)
+    return f"replicates {n_old} -> {n_new}"
 
 
 def pipeline_line(cfg: Config) -> str:

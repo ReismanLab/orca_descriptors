@@ -844,3 +844,30 @@ def test_crest_md_settings_for_exact_freezing(tree):
     assert crest.command("crest")[-1] == "-nocross" and crest.build_input(Structure("CCO"))["dynamics"] == {"shake": 0, "tstep": 2.0}
     assert "-nocross" not in default.bceg_config().methods["crest_fixNi"].searcher.command("crest")
     assert exact.params()["sha256"] != default.params()["sha256"]
+
+
+def test_more_replicates_grow_the_library(tree, fake_sbatch, capsys):
+    """Raising conformer_search.replicates is the one change submit accepts on an existing library: the new
+    replicates' conformers come after the existing conf_N, completed ones are kept. Fewer replicates is refused."""
+    key = tree["keys"]["CCO"]
+    assert main(["submit", str(tree["cfg"])]) == 0
+    assert prepare_molecule(_frozen(tree, fake_sbatch), key, "CCO") == "prepared"
+    records.update_metadata(tree["lib"], key, {"conformers": {c: {"status": "completed"} for c in ("conf_1", "conf_2")}})
+    assert records.molecule_state(records.load_metadata(tree["lib"], key))[0] == "complete"
+
+    _ensemble(tree["results"], "CCO", replicates=2)
+    capsys.readouterr()
+    assert main(["submit", str(_two_replicates(tree))]) == 0
+    out = capsys.readouterr().out
+    assert "replicates 1 -> 2" in out and "prepared with 1 replicate(s), the library now has 2" in out
+    params = json.loads((tree["lib"] / "params.json").read_text())
+    assert params["compared"]["replicates"] == 2 and params["replicates_history"][0]["replicates"] == 1
+    assert main(["submit", str(tree["cfg"]), "--dry-run"]) == 0                # same settings again: a match
+
+    assert prepare_molecule(_frozen(tree, fake_sbatch), key, "CCO") == "prepared"
+    meta = records.load_metadata(tree["lib"], key)
+    assert meta["conformers"]["conf_1"]["status"] == "completed" and meta["conformers"]["conf_2"]["status"] == "completed"
+    assert meta["conformers"]["conf_4"]["replicate"] == 2 and meta["orca_stage"]["n_to_run"] == 2   # conf_4, conf_5
+
+    assert main(["submit", str(_rewrite(tree)), "--dry-run"]) == 2           # back to one replicate: refused
+    assert "replicates: 2 -> 1" in capsys.readouterr().err
