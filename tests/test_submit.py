@@ -443,7 +443,14 @@ def test_every_replicate_must_be_finished(tree, fake_sbatch):
     assert row["post_opt"] == "running"
     md.run_record(2, LOT).unlink()
     row = status_table(cfg).set_index("inchikey").loc[mol.inchikey]
-    assert row["post_opt"] == "-"                                             # one replicate's record is not the stage
+    assert row["post_opt"] == "1/2"                       # one replicate's record is not the stage: say how far it is
+    md.run_record(2).unlink()
+    row = status_table(cfg).set_index("inchikey").loc[mol.inchikey]
+    assert row["search"] == "1/2" and row["post_opt"] == "1/2" and row["n_conf"] == 3
+    write_record(md.run_record(2, LOT), {"status": "running", "phase": "refine"})   # replicates raised after a submission
+    row = status_table(cfg).set_index("inchikey").loc[mol.inchikey]
+    assert row["search"] == "1/2" and row["post_opt"] == "running"
+    md.run_record(2, LOT).unlink()
     # the prepare task records the block too
     cfg = _frozen(tree, fake_sbatch)
     assert prepare_molecule(cfg, mol.inchikey, "CC(C)O") == "ensemble_missing"
@@ -454,7 +461,8 @@ def test_aggregate_records_rules():
     from desc_utils.submit.source import aggregate_records
     done = {"status": "done", "n_conformers": 2}
     assert aggregate_records([None, None]) is None
-    assert aggregate_records([done, None]) is None
+    assert aggregate_records([done, None]) == {"status": "partial", "n_conformers": 2, "n_done": 1, "n_total": 2}
+    assert aggregate_records([done, None, done])["n_done"] == 2
     assert aggregate_records([done, {"status": "running", "phase": "search"}])["status"] == "running"
     assert aggregate_records([{"status": "failed", "error": "e"}, None])["status"] == "failed"
     assert aggregate_records([{"status": "running"}, {"status": "failed"}])["status"] == "running"
@@ -676,6 +684,11 @@ def test_stage_statuses_rules():
     assert _stages(_progress({"status": "done"})) == ("done", "done", "done", "-", "-", "-")
     assert _stages(_progress({"status": "done"}, {"status": "running"})) == ("done", "done", "done", "running", "-", "-")
     assert _stages(_progress({"status": "done"}, {"status": "done"})) == ("done", "done", "done", "done", "-", "-")
+    partial = {"status": "partial", "phase": "search", "n_done": 1, "n_total": 3}
+    assert _stages(_progress(partial)) == ("done", "done", "1/3", "-", "-", "-")
+    assert _stages(_progress(partial), queued) == ("done", "done", "1/3", "queued", "-", "-")
+    assert _stages(_progress(partial, {"status": "running"})) == ("done", "done", "1/3", "running", "-", "-")
+    assert _stages(_progress({"status": "done"}, partial)) == ("done", "done", "done", "1/3", "-", "-")
     assert _stages(_progress({"status": "failed", "phase": "pre_refinement"})) == ("done", "failed", "-", "-", "-", "-")
     assert _stages(_progress({"status": "failed", "phase": "search"})) == ("done", "done", "failed", "-", "-", "-")
     assert _stages(_progress({"status": "failed"})) == ("done", "failed", "failed", "-", "-", "-")                # legacy record
@@ -732,6 +745,41 @@ def test_bceg_sbatch_failure_is_reported_cleanly(tree, monkeypatch, capsys):
     assert main(["submit", str(path)]) == 1
     err = capsys.readouterr().err
     assert "bceg submission failed" in err and "Nothing was queued" in err
+
+
+def test_status_names_molecules_never_submitted(tree, capsys):
+    """Nothing recorded, nothing queued, the transformation applies: ``not submitted``, not ``absent``."""
+    cfg = Config.load(tree["cfg"])
+    df = status_table(cfg).set_index("inchikey")
+    assert set(df["state"]) == {"not submitted"}
+    assert df.loc[tree["keys"]["CCO"], "reason"] == "nothing recorded and nothing queued: run submit"
+    assert main(["status", str(cfg.path)]) == 0
+    assert "not submitted 3" in capsys.readouterr().out
+    # the transformation script does not apply to it: n/a, with the reason
+    mol = InputMolecule.from_smiles("CCO")
+    orig = Ensembles.progress
+    Ensembles.progress = lambda self, m: (orig(self, m) | {"transformation": "not_applicable"} if m.inchikey == mol.inchikey
+                                          else orig(self, m))
+    try:
+        row = status_table(cfg).set_index("inchikey").loc[mol.inchikey]
+    finally:
+        Ensembles.progress = orig
+    assert row["state"] == "n/a" and row["reason"] == "transformation none does not apply" and row["search"] == "n/a"
+
+
+def test_submit_reports_molecules_the_transformation_drops(tree, fake_sbatch, monkeypatch, capsys):
+    """bceg only warns when a transformation returns None for a molecule; submit lists it as skipped
+    instead of queuing a prepare that can only end in ensemble_missing."""
+    path = _rewrite(tree, run_bceg=True)
+    key, other = tree["keys"]["CCO"], tree["keys"]["CC(C)O"]
+    orig = Ensembles.progress
+    monkeypatch.setattr(Ensembles, "pending_tasks", lambda self, force=False: ([type("T", (), {"inchikey": other})()], []))
+    monkeypatch.setattr(Ensembles, "progress", lambda self, m: orig(self, m) | ({"transformation": "not_applicable"}
+                                                                             if m.inchikey == key else {}))
+    assert main(["submit", str(path), "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert f"skip  {key}  not applicable: transformation none does not apply" in out and "--force" not in out.split(key)[1].splitlines()[0]
+    assert f"new  {other}" in out and "2 molecule(s) to prepare, 1 skipped" in out
 
 
 def test_queued_molecule_is_requeued_when_bceg_runs_again_for_it(tree, fake_sbatch, monkeypatch, capsys):

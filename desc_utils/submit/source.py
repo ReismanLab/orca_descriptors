@@ -61,9 +61,12 @@ def aggregate_records(recs: list[dict | None]) -> dict | None:
     """One run record standing for every replicate's, for the status command.
 
     None when no replicate has a record. A ``not_applicable``, ``running`` or ``failed`` record wins over
-    the others, in that order (the first replicate in that state). None while a replicate has no record
-    yet, the stage is not done. Otherwise the first replicate's ``done`` record with ``n_conformers``
-    summed over the replicates."""
+    the others, in that order (the first replicate in that state). When every replicate is ``done``, the
+    first replicate's record with ``n_conformers`` summed over the replicates. When some replicates are
+    done and the others have no record yet (a library whose ``replicates`` was raised after the first
+    submission, or whose later replicates are still waiting), the same record with status ``partial``
+    and ``n_done`` / ``n_total``: the stage is neither queued nor finished, and the status command says
+    how far it is."""
     present = [r for r in recs if r]
     if not present:
         return None
@@ -71,11 +74,11 @@ def aggregate_records(recs: list[dict | None]) -> dict | None:
         for r in present:
             if r.get("status") == status:
                 return r
-    if len(present) < len(recs):
-        return None
     out = dict(present[0])
     if any(r.get("n_conformers") is not None for r in present):
         out["n_conformers"] = sum(r.get("n_conformers") or 0 for r in present)
+    if len(present) < len(recs):
+        out.update(status="partial", n_done=len(present), n_total=len(recs))
     return out
 
 

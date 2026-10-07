@@ -70,6 +70,14 @@ def cmd_submit(args) -> int:
         if state in SKIP_STATES and not args.force and not waiting_on_bceg and not fewer_replicates:
             skipped.append((mol, state, reason))
             continue
+        # A molecule bceg makes no task for and has no ensemble of: the transformation does not apply to
+        # it (or its script fails on it). bceg only warns; say so here, since prepare would only fail.
+        if state == "absent" and mol.inchikey not in bceg_pending:
+            progress = source.progress(mol)
+            if progress["transformation"] != "done":
+                why = progress["error"] or f"transformation {cfg.transformation_name} does not apply"
+                skipped.append((mol, "not applicable", why))
+                continue
         if waiting_on_bceg:
             reason = "prepare re-queued behind the new bceg job(s)"
         elif fewer_replicates and not args.force:
@@ -77,7 +85,8 @@ def cmd_submit(args) -> int:
         selected.append({"inchikey": mol.inchikey, "input_smiles": mol.input_smiles, "name": mol.name,
                          "state": state, "reason": reason, "smiles_line": i})
     for mol, state, reason in skipped:
-        print(f"  skip  {mol.inchikey}  {state}: {reason}" + ("" if state == "complete" else " (use --force)"))
+        print(f"  skip  {mol.inchikey}  {state}: {reason}"
+              + ("" if state in ("complete", "not applicable") else " (use --force)"))
     for m in selected:
         print(f"  {'new' if m['state'] == 'absent' else m['state']:>5}  {m['inchikey']}  {m['input_smiles']}"
               + (f"  ({m['reason']})" if m["state"] != "absent" else ""))

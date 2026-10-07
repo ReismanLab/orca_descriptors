@@ -3,10 +3,15 @@
 
 Stage columns ``transformation``, ``pre_refinement``, ``search``, ``post_opt``, ``pruning``, ``dft``
 take the values ``queued``, ``running``, ``done``, ``failed``, ``n/a`` (the pipeline has no such step
-for this molecule) or ``-`` (nothing recorded and nothing queued); ``dft`` and ``pruning`` show ``off``
-when ``orca: off``. Stages 1-4 come from bceg's ``run_1[_<lot>].json`` (with the ``phase`` the search
-task recorded) and from the ``ensemble_stage: queued`` mark ``submit`` leaves; stages 5-6 from
-``orca_stage`` and the conformer records.
+for this molecule), ``-`` (nothing recorded and nothing queued) or ``<k>/<n>`` (k of the n replicates
+done, the others without a record yet); ``dft`` and ``pruning`` show ``off`` when ``orca: off``.
+Stages 1-4 come from bceg's ``run_<i>[_<lot>].json`` (with the ``phase`` the search task recorded)
+and from the ``ensemble_stage: queued`` mark ``submit`` leaves; stages 5-6 from ``orca_stage`` and
+the conformer records.
+
+The ``transformation`` column is not a record: ``status`` applies the transformation script as it is
+now. A molecule the script accepts today but did not when ``submit`` ran (nothing recorded, nothing
+queued) is reported in the state ``not submitted``; one the script does not apply to is ``n/a``.
 """
 
 from __future__ import annotations
@@ -21,7 +26,15 @@ from desc_utils.submit.source import Ensembles
 
 STAGE_COLUMNS = ["transformation", "pre_refinement", "search", "post_opt", "pruning", "dft"]
 QUEUED, RUNNING, DONE, FAILED, NA, NONE, OFF = "queued", "running", "done", "failed", "n/a", "-", "off"
+PARTIAL = "partial"       # aggregate_records: some replicates done, the others without a record
 PRINT_NAMES = {"transformation": "transf", "pre_refinement": "preopt"}
+
+
+def _partial(rec: dict | None) -> str | None:
+    """``<k>/<n>`` for a folded record in the ``partial`` state, else None."""
+    if rec and rec.get("status") == PARTIAL:
+        return f"{rec['n_done']}/{rec['n_total']}"
+    return None
 
 
 def stage_statuses(progress: dict, meta: dict, orca_on: bool) -> dict[str, str]:
@@ -35,6 +48,7 @@ def stage_statuses(progress: dict, meta: dict, orca_on: bool) -> dict[str, str]:
     search, refine = progress["search_record"], progress["refine_record"]
     s_status = (search or {}).get("status")
     phase = (search or {}).get("phase")
+    partial = _partial(search)
 
     # 2. pre-refinement: part of the search task, told apart by the phase it recorded
     if not progress["has_preopt"]:
@@ -43,7 +57,7 @@ def stage_statuses(progress: dict, meta: dict, orca_on: bool) -> dict[str, str]:
         pre = QUEUED if queued_ens else NONE
     elif s_status == RUNNING:
         pre = RUNNING if phase == "pre_refinement" else DONE
-    elif s_status == DONE:
+    elif s_status in (DONE, PARTIAL):
         pre = DONE
     elif s_status == FAILED:
         pre = FAILED if phase in ("pre_refinement", None) else DONE
@@ -59,6 +73,8 @@ def stage_statuses(progress: dict, meta: dict, orca_on: bool) -> dict[str, str]:
         se = QUEUED if phase == "pre_refinement" else RUNNING
     elif s_status == DONE:
         se = DONE
+    elif s_status == PARTIAL:
+        se = partial
     elif s_status == FAILED:
         se = NONE if phase == "pre_refinement" else FAILED
     elif s_status == "not_applicable":
@@ -70,7 +86,9 @@ def stage_statuses(progress: dict, meta: dict, orca_on: bool) -> dict[str, str]:
     if not progress["has_refiner"]:
         po = NA
     elif refine is None:
-        po = QUEUED if (se in (QUEUED, RUNNING) or (se == DONE and queued_ens)) else NONE
+        po = QUEUED if (se in (QUEUED, RUNNING) or (se in (DONE, partial) and queued_ens)) else NONE
+    elif refine.get("status") == PARTIAL:
+        po = _partial(refine)
     else:
         po = refine.get("status") or NONE
 
@@ -105,6 +123,10 @@ def molecule_rows(cfg: Config) -> list[dict]:
         stages = stage_statuses(progress, meta, cfg.orca_on)
         if progress.get("error"):
             reason = f"ensemble failed: {progress['error']}"
+        elif state == "absent" and stages["transformation"] == NA:
+            state, reason = NA, f"transformation {source.transformation.name} does not apply"
+        elif state == "absent" and stages["transformation"] == DONE:
+            state, reason = "not submitted", "nothing recorded and nothing queued: run submit"
         elif state == "in_progress" and not (meta.get("conformers") or {}):
             reason = "ensemble: " + ", ".join(f"{PRINT_NAMES.get(k, k)} {stages[k]}" for k in STAGE_COLUMNS[1:4])
         confs = meta.get("conformers") or {}
