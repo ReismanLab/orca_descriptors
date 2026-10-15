@@ -101,15 +101,51 @@ def test_connectivity_problems_flag_an_inverted_stereocentre():
     assert any("stereocentre" in p for p in geometry.connectivity_problems(s.mol, coords * [-1, 1, 1], 2.5))
 
 
-def test_start_geometry_imposes_then_holds_the_atoms_in_the_xtb_preopt(fake_xtb, nih2, tmp_path):
+def test_start_geometry_imposes_then_restrains_what_was_imposed_in_the_xtb_preopt(fake_xtb, nih2, tmp_path):
+    """The pre-optimisation keeps the plane (dihedrals of 0/180 in xtb's $constrain) but not the atoms'
+    positions: the bond lengths relax. Every dihedral avoids a near-linear triple (trans ligands)."""
     crest = Crest(constraints=NI_PLANE, start_constraints=True, start_impose_steps=5)
     coords, info = crest.start_geometry(nih2, seed=1, workdir=tmp_path)
-    held = cons.held_atoms(NI_PLANE, nih2.mol)
-    assert info["held_atoms"] == held and info["imposed"]["steps"] == 5
-    assert impose.plane_rms(coords, held) < 0.01
-    xcontrol = (tmp_path / "preopt_0" / "xcontrol").read_text()
-    assert xcontrol == "$fix\n   atoms: " + ",".join(str(i + 1) for i in held) + "\n$opt\n   engine=lbfgs\n$end\n"
+    (group,) = cons.targets(NI_PLANE, nih2.mol)["planes"]
+    assert impose.plane_rms(coords, group) < 0.01 and info["imposed"]["steps"] == 5
+    assert [p["atoms"] for p in info["imposed"]["preopt_holds"]["planes"]] == [group]
+    xcontrol = (tmp_path / "preopt_0" / "xcontrol").read_text().splitlines()
+    assert xcontrol[:2] == ["$constrain", "   force constant=2.0"] and xcontrol[-1] == "$end"
+    dihedrals = [line.split(":")[1].split(",") for line in xcontrol[2:-1]]
+    assert len(dihedrals) == len(group) and all(d[4] in ("0.0", "180.0") for d in dihedrals)
+    for d in dihedrals:
+        i, j, k, l = (int(v) - 1 for v in d[:4])
+        assert {i, j, k, l} <= set(group)
+        assert 15 < cons.angle(coords, i, j, k) < 165 and 15 < cons.angle(coords, j, k, l) < 165
     assert (tmp_path / "preopt_0" / "args.txt").read_text().endswith("--input xcontrol")
+
+
+def test_linear_angle_held_as_a_line_and_ase_constraints():
+    mol = mol_from_smiles("I[Sm](I)(<-O1CCCC1)(<-O1CCCC1)")
+    targets = cons.targets(SM_LINEAR, mol)
+    coords = embed(mol, 3, ff="none")
+    x, _ = impose.impose(mol, coords, targets, [], check=geometry.new_problems(mol, coords, 4.0))
+    hold = impose.holds(x, targets)
+    (line,) = hold["lines"]
+    assert not hold["angles"] and line["atoms"] == targets["angles"][0]["atoms"]
+    assert impose.xtb_restraints(x, hold) == [f"angle: {','.join(str(i + 1) for i in line['atoms'])},180.0"]
+
+    from ase import Atoms
+    from ase.constraints import FixAtoms, FixedLine, FixedPlane, FixInternals
+
+    from bceg.refine.ase_opt import ase_constraints
+    built = ase_constraints((), hold)
+    assert [type(c) for c in built] == [FixedLine]
+    atoms = Atoms(["I", "Sm", "I"], positions=x[line["atoms"]])
+    atoms.set_constraint(FixedLine([0, 1, 2], line["direction"]))
+    atoms.set_positions(atoms.get_positions() + np.array([[0.3, -0.2, 0.1]] * 3) * [[2], [0], [-1]])
+    assert cons.angle(atoms.get_positions(), 0, 1, 2) == pytest.approx(180.0, abs=1e-6)   # moves along the line only
+    # a plane plus a line across it, and an internal coordinate on a plane atom: those atoms are fixed outright
+    mixed = {"planes": [{"atoms": [0, 1, 2, 3], "normal": [0, 0, 1.0]}], "lines": [{"atoms": [3, 4, 5], "direction": [0, 0.6, 0.8]}],
+             "bonds": [{"atoms": [1, 6], "value": 1.5}], "angles": [], "dihedrals": []}
+    built = ase_constraints([7], mixed)
+    assert isinstance(built[0], FixAtoms) and sorted(built[0].index.tolist()) == [1, 3, 7]
+    assert {type(c) for c in built[1:]} == {FixedLine, FixedPlane, FixInternals}
 
 
 def test_start_constraints_params_and_hash():

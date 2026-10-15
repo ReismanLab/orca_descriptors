@@ -118,8 +118,11 @@ class UMA(Refiner):
         """The hook of the shared ASE loop (charge and spin travel in ``atoms.info`` with UMA)."""
         return self.calculator()
 
-    def run(self, structure: Structure, conformers: list[Conformer], workdir: Path) -> RefineResult:
+    def run(self, structure: Structure, conformers: list[Conformer], workdir: Path,
+            holds: dict | None = None) -> RefineResult:
+        """``holds``: what an imposed start geometry must keep (bceg.impose.holds; ``pre_refinement: uma``)."""
         return optimize_conformers(
             self, structure, conformers, workdir,
             versions={"fairchem-core": package_version("fairchem-core"), "ase": package_version("ase")},
+            holds=holds,
         )

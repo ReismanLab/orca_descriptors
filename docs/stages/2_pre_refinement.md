@@ -100,9 +100,11 @@ pre_refinement:
 `constrained: true` makes the start geometry satisfy `conformer_search.constraints`
 ([3_conformer_search.md](3_conformer_search.md#constraints)) instead of merely measuring them on it:
 the planes, and every bond, angle and dihedral with a `value`, are reached before the pre-optimisation,
-and every atom any entry names (the *held atoms*) is held exactly during it: ASE `FixAtoms` with UMA; with xtb `$fix` and the L-BFGS optimiser
-(`$opt engine=lbfgs`, since xtb 6.7.1's default ANC optimiser silently ignores `$fix`). The CREST search then freezes them, and stage 4 and the DFT optimisation keep them fixed when they
-say `constrained: true` too. For example LSmI2 with a linear I-Sm-I, or a square-planar Ni:
+which then keeps them while relaxing everything else, the bond lengths of the core included (see
+[the pre-optimisation](#the-pre-optimisation-keeps-what-was-imposed)). From the search on, every atom
+any entry names (the *held atoms*) is frozen: the CREST search freezes them, and stage 4 and the DFT
+optimisation keep them fixed when they say `constrained: true` too. For example LSmI2 with a linear
+I-Sm-I, or a square-planar Ni:
 
 ```yaml
 pre_refinement:
@@ -130,7 +132,7 @@ The values are reached gradually (`bceg/impose.py`), never in one jump on the ET
    exact values are set by rigid moves (the smaller side of the bond is rotated or translated; a plane
    group is projected onto its least-squares plane). A target inside a ring is set by a stiff restraint
    instead.
-3. **Settle**: the network is minimised again with the held atoms fixed.
+3. **Settle**: the network is minimised again with the targets' atoms fixed.
 
 The connectivity is compared with the embedding's after every ramp step and after the imposition: no
 metal-ligand bond longer than `max_metal_ligand_distance`, no other bond broken, no non-bonded clash and
@@ -138,12 +140,28 @@ no tetrahedral stereocentre inverted that the embedding did not already have (ET
 metal-ligand bonds, e.g. Sm-I; repairing those is the pre-optimisation's job, as without constraints).
 After the pre-optimisation the full check applies, stereocentres included. A new problem, or a ramp that
 ends outside the snap tolerance, rejects the embedding and the next seed is tried; `rejected` names the
-`stage` (`imposed` or `preopt`). `details.start_geometry` records `held_atoms` and `imposed`: the targets'
-values at the `start`, `after_ramp` and `final`.
+`stage` (`imposed` or `preopt`). `details.start_geometry.imposed` records the targets' values at the
+`start`, `after_ramp`, `final` (after the imposition) and `after_preopt`, and the `preopt_holds`.
 
-The held atoms are fixed in Cartesian coordinates from here on: their bond lengths stay what the
-pre-optimisation (with them fixed, so effectively the imposition) gave, also through the DFT optimisation
-when it is constrained. Pick the start geometry's level accordingly.
+### The pre-optimisation keeps what was imposed
+
+Only what was imposed is kept, so that the bond lengths ETKDG got wrong (Sm-I at 3.7 Angstrom) relax:
+
+| Imposed | UMA (exact, ASE) | xtb (`$constrain`, force constant 2.0) |
+|---|---|---|
+| a plane | each atom of the group moves only within the plane (`FixedPlane`) | dihedrals of 0 or 180 degrees through the group, each avoiding near-linear triples |
+| an angle of 180 degrees | its three atoms move only along their line (`FixedLine`) | `angle: i,j,k,180.0` (xtb's angle restraint is well behaved there: 179.99 degrees, Sm-I relaxed from 3.71 to 2.98 Angstrom on SmI2(THF)2 with GFN2) |
+| another bond, angle or dihedral | `FixInternals` | `distance:` / `angle:` / `dihedral:` |
+
+An atom held in two ways that do not combine (two planes, a plane and a line across it, a plane or line
+and an internal coordinate) is fixed outright with UMA. After the pre-optimisation the values are set
+exact once more by the rigid snap (a small move after xtb's restraints, none after UMA); a value the
+pre-optimisation left beyond the snap tolerance rejects the seed. The frozen groups of `freeze` are not
+held here: they are frozen from the search on, where the pre-optimisation put them.
+
+The held atoms are fixed in Cartesian coordinates from the search on, so their bond lengths stay what
+this pre-optimisation gave, also through the DFT optimisation when it is constrained. Pick its level
+accordingly (`uma` rather than `xtb` for a metal).
 
 ## Status
 

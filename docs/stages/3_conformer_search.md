@@ -110,7 +110,7 @@ Each of those stages can keep them with `constrained: true`:
 
 | Stage | `constrained: true` | bceg parameter |
 |---|---|---|
-| `pre_refinement` | the planes and the values given are imposed on the embedding, then its held atoms stay fixed in the pre-optimisation ([imposing constraints](2_pre_refinement.md#imposing-constraints)) | `start_constraints`, `start_impose_steps` |
+| `pre_refinement` | the planes and the values given are imposed on the embedding and kept by the pre-optimisation, which relaxes the rest, bond lengths included ([imposing constraints](2_pre_refinement.md#imposing-constraints)) | `start_constraints`, `start_impose_steps` |
 | `post_optimization` | the held atoms stay fixed in every conformer's optimisation | the refiner's `constraints` |
 | `dft` | `{ C i C }` for every held atom in the ORCA optimisation | none |
 

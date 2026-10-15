@@ -77,6 +77,16 @@ def _all_targets(targets: dict):
             yield kind, t
 
 
+def values(coords: np.ndarray, targets: dict) -> dict[str, float]:
+    """Every target's current value (plane: its RMS), keyed ``"<kind>:<atoms>"``, for the run record."""
+    return {f"{kind}:{t if kind == 'planes' else t['atoms']}": round(measure(coords, kind, t), 3)
+            for kind, t in _all_targets(targets)}
+
+
+def target_atoms(targets: dict) -> list[int]:
+    return sorted({a for kind, t in _all_targets(targets) for a in (t if kind == "planes" else t["atoms"])})
+
+
 def _within(coords: np.ndarray, targets: dict, tolerance: dict) -> list[str]:
     """Descriptions of the targets further than ``tolerance`` from their value (none: all reached)."""
     return [f"{kind[:-1]} {t if kind == 'planes' else t['atoms']}: off by {deviation(coords, kind, t):.3f}"
@@ -315,6 +325,106 @@ def _snap_one(mol: Chem.Mol, x: np.ndarray, kind: str, t: Any) -> np.ndarray | N
     return _rotate(x, side, x[j], x[k] - x[j], -delta)
 
 
+def snap(mol: Chem.Mol, x: np.ndarray, targets: dict, network: Network | None = None) -> np.ndarray:
+    """Every target to its exact value by rigid moves (a few rounds: a plane projection can disturb an angle
+    sharing its atoms); a target inside a ring by a stiff restrained minimisation on ``network`` (built on
+    ``x`` when not given) instead."""
+    ring_snaps = []
+    for _ in range(SNAP_ROUNDS):
+        ring_snaps = []
+        for kind, t in _all_targets(targets):
+            snapped = _snap_one(mol, x, kind, t)
+            if snapped is None:
+                ring_snaps.append((kind, t))
+            else:
+                x = snapped
+        if not _within(x, targets, FINAL_TOLERANCE):
+            break
+    if ring_snaps:
+        network = network or Network(mol, x, targets)
+        terms = {"bonds": _bond_term, "angles": _angle_term, "dihedrals": _dihedral_term}
+
+        def stiff(y):
+            e, grad = network.energy(y)
+            for kind, t in ring_snaps:
+                e += terms[kind](y, t["atoms"], t["value"], grad, k=K_STIFF)
+            return e, grad
+        x = _minimize(x, stiff)
+    return x
+
+
+def off_targets(x: np.ndarray, targets: dict, final: bool = False) -> list[str]:
+    """The targets further than the snap (or, ``final``, the final) tolerance from their values."""
+    return _within(x, targets, FINAL_TOLERANCE if final else SNAP_TOLERANCE)
+
+
+# --------------------------------------------------------------------------- holding them in the pre-optimisation
+LINEAR = 179.999  # an angle target from here up is held as a line
+
+
+def holds(x: np.ndarray, targets: dict) -> dict:
+    """What the pre-optimisation must keep of an imposed geometry ``x``, and nothing more, so that the bond
+    lengths (Sm-I, Ni-N, ...) relax::
+
+        {"planes": [{"atoms": [...], "normal": [nx, ny, nz]}],   each atom moves only within its plane
+         "lines": [{"atoms": [i, j, k], "direction": [...]}],     a linear angle: the three only along it
+         "bonds" / "angles" / "dihedrals": [{"atoms": [...], "value": v}]}   the other imposed values
+
+    UMA keeps them exactly (ASE FixedPlane / FixedLine / FixInternals); xtb as stiff restraints
+    (:func:`xtb_restraints`), followed by a :func:`snap`."""
+    out: dict[str, Any] = {"planes": [], "lines": [], "bonds": [], "angles": [], "dihedrals": []}
+    for group in targets.get("planes") or []:
+        out["planes"].append({"atoms": list(group), "normal": _plane(x, group)[1].round(8).tolist()})
+    for kind in ("bonds", "angles", "dihedrals"):
+        for t in targets.get(kind) or []:
+            if kind == "angles" and t["value"] >= LINEAR:
+                i, _, k = t["atoms"]
+                d = x[k] - x[i]
+                out["lines"].append({"atoms": list(t["atoms"]), "direction": (d / np.linalg.norm(d)).round(8).tolist()})
+            else:
+                out[kind].append({"atoms": list(t["atoms"]), "value": float(t["value"])})
+    return out
+
+
+def _plane_dihedrals(x: np.ndarray, group: list[int]) -> list[tuple[list[int], float]]:
+    """Dihedrals (0 or 180 degrees) that keep a planar group planar: one per atom beyond a reference
+    triangle, each through the ordering whose two bond angles are furthest from 0 and 180 (a dihedral
+    through a near-linear triple, e.g. trans ligands across a metal, is undefined)."""
+    def sin(i, j, k):
+        return np.sin(np.radians(cons.angle(x, i, j, k)))
+
+    out = []
+    for a in group:
+        best = None
+        for p in group:
+            for q in group:
+                for r in group:
+                    if len({p, q, r, a}) < 4:
+                        continue
+                    score = min(sin(p, q, r), sin(q, r, a))
+                    if best is None or score > best[0]:
+                        best = (score, [p, q, r, a])
+        if best is not None and best[1] not in [d for d, _ in out]:
+            value = cons.dihedral(x, *best[1])
+            out.append((best[1], 0.0 if abs(value) < 90 else 180.0))
+    return out
+
+
+def xtb_restraints(x: np.ndarray, hold: dict) -> list[str]:
+    """xtb ``$constrain`` lines (1-based) for :func:`holds`: distances, angles (a line as an angle of 180,
+    which xtb's angle restraint holds), dihedrals, and a plane as dihedrals of 0 or 180 degrees."""
+    def ids(atoms):
+        return ",".join(str(i + 1) for i in atoms)
+
+    lines = [f"distance: {ids(t['atoms'])},{t['value']:.6f}" for t in hold["bonds"]]
+    lines += [f"angle: {ids(t['atoms'])},{t['value']:.6f}" for t in hold["angles"]]
+    lines += [f"angle: {ids(t['atoms'])},180.0" for t in hold["lines"]]
+    lines += [f"dihedral: {ids(t['atoms'])},{t['value']:.6f}" for t in hold["dihedrals"]]
+    for plane in hold["planes"]:
+        lines += [f"dihedral: {ids(atoms)},{value:.1f}" for atoms, value in _plane_dihedrals(x, plane["atoms"])]
+    return lines
+
+
 # --------------------------------------------------------------------------- the procedure
 def impose(mol: Chem.Mol, coords: np.ndarray, targets: dict, held: list[int], steps: int = 10,
            check=None) -> tuple[np.ndarray, dict]:
@@ -324,9 +434,7 @@ def impose(mol: Chem.Mol, coords: np.ndarray, targets: dict, held: list[int], st
     problem, or a target out of reach of the snap, raises :class:`ImposeError`.
     """
     x = np.asarray(coords, dtype=float).copy()
-    start = {f"{kind}:{t if kind == 'planes' else t['atoms']}": round(measure(x, kind, t), 3)
-             for kind, t in _all_targets(targets)}
-    info: dict[str, Any] = {"steps": steps, "start": start}
+    info: dict[str, Any] = {"steps": steps, "start": values(x, targets)}
     if not any(True for _ in _all_targets(targets)):
         return x, info | {"final": {}}
     network = Network(mol, x, targets)
@@ -358,39 +466,19 @@ def impose(mol: Chem.Mol, coords: np.ndarray, targets: dict, held: list[int], st
         problems = check(x) if check else []
         if problems:
             raise ImposeError(f"ramp step {s}/{steps} changed the connectivity: {problems}")
-    info["after_ramp"] = {key: round(measure(x, kind, t), 3)
-                          for key, (kind, t) in zip(start, _all_targets(targets))}
+    info["after_ramp"] = values(x, targets)
     far = _within(x, targets, SNAP_TOLERANCE)
     if far:
         raise ImposeError(f"after the {steps}-step ramp some targets are beyond the snap tolerance: {far}")
 
-    ring_snaps = []
-    for _ in range(SNAP_ROUNDS):
-        for kind, t in _all_targets(targets):
-            snapped = _snap_one(mol, x, kind, t)
-            if snapped is None:
-                ring_snaps.append((kind, t))
-            else:
-                x = snapped
-        if not _within(x, targets, FINAL_TOLERANCE):
-            break
-    if ring_snaps:  # a target inside a ring: a stiff restrained minimisation instead of a rigid move
-        terms = {"bonds": _bond_term, "angles": _angle_term, "dihedrals": _dihedral_term}
+    x = snap(mol, x, targets, network)
 
-        def stiff(y):
-            e, grad = network.energy(y)
-            for kind, t in ring_snaps:
-                e += terms[kind](y, t["atoms"], t["value"], grad, k=K_STIFF)
-            return e, grad
-        x = _minimize(x, stiff)
-
-    target_atoms = {a for kind, t in _all_targets(targets) for a in (t if kind == "planes" else t["atoms"])}
-    x = _minimize(x, network.energy, fixed=sorted(set(held) | target_atoms))  # settle the rest around them
+    x = _minimize(x, network.energy, fixed=sorted(set(held) | set(target_atoms(targets))))  # settle the rest around them
     off = _within(x, targets, FINAL_TOLERANCE)
     if off:
         raise ImposeError(f"targets not met after the snap: {off}")
     problems = check(x) if check else []
     if problems:
         raise ImposeError(f"imposed geometry has a connectivity problem: {problems}")
-    info["final"] = {key: round(measure(x, kind, t), 3) for key, (kind, t) in zip(start, _all_targets(targets))}
+    info["final"] = values(x, targets)
     return x, info
