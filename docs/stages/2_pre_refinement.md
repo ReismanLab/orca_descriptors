@@ -25,6 +25,8 @@ geometry is kept as `logs/raw_1_start_geometry.xyz`; the attempts of a failed ru
 | `max_metal_ligand_distance` | `2.5` | Angstrom; a longer metal-ligand bond rejects the geometry (decoordination) | `max_metal_ligand_distance` | yes |
 | `max_attempts` | `10` | re-embeddings before the search fails | `start_max_attempts` | yes |
 | `xtb_executable` | `xtb` | which xtb binary; the path and version that ran are recorded | `xtb_executable` | no (resource) |
+| `constrained` | `false` | `true`: impose `conformer_search.constraints` on the embedding, then pre-optimise with their atoms fixed, see [imposing constraints](#imposing-constraints) | `start_constraints` | yes, when `true` |
+| `impose_steps` | `10` | with `constrained`: steps of the ramp that brings the embedding onto the imposed values | `start_impose_steps` | yes, when `constrained` |
 
 The last column names the parameters of the searcher that the block is translated into
 (`bceg/search/base.py`, `START_DEFAULTS`); `bceg`'s own config takes them inside `methods.<name>.params`.
@@ -92,6 +94,54 @@ pre_refinement:
   start_geometry: input          # the script returned coords
   max_metal_ligand_distance: 2.8
 ```
+
+## Imposing constraints
+
+`constrained: true` makes the start geometry satisfy `conformer_search.constraints`
+([3_conformer_search.md](3_conformer_search.md#constraints)) instead of merely measuring them on it:
+the planes, and every bond, angle and dihedral with a `value`, are reached before the pre-optimisation,
+and every atom any entry names (the *held atoms*) stays fixed during it (xtb `$fix`, ASE `FixAtoms` for
+UMA). The CREST search then freezes them, and stage 4 and the DFT optimisation keep them fixed when they
+say `constrained: true` too. For example LSmI2 with a linear I-Sm-I, or a square-planar Ni:
+
+```yaml
+pre_refinement:
+  method: uma
+  constrained: true
+conformer_search:
+  name: crest_gfn2_SmI2lin
+  searcher: crest
+  constraints:
+    freeze: [{element: Sm, neighbors: 1}]
+    angles: [{smarts: "[I:1]~[Sm:2]~[I:3]", value: 180}]
+  params: {shake: 0, tstep: 2.0, crossing: false}
+```
+
+The values are reached gradually (`bceg/impose.py`), never in one jump on the ETKDG geometry:
+
+1. **Ramp**: `impose_steps` restrained minimisations, step s pulling every target s/`impose_steps` of the
+   way from its embedded value. The rest of the molecule follows through an elastic network built on the
+   embedding: every bond and 1-3 distance is held near its embedded length (except the ones the targets
+   must change, e.g. the 1-3 distances around the apex of an imposed angle), and non-bonded atoms are
+   kept at least their covalent-radii sum apart. The network needs no force-field atom types, so it works
+   for any metal (UFF types neither Sm(III) nor the Ni of these complexes). An angle is restrained
+   through the distance between its end atoms, which is smooth at 180 degrees.
+2. **Snap**: once every target is within 3 degrees / 0.05 Angstrom / a plane RMS of 0.05 Angstrom, the
+   exact values are set by rigid moves (the smaller side of the bond is rotated or translated; a plane
+   group is projected onto its least-squares plane). A target inside a ring is set by a stiff restraint
+   instead.
+3. **Settle**: the network is minimised again with the held atoms fixed.
+
+The connectivity is checked on the embedding, after every ramp step, after the imposition and after the
+pre-optimisation: no metal-ligand bond longer than `max_metal_ligand_distance`, no other bond broken, no
+non-bonded clash, and no tetrahedral stereocentre inverted. Any problem, or a ramp that ends outside the
+snap tolerance, rejects the embedding and the next seed is tried; `rejected` names the `stage`
+(`imposed` or `preopt`). `details.start_geometry` records `held_atoms` and `imposed`: the targets'
+values at the `start`, `after_ramp` and `final`.
+
+The held atoms are fixed in Cartesian coordinates from here on: their bond lengths stay what the
+pre-optimisation (with them fixed, so effectively the imposition) gave, also through the DFT optimisation
+when it is constrained. Pick the start geometry's level accordingly.
 
 ## Status
 

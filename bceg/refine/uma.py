@@ -7,7 +7,7 @@ from pathlib import Path
 from bceg.external import resolve_threads
 from bceg.layout import check_name
 from bceg.refine.ase_opt import optimize_conformers, package_version
-from bceg.refine.base import RefineResult, Refiner
+from bceg.refine.base import REFINER_CONSTRAINT_DEFAULTS, RefineResult, Refiner
 from bceg.structure import Structure
 from bceg.xyz import Conformer
 
@@ -64,6 +64,7 @@ class UMA(Refiner):
         "device": "cpu",  # "cuda" sends the step (and, chained, its whole job) to the gpu profile
         "workers": None,  # None/0: one process per CPU of the allocation on cpu (at most 8 outside SLURM), 1 on cuda
         "threads": None,  # None/0: torch threads per worker, the allocation's CPUs shared between the workers
+        **REFINER_CONSTRAINT_DEFAULTS,
     }
     resource_keys = {"device", "workers", "threads"}
     # uma-s-1p2 on CPU, measured on the cluster: ~2.0 GB per process up to ~100 atoms, then roughly

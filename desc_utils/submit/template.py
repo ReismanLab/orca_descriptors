@@ -19,6 +19,9 @@ STRING_KEYS = {"opt_method", "opt_solvent", "svp_method", "property_solvent", "n
 # extra_basis = {element: basis}, rendered as a %basis block in the optimization and frequency steps.
 MAP_KEYS = {"extra_basis"}
 REQUIRED_KEYS = BOOL_KEYS | STRING_KEYS
+# The optimisation step's ``%geom Constraints`` holds the line with this ORCA variable; with ``dft.constrained``
+# that line is replaced by one ``{ C i C }`` per held atom (render's ``fixed_atoms``).
+GEOM_CONSTRAINTS_HOOK = "&{geom_constraints}"
 ALL_KEYS = REQUIRED_KEYS | MAP_KEYS
 
 
@@ -56,9 +59,24 @@ def extra_basis_label(eb: dict) -> str:
     return "; ".join(f"{el} {basis}" for el, basis in eb.items())
 
 
+def geom_constraints_block(text: str, fixed_atoms: list[int]) -> str:
+    """``text`` with the line holding GEOM_CONSTRAINTS_HOOK replaced by ``{ C i C }`` lines (0-based, as ORCA
+    counts), at that line's indentation: the atoms stay at their input positions in the optimisation."""
+    lines = text.splitlines(keepends=True)
+    hits = [i for i, line in enumerate(lines) if GEOM_CONSTRAINTS_HOOK in line]
+    if len(hits) != 1:
+        raise ValueError(f"dft.constrained: the template must have exactly one line with {GEOM_CONSTRAINTS_HOOK} "
+                         f"(inside the optimization step's %geom Constraints block), found {len(hits)}")
+    line = lines[hits[0]]
+    indent = line[:len(line) - len(line.lstrip())]
+    lines[hits[0]] = "".join(f"{indent}{{ C {i} C }}\n" for i in fixed_atoms)
+    return "".join(lines)
+
+
 def render(template_path: str | Path, lot: dict, charge: int, multiplicity: int,
-           nprocs: int, maxcore_mb: int) -> str:
-    """The text of ``calcParam.inp`` for one molecule."""
+           nprocs: int, maxcore_mb: int, fixed_atoms: list[int] | None = None) -> str:
+    """The text of ``calcParam.inp`` for one molecule; ``fixed_atoms`` (0-based) are frozen in the
+    optimisation step (``dft.constrained``)."""
     lot = validate_level_of_theory(lot)
     subs: dict[str, object] = {k: ("true" if lot[k] else "false") for k in BOOL_KEYS}
     subs.update({k: lot[k] for k in STRING_KEYS})
@@ -67,7 +85,8 @@ def render(template_path: str | Path, lot: dict, charge: int, multiplicity: int,
     subs["multiplicity"] = int(multiplicity)
     subs["nprocs"] = int(nprocs)
     subs["maxcore"] = int(maxcore_mb)
-    return Template(Path(template_path).read_text()).substitute(subs)
+    text = Template(Path(template_path).read_text()).substitute(subs)
+    return geom_constraints_block(text, fixed_atoms) if fixed_atoms else text
 
 
 def md5(text: str) -> str:

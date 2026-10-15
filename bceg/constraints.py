@@ -10,14 +10,22 @@ A searcher that supports them (CREST, GOAT) takes a ``constraints`` parameter::
         - "[Ni]~[#7]"                  # a bare string is a SMARTS
       angles:    [{smarts: "[#7]~[Ni]~[#7]"}]
       dihedrals: [{smarts: "[#7:1]~[Ni:2]~[#7:3]~[#6:4]", value: 0.0, force_constant: 1.0}]
+      planes:    [{element: Ni, neighbors: 1}]   # Ni and its first shell in one plane (frozen in the search)
 
 Each entry selects atoms with ``smarts`` or ``element`` (a symbol or a list of symbols). In a SMARTS
 with atom maps only the mapped atoms count, in map order; otherwise every atom of the pattern does.
 ``freeze`` takes the atoms of every match, plus those within ``neighbors`` bonds of them (dative bonds
 included); ``bonds`` / ``angles`` / ``dihedrals`` make one constraint per match, which must select
 2 / 3 / 4 atoms, held at ``value`` (Angstrom / degrees) or, by default, at the start geometry's value;
-one whose atoms are all frozen is dropped (it is fixed already). An entry that matches nothing fails
-the run unless it says ``optional: true``.
+one whose atoms are all frozen is dropped (it is fixed already). ``planes`` makes one group per match
+(the matched atoms plus those within ``neighbors`` bonds of that match), which the search freezes. An
+entry that matches nothing fails the run unless it says ``optional: true``.
+
+Imposing (``pre_refinement: constrained``): :func:`targets` gives the planes and the bonds, angles and
+dihedrals with an explicit ``value``, which bceg.impose moves the start geometry to before the
+pre-optimisation; :func:`held_atoms` (every atom named by any entry) are then kept fixed in Cartesian
+coordinates by the pre-optimisation and, when they opt in, by the post-optimisation and the DFT
+optimisation.
 
 The strength: without a force constant every constraint is exact (CREST ``freeze``, ORCA's
 ``{C i C}``) or left at the program's default strength (CREST's harmonic bond, angle and dihedral
@@ -40,7 +48,9 @@ from typing import Any
 import numpy as np
 from rdkit import Chem
 
-KINDS = {"freeze": None, "bonds": 2, "angles": 3, "dihedrals": 4}  # kind -> atoms per constraint
+KINDS = {"freeze": None, "bonds": 2, "angles": 3, "dihedrals": 4, "planes": None}  # kind -> atoms per constraint
+INTERNALS = ("bonds", "angles", "dihedrals")
+GROUPS = ("freeze", "planes")  # kinds whose entries select a group of atoms (with `neighbors`)
 TOP_KEYS = {*KINDS, "force_constant"}
 ENTRY_KEYS = {"smarts", "element", "neighbors", "value", "force_constant", "optional"}
 ATOMIC_NUMBERS = {Chem.GetPeriodicTable().GetElementSymbol(z): z for z in range(1, 119)}
@@ -88,15 +98,15 @@ def _entry(entry: Any, kind: str, where: str) -> dict:
         raise ValueError(f"{where}: unknown keys {sorted(unknown)}; allowed: {sorted(ENTRY_KEYS)}")
     pattern = _pattern(entry, where)
     n = KINDS[kind]
-    if kind == "freeze":
+    if kind in GROUPS:
         if "value" in entry:
-            raise ValueError(f"{where}: `value` is for bonds, angles and dihedrals, not freeze")
+            raise ValueError(f"{where}: `value` is for bonds, angles and dihedrals, not {kind}")
         neighbors = entry.get("neighbors", 0)
         if isinstance(neighbors, bool) or not isinstance(neighbors, int) or neighbors < 0:
             raise ValueError(f"{where}.neighbors must be a non-negative integer, got {neighbors!r}")
     else:
         if "neighbors" in entry:
-            raise ValueError(f"{where}: `neighbors` is for freeze only")
+            raise ValueError(f"{where}: `neighbors` is for freeze and planes only")
         selected = len(_selected_positions(pattern))
         if selected != n:
             raise ValueError(f"{where}: a {kind[:-1]} constraint needs a SMARTS selecting {n} atoms, this one "
@@ -196,6 +206,7 @@ def resolve(spec: dict, mol: Chem.Mol, coords: np.ndarray) -> dict:
 
         {"freeze": [i, ...],                                   exact
          "bonds": [{"atoms": [i, j], "value": d, "force_constant": k | None}, ...],   also angles, dihedrals
+         "planes": [[i, ...], ...],                             their atoms are also in "freeze"
          "labels": {...}}                                       e.g. "Ni4", for the run record
 
     A frozen group with a force constant is returned as its pairwise distances under ``bonds``.
@@ -205,13 +216,17 @@ def resolve(spec: dict, mol: Chem.Mol, coords: np.ndarray) -> dict:
     coords = np.asarray(coords, dtype=float)
     frozen: set[int] = set()
     restrained: list[tuple[set[int], float]] = []
-    out: dict[str, Any] = {"freeze": [], "bonds": [], "angles": [], "dihedrals": []}
+    out: dict[str, Any] = {"freeze": [], "bonds": [], "angles": [], "dihedrals": [], "planes": []}
     for kind, n in KINDS.items():
         for i, entry in enumerate(spec.get(kind) or []):
             entry = {"smarts": entry} if isinstance(entry, str) else entry
             where = f"constraints.{kind}[{i}]"
             k = entry.get("force_constant", default_k)
             matches = _matches(mol, entry, where)
+            if kind == "planes":  # held exactly in the search: the planes were imposed before it
+                out["planes"] += _plane_groups(mol, matches, entry, where)
+                frozen |= {a for g in out["planes"] for a in g}
+                continue
             if kind == "freeze":
                 atoms = _within(mol, {a for m in matches for a in m}, entry.get("neighbors", 0))
                 if k is None:
@@ -233,10 +248,63 @@ def resolve(spec: dict, mol: Chem.Mol, coords: np.ndarray) -> dict:
     for kind in ("bonds", "angles", "dihedrals"):  # already fixed by the frozen atoms; ORCA loosens redundant sets
         out[kind] = [c for c in out[kind] if not set(c["atoms"]) <= frozen]
     symbols = [a.GetSymbol() for a in mol.GetAtoms()]
-    used = set(out["freeze"]) | {a for kind in ("bonds", "angles", "dihedrals") for c in out[kind] for a in c["atoms"]}
+    used = set(out["freeze"]) | {a for kind in INTERNALS for c in out[kind] for a in c["atoms"]}
     out["labels"] = {str(a): f"{symbols[a]}{a}" for a in sorted(used)}
     return out
 
 
 def is_empty(resolved: dict) -> bool:
     return not any(resolved.get(kind) for kind in KINDS)
+
+
+def _plane_groups(mol: Chem.Mol, matches: list[tuple[int, ...]], entry: dict, where: str) -> list[list[int]]:
+    """One group per match: its atoms plus those within ``neighbors`` bonds; a plane needs 4 atoms."""
+    groups = []
+    for m in matches:
+        group = sorted(_within(mol, set(m), entry.get("neighbors", 0)))
+        if len(group) < 4:
+            raise ValueError(f"{where}: a plane needs at least 4 atoms, {entry.get('smarts') or entry.get('element')!r} "
+                             f"selects {len(group)} (raise `neighbors`?)")
+        if group not in groups:
+            groups.append(group)
+    return groups
+
+
+def targets(spec: dict, mol: Chem.Mol) -> dict:
+    """What imposing the constraints means for one molecule (bceg.impose)::
+
+        {"planes": [[i, ...], ...],
+         "bonds": [{"atoms": [i, j], "value": d}, ...], also angles, dihedrals: only entries with a ``value``}
+
+    Unlike :func:`resolve` nothing is dropped for being frozen: the values must be reached first.
+    """
+    spec = validate(spec)
+    out: dict[str, Any] = {"planes": [], "bonds": [], "angles": [], "dihedrals": []}
+    for i, entry in enumerate(spec.get("planes") or []):
+        entry = {"smarts": entry} if isinstance(entry, str) else entry
+        where = f"constraints.planes[{i}]"
+        out["planes"] += [g for g in _plane_groups(mol, _matches(mol, entry, where), entry, where) if g not in out["planes"]]
+    for kind in INTERNALS:
+        for i, entry in enumerate(spec.get(kind) or []):
+            if isinstance(entry, str) or entry.get("value") is None:
+                continue
+            for atoms in _matches(mol, entry, f"constraints.{kind}[{i}]"):
+                out[kind].append({"atoms": list(atoms), "value": float(entry["value"])})
+    return out
+
+
+def held_atoms(spec: dict, mol: Chem.Mol) -> list[int]:
+    """Every atom any entry names (frozen groups, with or without a force constant, planes, and the atoms of
+    every bond, angle and dihedral): the atoms kept fixed in Cartesian coordinates outside the search."""
+    spec = validate(spec)
+    held: set[int] = set()
+    for kind in KINDS:
+        for i, entry in enumerate(spec.get(kind) or []):
+            entry = {"smarts": entry} if isinstance(entry, str) else entry
+            matches = _matches(mol, entry, f"constraints.{kind}[{i}]")
+            if kind in GROUPS:
+                for m in matches:
+                    held |= _within(mol, set(m), entry.get("neighbors", 0))
+            else:
+                held |= {a for m in matches for a in m}
+    return sorted(held)

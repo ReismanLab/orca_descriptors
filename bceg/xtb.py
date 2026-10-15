@@ -38,10 +38,20 @@ def xtb_identity(executable: str = "xtb") -> tuple[str | None, str | None]:
     return exe, _version_of(exe)
 
 
+def fix_input(workdir: Path, fixed: list[int] | None) -> list[str]:
+    """Write ``xcontrol`` with a ``$fix`` block for the atoms ``fixed`` (0-based; xtb counts from 1) and
+    return the ``--input`` arguments that read it; nothing without fixed atoms."""
+    if not fixed:
+        return []
+    (workdir / "xcontrol").write_text("$fix\n   atoms: " + ",".join(str(i + 1) for i in fixed) + "\n$end\n")
+    return ["--input", "xcontrol"]
+
+
 def xtb_optimize(elements: list[str], coords: np.ndarray, charge: int, uhf: int, workdir: Path,
                  method: str = "gfn2", level: str = "normal", executable: str = "xtb",
-                 threads: int = 1) -> tuple[np.ndarray, float | None]:
-    """Optimise one geometry with xtb; returns (coords, energy in Hartree)."""
+                 threads: int = 1, fixed: list[int] | None = None) -> tuple[np.ndarray, float | None]:
+    """Optimise one geometry with xtb, the atoms ``fixed`` (0-based) held in place; returns (coords,
+    energy in Hartree)."""
     if method not in METHOD_FLAGS:
         raise ValueError(f"Unknown xtb method {method!r}; choose from {sorted(METHOD_FLAGS)}")
     if level not in OPT_LEVELS:
@@ -50,6 +60,7 @@ def xtb_optimize(elements: list[str], coords: np.ndarray, charge: int, uhf: int,
     workdir.mkdir(parents=True, exist_ok=True)
     write_xyz(workdir / "start.xyz", elements, [Conformer(coords)])
     cmd = [exe, "start.xyz", "--opt", level, *METHOD_FLAGS[method], "--chrg", str(charge), "--uhf", str(uhf)]
+    cmd += fix_input(workdir, fixed)
     proc = run(cmd, workdir, threads=threads, log_name="xtb.out")
     out = workdir / "xtbopt.xyz"
     if proc.returncode != 0 or not out.exists():

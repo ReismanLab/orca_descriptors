@@ -894,6 +894,55 @@ def test_crest_md_settings_for_exact_freezing(tree):
     assert exact.params()["sha256"] != default.params()["sha256"]
 
 
+def test_constrained_stages(tree):
+    """`constrained: true` carries conformer_search.constraints into the pre-refinement (imposed, then held),
+    the post-optimisation (the refiner's `constraints`) and the DFT optimisation; without it nothing changes."""
+    spec = {"freeze": [{"element": "Ni", "neighbors": 1}], "angles": [{"smarts": "[#7:1]~[Ni:2]~[#7:3]", "value": 90}]}
+    search = {"name": "crest_fixNi", "searcher": "crest", "constraints": spec}
+    plain = Config.load(_rewrite(tree, pre_refinement={"method": "uma"}, conformer_search=search))
+    assert "start_constraints" not in plain.bceg_raw()["methods"]["crest_fixNi"]["params"]
+    assert "constrained" not in plain.compared()["pre_refinement"] and "constrained" not in plain.dft
+
+    cfg = Config.load(_rewrite(tree, pre_refinement={"method": "uma", "constrained": True, "impose_steps": 20},
+                               conformer_search=search,
+                               post_optimization={"refiner": "uma", "params": {"model": LOT}, "constrained": True},
+                               dft={"level_of_theory": LEVEL_OF_THEORY, "constrained": True}))
+    params = cfg.bceg_raw()["methods"]["crest_fixNi"]["params"]
+    assert params["start_constraints"] is True and params["start_impose_steps"] == 20
+    searcher = cfg.bceg_config().methods["crest_fixNi"].searcher
+    assert searcher.compared_params()["start_constraints"] is True
+    assert "start_constraints" not in cfg.compared()["conformer_search"]["params"]   # it is the pre-refinement's
+    assert cfg.compared()["pre_refinement"]["constrained"] is True
+    assert cfg.bceg_raw()["post_optimization"]["params"]["constraints"] == spec
+    assert cfg.compared()["post_optimization"]["params"]["constraints"] == spec
+    assert cfg.dft["constrained"] is True
+    assert cfg.params()["sha256"] != plain.params()["sha256"]
+
+    for overrides, message in [
+        ({"pre_refinement": {"method": "uma", "constrained": True},
+          "conformer_search": {"name": "crest", "searcher": "crest"}}, "needs a conformer_search.constraints"),
+        ({"dft": {"level_of_theory": LEVEL_OF_THEORY, "constrained": True}}, "needs a conformer_search.constraints"),
+        ({"pre_refinement": {"method": "uma", "impose_steps": 5}, "conformer_search": search}, "only with `constrained: true`"),
+        ({"pre_refinement": {"method": "uma", "constrained": "yes"}, "conformer_search": search}, "true or false"),
+        ({"conformer_search": search, "post_optimization": {"refiner": "uma", "params": {"constraints": spec}}},
+         "write `constrained: true`"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            Config.load(_rewrite(tree, **overrides))
+
+
+def test_render_freezes_the_held_atoms_in_the_optimisation():
+    path = Config.load.__globals__["DEFAULT_TEMPLATE"]
+    plain = template.render(path, LEVEL_OF_THEORY, 0, 1, 1, 1000)
+    text = template.render(path, LEVEL_OF_THEORY, 0, 1, 1, 1000, fixed_atoms=[0, 3, 7])
+    opt = text.split('%base "optimization"')[1].split("StepEnd")[0]
+    assert "Constraints\n        { C 0 C }\n        { C 3 C }\n        { C 7 C }\n        end" in opt
+    assert template.GEOM_CONSTRAINTS_HOOK not in text and template.GEOM_CONSTRAINTS_HOOK in plain
+    assert text.count("{ C ") == 3                                    # only in the optimisation step
+    with pytest.raises(ValueError, match="exactly one line"):
+        template.geom_constraints_block("no hook here\n", [1])
+
+
 def test_more_replicates_grow_the_library(tree, fake_sbatch, capsys):
     """Raising conformer_search.replicates is the one change submit accepts on an existing library: the new
     replicates' conformers come after the existing conf_N, completed ones are kept. Fewer replicates is refused."""

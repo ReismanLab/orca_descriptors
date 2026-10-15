@@ -55,17 +55,17 @@ STAGES = ("transformation", "pre_refinement", "conformer_search", "post_optimiza
 TOP_KEYS = {"library_dir", "smiles", "ensembles_dir", "run_bceg", *STAGES, "orca", "slurm", "condense", "_pipeline"}
 TRANSFORMATION_KEYS = {"name", "script", "params", "charge", "multiplicity"}
 PRE_REFINEMENT_KEYS = {"method", "params", "start_geometry", "start_ff", "max_metal_ligand_distance", "max_attempts",
-                       "xtb_executable"}
+                       "xtb_executable", "constrained", "impose_steps"}
 PRE_REFINEMENT_METHODS = ("xtb", "uma", "none")
 XTB_PARAMS = {"gfn": "gfn2", "level": "normal"}
 #: pre_refinement key -> bceg start_* parameter (bceg.search.base.START_DEFAULTS)
 EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
                   "max_metal_ligand_distance": "max_metal_ligand_distance", "max_attempts": "start_max_attempts",
-                  "xtb_executable": "xtb_executable"}
+                  "xtb_executable": "xtb_executable", "impose_steps": "start_impose_steps"}
 SEARCH_KEYS = {"name", "searcher", "params", "constraints", "slurm", "replicates"}
-POST_OPT_KEYS = {"refiner", "params", "slurm"}
+POST_OPT_KEYS = {"refiner", "params", "slurm", "constrained"}
 PRUNING_KEYS = {"energy_window_kcal_mol"}
-DFT_KEYS = {"calc_param_template", "level_of_theory"}
+DFT_KEYS = {"calc_param_template", "level_of_theory", "constrained"}
 SLURM_KEYS = {"setup", "ensembles", "prepare", "orca", "array_throttle", "orca_cmd"}
 PROFILE_KEYS = {"partition", "account", "time", "mem", "mem_per_cpu", "ntasks", "cpus_per_task", "nodes",
                 "qos", "constraint", "gres", "extra"}
@@ -108,6 +108,27 @@ def find_placeholders(obj, prefix: str = "") -> list[str]:
     elif isinstance(obj, str) and PLACEHOLDER in obj.upper():
         hits.append(prefix)
     return hits
+
+
+def _constrained(block: dict, where: str) -> bool:
+    """The ``constrained`` flag of a stage block (keeps the conformer search's constraints in that stage)."""
+    value = block.get("constrained", False)
+    if not isinstance(value, bool):
+        raise ValueError(f"{where}.constrained must be true or false, got {value!r}")
+    return value
+
+
+def _check_constrained(out: dict, path: Path) -> None:
+    """A stage that keeps the constraints needs a constraints block and, for the pre-refinement, a
+    searcher that imposes them."""
+    stages = [name for name in ("pre_refinement", "post_optimization", "dft") if (out.get(name) or {}).get("constrained")]
+    if not stages:
+        return
+    if not out["conformer_search"]["constraints"]:
+        raise ValueError(f"{path}: {', '.join(stages)}: `constrained: true` needs a conformer_search.constraints block")
+    searcher = out["conformer_search"]["searcher"]
+    if "pre_refinement" in stages and not SEARCHERS[searcher].supports_constraints():
+        raise ValueError(f"{path}: pre_refinement.constrained: searcher {searcher!r} takes no constraints")
 
 
 def searcher_has_start_step(searcher: str) -> bool:
@@ -164,6 +185,10 @@ def _pre_refinement(block, where: str, searcher: str) -> dict:
     for key in EMBEDDING_KEYS:
         if key in block and block[key] is not None:
             out[key] = block[key]
+    if _constrained(block, where):  # only when set: the hash of an unconstrained library is unchanged
+        out["constrained"] = True
+    elif "impose_steps" in out:
+        raise ValueError(f"{where}.impose_steps: only with `constrained: true`")
     return out
 
 
@@ -196,7 +221,12 @@ def _post_optimization(block, where: str, present: bool) -> dict | None:
     refiner = block.get("refiner", "uma")
     if refiner not in REFINERS:
         raise ValueError(f"{where}.refiner must be one of {sorted(REFINERS)}, got {refiner!r}")
-    return {"refiner": refiner, "params": dict(block.get("params") or {}), "slurm": dict(block.get("slurm") or {})}
+    if "constraints" in (block.get("params") or {}):
+        raise ValueError(f"{where}: write `constrained: true`, the constraints come from conformer_search")
+    out = {"refiner": refiner, "params": dict(block.get("params") or {}), "slurm": dict(block.get("slurm") or {})}
+    if _constrained(block, where):
+        out["constrained"] = True
+    return out
 
 
 def _pruning(block, where: str) -> dict:
@@ -225,6 +255,8 @@ def start_params(pre: dict) -> dict:
     for key, bceg_key in EMBEDDING_KEYS.items():
         if key in pre:
             out[bceg_key] = pre[key]
+    if pre.get("constrained"):
+        out["start_constraints"] = True
     return out
 
 
@@ -247,9 +279,17 @@ def to_bceg_raw(raw: dict) -> dict:
         "replicates": search["replicates"],
         "transformations": {t["name"]: spec},
         "methods": {search["name"]: {"searcher": search["searcher"], "params": params, "slurm": dict(search["slurm"])}},
-        "post_optimization": copy.deepcopy(raw["post_optimization"]),
+        "post_optimization": _bceg_post_optimization(raw),
         "slurm": slurm,
     }
+
+
+def _bceg_post_optimization(raw: dict) -> dict | None:
+    """bceg's post_optimization block: ``constrained`` becomes the refiner's ``constraints`` parameter."""
+    post = copy.deepcopy(raw["post_optimization"])
+    if post is not None and post.pop("constrained", False):
+        post["params"]["constraints"] = copy.deepcopy(raw["conformer_search"]["constraints"])
+    return post
 
 
 # --------------------------------------------------------------------------- reading
@@ -287,10 +327,15 @@ def read_raw(path: str | Path) -> dict:
 
     dft = dict(raw["dft"] or {})
     _check_keys(dft, DFT_KEYS, f"{path}: dft")
+    if _constrained(dft, f"{path}: dft"):
+        dft["constrained"] = True
+    else:
+        dft.pop("constrained", None)
     if "level_of_theory" not in dft:
         raise ValueError(f"{path}: dft.level_of_theory is required")
     dft["calc_param_template"] = rel(dft.get("calc_param_template")) or str(DEFAULT_TEMPLATE)
     out["dft"] = dft
+    _check_constrained(out, path)
 
     slurm = copy.deepcopy(DEFAULTS["slurm"])
     for key, value in (raw.get("slurm") or {}).items():
@@ -468,7 +513,8 @@ class Config:
         bcfg = self.bceg_config()
         transformation = bcfg.transformations[self.transformation_name].identity()
         searcher = bcfg.methods[self.method_name].searcher
-        start_keys = set(start_params(self.pre_refinement)) | {"start_preopt", "start_preopt_level", "start_preopt_params"}
+        start_keys = set(start_params(self.pre_refinement)) | {"start_preopt", "start_preopt_level", "start_preopt_params",
+                                                               "start_constraints", "start_impose_steps"}
         search = {"name": self.method_name, "searcher": searcher.name,
                   "params": {k: v for k, v in searcher.compared_params().items() if k not in start_keys}}
         post = None

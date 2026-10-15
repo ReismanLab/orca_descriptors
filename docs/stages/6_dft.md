@@ -14,6 +14,7 @@ before the walltime), and condenses the outputs to `orca_condensed.json` when `c
 |---|---|---|---|
 | `orca` (top level) | `on` | `off`: stop after the ensembles; the same command later with `on` refines them | no |
 | `dft.level_of_theory` | required | the table below | yes |
+| `dft.constrained` | `false` | `true`: every atom `conformer_search.constraints` names stays where stages 2 to 4 put it in the optimisation step: one `{ C i C }` line (0-based) per atom, in place of the template's `&{geom_constraints}` line; the frequency step has no constraints, so small imaginary modes along the frozen coordinates are expected | yes, when `true` |
 | `dft.calc_param_template` | `desc_utils/submit/calcParam.inp.tmpl` | your own copy of the template, only to change which compound steps exist or how they chain | yes (its SHA-256; the copy is frozen under `_jobs/<timestamp>/`) |
 | `slurm.orca` | `{time: "160:00:00", mem_per_cpu: 4G, ntasks: 16, nodes: 1}` | the ORCA job profile; `ntasks` becomes `%pal nprocs`, `mem_per_cpu` (or `mem`/`ntasks`) gives `%maxcore` at 75 % | no |
 | `slurm.orca_cmd` | `orca` on PATH | the ORCA binary, when `module load` is not enough | no |
@@ -84,7 +85,7 @@ dft:
 `calc_param_template`, `calc_param_md5` (of the rendered input), `nprocs`, `maxcore_mb`,
 `level_of_theory` as validated, and `compound_steps`: for every step (`optimization`, `frequency`,
 `singlepoint`, `nmr`, `oxidation`, `reduction`) whether it runs, its method, solvent, extra basis,
-charge and multiplicity. Per conformer: SLURM ids, host, start and end, `exit_code`,
+charge and multiplicity; with `dft.constrained`, `fixed_atoms` (`{"4": "Ni4", ...}`, 0-based). Per conformer: SLURM ids, host, start and end, `exit_code`,
 `orca_terminated_normally`, `orca_run_time` (ORCA's `TOTAL RUN TIME` line) and `orca_run_time_s` (the same
 in seconds), `wall_time_s`, `cpus` (what the SLURM allocation holds on the node: `SLURM_CPUS_ON_NODE`,
 else `ntasks` x `cpus_per_task`, else `nprocs`), `cpu_hours` (`wall_time_s` x `cpus`, the allocation's

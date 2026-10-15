@@ -64,13 +64,17 @@ def threads_per_worker(threads: int | None, workers: int) -> int:
 
 # ---------------------------------------------------------------------------------------- one conformer
 def _optimize(calc, structure: Structure, i: int, coords: np.ndarray, workdir: Path, *,
-              optimizer: str, fmax: float, max_steps: int) -> dict[str, Any]:
-    """Optimise one conformer with ``calc``; returns the geometry, the energy in eV, the residual force
-    and the number of steps. ``converged`` is decided by the caller."""
+              optimizer: str, fmax: float, max_steps: int, fixed: list[int] = ()) -> dict[str, Any]:
+    """Optimise one conformer with ``calc``, the atoms ``fixed`` held in place; returns the geometry, the
+    energy in eV, the residual force (on the free atoms) and the number of steps. ``converged`` is
+    decided by the caller."""
     from ase import Atoms, optimize
 
     atoms = Atoms(symbols=structure.elements, positions=coords)
     atoms.info.update(charge=structure.charge, spin=structure.multiplicity)
+    if fixed:
+        from ase.constraints import FixAtoms
+        atoms.set_constraint(FixAtoms(indices=list(fixed)))  # get_forces() then zeroes them
     atoms.calc = calc
     opt = getattr(optimize, optimizer)(atoms, logfile=str(workdir / f"opt_{i}.log"))
     opt.run(fmax=fmax, steps=max_steps)
@@ -166,7 +170,8 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
     ``details`` record ``workers`` and ``threads`` (per worker) as resolved.
     """
     p = refiner.params
-    settings = {"optimizer": p["optimizer"], "fmax": p["fmax"], "max_steps": p["max_steps"]}
+    fixed = refiner.fixed_atoms(structure)
+    settings = {"optimizer": p["optimizer"], "fmax": p["fmax"], "max_steps": p["max_steps"], "fixed": fixed}
     workers = resolve_workers(p["workers"], p["device"], len(conformers))
     threads = threads_per_worker(p["threads"], workers)
     workdir.mkdir(parents=True, exist_ok=True)   # e.g. preopt_<attempt> of start_preopt: uma
@@ -187,4 +192,4 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
                               "source_index": r["index"]}))
     return RefineResult(out, versions=versions,
                         details={"n_input": len(conformers), "n_unconverged": n_unconverged,
-                                 "workers": workers, "threads": threads})
+                                 "workers": workers, "threads": threads} | ({"fixed_atoms": fixed} if fixed else {}))

@@ -16,11 +16,36 @@ class RefineResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+#: every refiner takes the conformer search's constraints (``post_optimization: constrained``): the atoms they
+#: name (bceg.constraints.held_atoms) stay fixed in Cartesian coordinates during the optimisation
+REFINER_CONSTRAINT_DEFAULTS = {"constraints": {}}
+
 POOL_RESERVE_GB = 2.0  # the job's own process besides its model copy: search results, CREST's leftovers, slack
 
 
 class Refiner(Configurable):
     worker_mem_gb: float | None = None  # memory of one process holding the model; None: no estimate
+
+    def __init__(self, **params) -> None:
+        super().__init__(**params)
+        if self.params.get("constraints"):  # RDKit only then: the pool's workers start faster without it
+            from bceg import constraints as cons
+            cons.validate(self.params["constraints"], f"{self.name}.constraints")
+
+    def compared_params(self) -> dict:
+        """No ``constraints`` key when there are none, so the hash of an unconstrained refinement is unchanged."""
+        out = super().compared_params()
+        if "constraints" in out and not out["constraints"]:
+            del out["constraints"]
+        return out
+
+    def fixed_atoms(self, structure: Structure) -> list[int]:
+        """The atoms held fixed (0-based), none without constraints."""
+        spec = self.params.get("constraints")
+        if not spec:
+            return []
+        from bceg import constraints as cons
+        return cons.held_atoms(spec, structure.mol)
 
     def pool_mem_gb(self, cpus: int) -> float | None:
         """Memory a job of ``cpus`` CPUs needs for this refiner's CPU pool: one model copy per worker
