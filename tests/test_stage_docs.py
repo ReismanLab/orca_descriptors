@@ -32,7 +32,7 @@ START_KEYS = set(START_DEFAULTS)
 SHIPPED = {name: cls for name, cls in SEARCHERS.items() if not cls.__module__.startswith("tests")}
 SHIPPED_REFINERS = {name: cls for name, cls in REFINERS.items() if not cls.__module__.startswith("tests")}
 CASES = [
-    ("1_transformation.md", config.TRANSFORMATION_KEYS | {"none", "ni_x2.py", "x", "not_applicable"}),
+    ("1_transformation.md", config.TRANSFORMATION_KEYS | {"none", "ni_x2.py", "x", "not_applicable", "metal_x.py", "metal", "n_x", "donors", "min_donors", "max_donors"}),
     ("2_pre_refinement.md", config.PRE_REFINEMENT_KEYS | set(config.XTB_PARAMS) | START_KEYS
      | set(config.PRE_REFINEMENT_METHODS) | (set(UMA.defaults) - {"lot", "keep_unconverged", "workers", "constraints"})),
     ("3_conformer_search.md", config.SEARCH_KEYS | set(SHIPPED) | constraints.TOP_KEYS | constraints.ENTRY_KEYS
