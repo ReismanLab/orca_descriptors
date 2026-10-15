@@ -28,6 +28,7 @@ from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils import orca_parse as op
 from desc_utils.submit import records, slurm, template
+from desc_utils.submit.cancel import REASON, was_cancelled
 from desc_utils.submit.config import Config
 from desc_utils.submit.source import Ensemble, Ensembles
 
@@ -169,7 +170,7 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         shutil.copyfile(mol_dir / "calcParam.inp", conf_dir / "calcParam.inp")
         conformer_records[name] = rec | {"status": "prepared", "prepared_at": records.now()}
         if old in records.BAD_CONFORMER or old in records.PENDING_CONFORMER:
-            conformer_records[name]["resubmitted_from"] = old
+            conformer_records[name] |= {"resubmitted_from": old, "reason": None}
         to_run.append(name)
 
     records.update_metadata(lib, inchikey, base | {
@@ -276,7 +277,11 @@ def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str
 
     outcome = orca_outcome(out_path, exit_code)
     if timed_out["flag"]:
-        outcome["status"] = "timeout"
+        # a TERM from `orcadesc cancel` (it lists the job ids it cancelled) is a failure, not a walltime timeout
+        if was_cancelled(lib, [job_env["slurm_array_job_id"], job_env["slurm_job_id"]]):
+            outcome |= {"status": "failed", "reason": REASON}
+        else:
+            outcome["status"] = "timeout"
     outcome["wall_time_s"] = round(time.time() - t0, 1)
     outcome["cpu_hours"] = round(outcome["wall_time_s"] / 3600 * cpus, 5)  # the allocation's cost, as in bceg's records
     outcome["finished_at"] = records.now()

@@ -99,7 +99,7 @@ def stage_statuses(progress: dict, meta: dict, orca_on: bool) -> dict[str, str]:
     if not orca_on:
         pr = dft = OFF
     else:
-        pr = {"prepared": DONE, QUEUED: QUEUED, "ensemble_changed": FAILED}.get(stage, NONE)
+        pr = {"prepared": DONE, QUEUED: QUEUED, "ensemble_changed": FAILED, FAILED: FAILED}.get(stage, NONE)
         if not confs:
             dft = QUEUED if stage in (QUEUED, "prepared") else NONE
         elif counts[RUNNING]:

@@ -1,4 +1,4 @@
-"""``python -m desc_utils.submit {submit,status,cost,fetch-weights,prepare-task,orca-task}``."""
+"""``python -m desc_utils.submit {submit,cancel,status,cost,fetch-weights,prepare-task,orca-task}``."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 from bceg.provenance import ParamsMismatch, check_or_write
 
 from desc_utils.submit import records, slurm
+from desc_utils.submit.cancel import print_cancel
 from desc_utils.submit.config import Config
 from desc_utils.submit.cost import print_cost
 from desc_utils.submit.source import Ensembles
@@ -124,7 +125,7 @@ def cmd_submit(args) -> int:
                 i, mol = by_key[key]
                 records.register_molecule(lib, key, {"smiles": mol.input_smiles, "smiles_line": i, "name": mol.name})
                 records.update_metadata(lib, key, {"inchikey": key, "smiles": mol.input_smiles, "ensemble_stage": {
-                    "status": "queued", "bceg_job_ids": bceg_ids, "submitted_at": records.now()}})
+                    "status": "queued", "reason": "", "bceg_job_ids": bceg_ids, "submitted_at": records.now()}})
     if not cfg.orca_on:
         print("orca: off; ensembles only. Re-run with orca: on to refine them.")
         return 0
@@ -143,7 +144,7 @@ def cmd_submit(args) -> int:
     for m in selected:
         records.update_metadata(lib, m["inchikey"], {
             "inchikey": m["inchikey"], "smiles": m["input_smiles"],
-            "orca_stage": {"status": "queued", "prepare_job_id": job_id, "after_bceg_jobs": bceg_ids,
+            "orca_stage": {"status": "queued", "reason": "", "prepare_job_id": job_id, "after_bceg_jobs": bceg_ids,
                            "submitted_at": records.now()}})
     print(f"prepare array {job_id} ({len(selected)} molecule(s))" + (f" after bceg jobs {', '.join(bceg_ids)}" if bceg_ids else ""))
     return 0
@@ -209,6 +210,15 @@ def cmd_fetch_weights(args) -> int:
     return 0
 
 
+def cmd_cancel(args) -> int:
+    try:
+        print_cancel(Config.load(args.config), dry_run=args.dry_run)
+    except RuntimeError as exc:
+        print(f"CANCEL FAILED: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_status(args) -> int:
     print_status(Config.load(args.config))
     return 0
@@ -247,6 +257,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true", help="also resubmit molecules recorded complete or in progress")
     p.add_argument("--no-sbatch", action="store_true", help="write the job scripts but do not call sbatch")
     p.set_defaults(func=cmd_submit)
+
+    p = sub.add_parser("cancel", help="scancel every job of the library; what was cut short becomes failed (reason: cancelled)")
+    p.add_argument("config")
+    p.add_argument("--dry-run", action="store_true", help="report what would be cancelled; cancels and writes nothing")
+    p.set_defaults(func=cmd_cancel)
 
     p = sub.add_parser("fetch-weights", help="(login node) download the UMA weights into the Hugging Face cache")
     p.add_argument("--model", default="uma-s-1p2")

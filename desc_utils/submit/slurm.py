@@ -141,3 +141,28 @@ def sbatch(script: Path, dependency: list[str] | None = None) -> str:
     if result.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)} failed ({result.returncode}): {result.stderr.strip()}")
     return result.stdout.strip().split(";")[0]
+
+
+def queued_jobs() -> list[dict] | None:
+    """The user's jobs in squeue, one per array element or plain job: {array_job_id, job_id, script};
+    None when squeue is unavailable (laptop, tests). ``array_job_id`` is the job id of a plain job."""
+    try:
+        out = subprocess.run(["squeue", "-h", "--me", "-r", "-o", "%F|%A|%o"], capture_output=True, text=True,
+                             timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    jobs = []
+    for line in out.stdout.splitlines():
+        parts = line.strip().split("|", 2)
+        if len(parts) == 3:
+            jobs.append({"array_job_id": parts[0].strip(), "job_id": parts[1].strip(), "script": parts[2].strip()})
+    return jobs
+
+
+def scancel(job_ids: list[str]) -> None:
+    """Cancel ``job_ids`` (an array id cancels every element of it)."""
+    result = subprocess.run(["scancel", *[str(j) for j in job_ids]], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"scancel {' '.join(job_ids)} failed ({result.returncode}): {result.stderr.strip()}")
