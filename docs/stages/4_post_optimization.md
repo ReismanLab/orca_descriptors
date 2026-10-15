@@ -14,7 +14,7 @@ search, right after it.
 | `refiner` | `uma` | `uma` (fairchem UMA through ASE), `gxtb` (g-xTB, one `xtb --gxtb` run per conformer, CPU) or `aimnet2` (AIMNet2 through ASE); a refiner is a class in `bceg/refine/` registered in `REFINERS`, see the end of this page | yes |
 | `params` | `{}` | the refiner's parameters, below | yes, except the resource keys |
 | `slurm` | `{}` | overrides of `slurm.ensembles.cpu`/`.gpu` for this step (split mode) or merged under the search's overrides (chained mode) | no |
-| `constrained` | `false` | `true`: the atoms `conformer_search.constraints` names stay fixed in every conformer's optimisation (ASE `FixAtoms` for `uma` and `aimnet2`, xtb `$fix` for `gxtb`), see below | yes, when `true` |
+| `constrained` | `false` | `true`: the atoms `conformer_search.constraints` names stay fixed in every conformer's optimisation (ASE `FixAtoms` for `uma` and `aimnet2`; xtb `$fix` with the L-BFGS optimiser, `$opt engine=lbfgs`, for `gxtb`: xtb's default ANC optimiser ignores `$fix`), see below | yes, when `true` |
 
 Recorded per run for every refiner (`run_1_<lot>.json`): `n_conformers`, `details.n_input`,
 `details.n_unconverged`, `versions`, wall time and core-hours. Each conformer's comment line carries

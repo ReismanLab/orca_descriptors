@@ -39,11 +39,17 @@ def xtb_identity(executable: str = "xtb") -> tuple[str | None, str | None]:
 
 
 def fix_input(workdir: Path, fixed: list[int] | None) -> list[str]:
-    """Write ``xcontrol`` with a ``$fix`` block for the atoms ``fixed`` (0-based; xtb counts from 1) and
-    return the ``--input`` arguments that read it; nothing without fixed atoms."""
+    """Write ``xcontrol`` fixing the atoms ``fixed`` (0-based; xtb counts from 1) and return the ``--input``
+    arguments that read it; nothing without fixed atoms.
+
+    ``$fix`` holds the atoms exactly only with the L-BFGS (or FIRE) optimiser: xtb 6.7.1's default ANCopt
+    ignores it without a word (measured on bipy-NiH2: the "fixed" first shell moved by 2 A). Restraining
+    the distances within the group (``$constrain atoms:``) does not hold a plane or a linear angle either:
+    bending out of the plane changes those distances only to second order."""
     if not fixed:
         return []
-    (workdir / "xcontrol").write_text("$fix\n   atoms: " + ",".join(str(i + 1) for i in fixed) + "\n$end\n")
+    (workdir / "xcontrol").write_text("$fix\n   atoms: " + ",".join(str(i + 1) for i in fixed)
+                                      + "\n$opt\n   engine=lbfgs\n$end\n")
     return ["--input", "xcontrol"]
 
 

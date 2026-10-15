@@ -100,8 +100,8 @@ pre_refinement:
 `constrained: true` makes the start geometry satisfy `conformer_search.constraints`
 ([3_conformer_search.md](3_conformer_search.md#constraints)) instead of merely measuring them on it:
 the planes, and every bond, angle and dihedral with a `value`, are reached before the pre-optimisation,
-and every atom any entry names (the *held atoms*) stays fixed during it (xtb `$fix`, ASE `FixAtoms` for
-UMA). The CREST search then freezes them, and stage 4 and the DFT optimisation keep them fixed when they
+and every atom any entry names (the *held atoms*) is held exactly during it: ASE `FixAtoms` with UMA; with xtb `$fix` and the L-BFGS optimiser
+(`$opt engine=lbfgs`, since xtb 6.7.1's default ANC optimiser silently ignores `$fix`). The CREST search then freezes them, and stage 4 and the DFT optimisation keep them fixed when they
 say `constrained: true` too. For example LSmI2 with a linear I-Sm-I, or a square-planar Ni:
 
 ```yaml
@@ -132,11 +132,13 @@ The values are reached gradually (`bceg/impose.py`), never in one jump on the ET
    instead.
 3. **Settle**: the network is minimised again with the held atoms fixed.
 
-The connectivity is checked on the embedding, after every ramp step, after the imposition and after the
-pre-optimisation: no metal-ligand bond longer than `max_metal_ligand_distance`, no other bond broken, no
-non-bonded clash, and no tetrahedral stereocentre inverted. Any problem, or a ramp that ends outside the
-snap tolerance, rejects the embedding and the next seed is tried; `rejected` names the `stage`
-(`imposed` or `preopt`). `details.start_geometry` records `held_atoms` and `imposed`: the targets'
+The connectivity is compared with the embedding's after every ramp step and after the imposition: no
+metal-ligand bond longer than `max_metal_ligand_distance`, no other bond broken, no non-bonded clash and
+no tetrahedral stereocentre inverted that the embedding did not already have (ETKDG stretches some
+metal-ligand bonds, e.g. Sm-I; repairing those is the pre-optimisation's job, as without constraints).
+After the pre-optimisation the full check applies, stereocentres included. A new problem, or a ramp that
+ends outside the snap tolerance, rejects the embedding and the next seed is tried; `rejected` names the
+`stage` (`imposed` or `preopt`). `details.start_geometry` records `held_atoms` and `imposed`: the targets'
 values at the `start`, `after_ramp` and `final`.
 
 The held atoms are fixed in Cartesian coordinates from here on: their bond lengths stay what the

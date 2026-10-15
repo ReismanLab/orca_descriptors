@@ -13,8 +13,9 @@ so the result is deterministic per replicate.
 
 With ``start_constraints`` (``pre_refinement: constrained``) the searcher's ``constraints`` are imposed
 on each embedding before the pre-optimisation (bceg.impose: a gradual ramp, then an exact snap), and the
-pre-optimisation keeps their atoms fixed. The connectivity, and the stereocentres, are checked on the
-embedding, during and after the imposition and after the pre-optimisation; a change rejects the seed.
+pre-optimisation keeps their atoms fixed. During the imposition the connectivity and the stereocentres
+must not change from the embedding's; after the pre-optimisation they must pass outright. Otherwise the
+seed is rejected.
 
 The full pre-optimisation (``start_preopt_level: normal``) takes rigid chelates
 (e.g. bpy-NiF2) to the same minimum from every seed. This is accepted: the N-Ni-N bite
@@ -25,6 +26,7 @@ embedding and the geometry at each metal (angles, ``tau4``) for monitoring.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -75,6 +77,17 @@ def connectivity_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_di
     if not stereo_matches(_with_coords(mol, coords)):
         problems.append("a stereocentre's configuration changed")
     return problems
+
+
+def new_problems(mol: Chem.Mol, reference: np.ndarray, max_metal_ligand_distance: float):
+    """``check(coords)``: the :func:`connectivity_problems` of ``coords`` that ``reference`` does not have
+    (by kind and atoms, not by distance). Imposing constraints must change nothing; an embedding's own
+    problems (ETKDG stretches some metal-ligand bonds) are the pre-optimisation's to fix, as without them."""
+    def key(problem: str) -> str:
+        return re.sub(r"\s[\d.]+ A(?: > [\d.]+ A)?", "", problem)
+
+    before = {key(p) for p in connectivity_problems(mol, reference, max_metal_ligand_distance)}
+    return lambda coords: [p for p in connectivity_problems(mol, coords, max_metal_ligand_distance) if key(p) not in before]
 
 
 def _with_coords(mol: Chem.Mol, coords: np.ndarray) -> Chem.Mol:
@@ -137,9 +150,6 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
     spec = params.get("constraints") if params.get("start_constraints") else None
     targets, held = (cons.targets(spec, structure.mol), cons.held_atoms(spec, structure.mol)) if spec else (None, [])
 
-    def check(c: np.ndarray) -> list[str]:
-        return connectivity_problems(structure.mol, c, params["max_metal_ligand_distance"])
-
     # which program ran is not in the params hash (xtb_executable is a resource key), so record it here
     uma = None
     if preopt == "uma":
@@ -166,9 +176,7 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
         energy, embedded, imposed = None, coords, None
         if spec:
             try:
-                problems = check(coords)
-                if problems:
-                    raise ImposeError(f"the embedding itself: {problems}")
+                check = new_problems(structure.mol, coords, params["max_metal_ligand_distance"])
                 coords, imposed = impose(structure.mol, coords, targets, held,
                                          steps=params["start_impose_steps"], check=check)
             except ImposeError as exc:
@@ -187,7 +195,10 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
                 method=preopt, level=params["start_preopt_level"],
                 executable=params["xtb_executable"], threads=resolve_threads(params.get("threads", params.get("nprocs"))),
                 fixed=held)
-        problems = check(coords) if spec else coordination_problems(structure.mol, coords, params["max_metal_ligand_distance"])
+        if spec:
+            problems = connectivity_problems(structure.mol, coords, params["max_metal_ligand_distance"])
+        else:
+            problems = coordination_problems(structure.mol, coords, params["max_metal_ligand_distance"])
         if not problems:
             extra = {"imposed": imposed, "held_atoms": held} if spec else {}
             return coords, extra | {

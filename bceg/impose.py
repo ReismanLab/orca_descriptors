@@ -33,6 +33,7 @@ from bceg import constraints as cons
 SNAP_TOLERANCE = {"bonds": 0.05, "angles": 3.0, "dihedrals": 3.0, "planes": 0.05}  # Angstrom, degrees, plane RMS
 FINAL_TOLERANCE = {"bonds": 0.01, "angles": 0.5, "dihedrals": 0.5, "planes": 0.01}
 K_BOND, K_13, K_REPULSION, K_TARGET = 1.0, 0.3, 10.0, 5.0  # network and restraint strengths (arbitrary units)
+REPULSION_MARGIN = 1.1  # non-bonded atoms are pushed apart below 1.1 x their covalent-radii sum (clash: 1.0 x)
 K_STIFF = 1000.0  # the restraint replacing a rigid snap inside a ring
 SNAP_ROUNDS = 5  # a plane projection can disturb an angle that shares its atoms, and vice versa
 
@@ -115,8 +116,8 @@ class Network:
         iu = [(i, j) for i in range(n) for j in range(i + 1, n) if (i, j) not in near]
         self.nonbonded = np.array(iu, dtype=int).reshape(-1, 2)
         start = np.linalg.norm(coords[self.nonbonded[:, 0]] - coords[self.nonbonded[:, 1]], axis=1)
-        # never closer than the covalent-radii sum, nor than they already are when that is closer
-        self.rmin = np.minimum(radii[self.nonbonded[:, 0]] + radii[self.nonbonded[:, 1]], start)
+        # kept a margin beyond the covalent-radii sum (the clash criterion), or where they are when closer
+        self.rmin = np.minimum(REPULSION_MARGIN * (radii[self.nonbonded[:, 0]] + radii[self.nonbonded[:, 1]]), start)
 
     def energy(self, x: np.ndarray) -> tuple[float, np.ndarray]:
         grad = np.zeros_like(x)

@@ -1,9 +1,7 @@
 """Imposing constraint values on the start geometry (bceg.impose), and holding the imposed atoms fixed in the
-pre-optimisation (xtb ``$fix``, ``pre_refinement: constrained``) and in the g-xTB post-optimisation."""
+pre-optimisation (xtb ``$fix`` with L-BFGS, ``pre_refinement: constrained``) and in the g-xTB post-optimisation."""
 
 from __future__ import annotations
-
-import re
 
 import numpy as np
 import pytest
@@ -22,13 +20,6 @@ SM_LINEAR = {"freeze": [{"element": "Sm", "neighbors": 1}], "angles": [{"smarts"
 @pytest.fixture(scope="module")
 def nih2():
     return Transformation("NiH2", BUILTIN_TRANSFORMS / "ni_x2.py", {"x": "H"}).apply("c1ccc(-c2ccccn2)nc1")
-
-
-def _no_new_problems(mol, coords, cutoff):
-    """A connectivity check relative to ``coords``: ETKDG's Sm geometries already fail the absolute one."""
-    key = lambda p: re.sub(r"[\d.]+ A", "", p)  # noqa: E731
-    before = {key(p) for p in geometry.connectivity_problems(mol, coords, cutoff)}
-    return lambda c: [p for p in geometry.connectivity_problems(mol, c, cutoff) if key(p) not in before]
 
 
 def _bond_lengths(mol, coords):
@@ -79,7 +70,7 @@ def test_i_sm_i_made_linear_at_constant_bond_lengths():
     (t,) = targets["angles"]
     coords = embed(mol, 3, ff="none")
     assert cons.angle(coords, *t["atoms"]) < 120
-    out, info = impose.impose(mol, coords, targets, held, check=_no_new_problems(mol, coords, 4.0))
+    out, info = impose.impose(mol, coords, targets, held, check=geometry.new_problems(mol, coords, 4.0))
     assert cons.angle(out, *t["atoms"]) == pytest.approx(180.0, abs=0.5)
     assert list(info["after_ramp"].values())[0] > 177                             # the ramp got there, the snap finished
     i, sm, k = t["atoms"]
@@ -117,7 +108,7 @@ def test_start_geometry_imposes_then_holds_the_atoms_in_the_xtb_preopt(fake_xtb,
     assert info["held_atoms"] == held and info["imposed"]["steps"] == 5
     assert impose.plane_rms(coords, held) < 0.01
     xcontrol = (tmp_path / "preopt_0" / "xcontrol").read_text()
-    assert xcontrol == "$fix\n   atoms: " + ",".join(str(i + 1) for i in held) + "\n$end\n"
+    assert xcontrol == "$fix\n   atoms: " + ",".join(str(i + 1) for i in held) + "\n$opt\n   engine=lbfgs\n$end\n"
     assert (tmp_path / "preopt_0" / "args.txt").read_text().endswith("--input xcontrol")
 
 

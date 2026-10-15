@@ -106,7 +106,7 @@ def test_gxtb_open_shell_charge_and_cycles_flags(fake_gxtb, tmp_path):
 
 
 def test_gxtb_holds_the_constrained_atoms_fixed(fake_gxtb, tmp_path):
-    """`post_optimization: constrained`: the atoms the constraints name go to xtb as `$fix`; the constraints
+    """`post_optimization: constrained`: the atoms the constraints name go to xtb as `$fix` (with L-BFGS); the constraints
     enter the refiner's compared parameters only when there are some."""
     structure = Structure("CCO")
     spec = {"freeze": ["[#8]"], "bonds": [{"smarts": "[#6:1]-[#6:2]", "value": 1.5}]}
@@ -114,7 +114,7 @@ def test_gxtb_holds_the_constrained_atoms_fixed(fake_gxtb, tmp_path):
     assert refiner.compared_params()["constraints"] == spec and "constraints" not in GXTB().compared_params()
     result = refiner.run(structure, _conformers(structure, 1), tmp_path)
     assert result.details["fixed_atoms"] == [0, 1, 2]
-    assert (tmp_path / "conf_0" / "xcontrol").read_text() == "$fix\n   atoms: 1,2,3\n$end\n"
+    assert (tmp_path / "conf_0" / "xcontrol").read_text() == "$fix\n   atoms: 1,2,3\n$opt\n   engine=lbfgs\n$end\n"
     assert (tmp_path / "conf_0" / "args.txt").read_text().endswith("--input xcontrol")
     with pytest.raises(ValueError, match="unknown keys"):
         GXTB(constraints={"fix": ["[#8]"]})
