@@ -12,9 +12,12 @@ ORCA stage of a molecule (``metadata["orca_stage"]["status"]``):
   ``prepared``          ensemble split into conf_N/, ORCA jobs submitted (or nothing to submit)
   ``ensemble_missing``  bceg has not produced the ensemble (yet); ``ensemble_failed``; ``not_applicable``
   ``ensemble_changed``  the ensemble's params.json hash differs from the one this library was built on
+  ``failed``            the prepare task did not run to its end (``reason: cancelled`` after ``cancel``)
 Conformer (``metadata["conformers"][conf]["status"]``):
   ``skipped_energy_filter``, ``skipped_no_energy``, ``prepared``, ``submitted``, ``running``,
   ``completed``, ``failed``, ``timeout``
+``cancel`` writes ``failed`` with ``reason: cancelled`` (and ``cancelled_at``): a cancelled step is a failed
+step, and ``submit`` relaunches both alike.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ OK_CONFORMER = {"completed", "skipped_energy_filter", "skipped_no_energy"}
 PENDING_CONFORMER = {"submitted", "running"}
 BAD_CONFORMER = {"failed", "timeout", "prepared"}
 STAGE_WAITING = {"queued"}
-STAGE_BLOCKED = {"ensemble_missing", "ensemble_failed", "not_applicable", "ensemble_changed"}
+STAGE_BLOCKED = {"ensemble_missing", "ensemble_failed", "not_applicable", "ensemble_changed", "failed"}
 
 
 def now() -> str:

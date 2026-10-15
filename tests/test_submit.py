@@ -246,7 +246,7 @@ def test_submit_freezes_and_queues_prepare(tree, fake_sbatch):
     assert "#SBATCH --array=0-2%50" in script and "echo setup" in script and "prepare-task" in script
     assert fake_sbatch[0]["script"] == jobdir / "prepare.sbatch" and fake_sbatch[0]["dependency"] is None
     meta = records.load_metadata(lib, tree["keys"]["CCO"])
-    assert meta["orca_stage"] == {"status": "queued", "prepare_job_id": "1001", "after_bceg_jobs": [],
+    assert meta["orca_stage"] == {"status": "queued", "reason": "", "prepare_job_id": "1001", "after_bceg_jobs": [],
                                   "submitted_at": meta["orca_stage"]["submitted_at"]}
     reg = records.load_registry(lib)
     assert reg[tree["keys"]["CCO"]]["smiles"] == "CCO" and reg[tree["keys"]["CCO"]]["smiles_line"] == 0
@@ -919,3 +919,98 @@ def test_more_replicates_grow_the_library(tree, fake_sbatch, capsys):
 
     assert main(["submit", str(_rewrite(tree)), "--dry-run"]) == 2           # back to one replicate: refused
     assert "replicates: 2 -> 1" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- cancel
+@pytest.fixture
+def fake_scancel(monkeypatch):
+    calls = []
+    monkeypatch.setattr(slurm, "scancel", lambda ids: calls.append(list(ids)))
+    monkeypatch.setattr(slurm, "queued_jobs", lambda: None)
+    return calls
+
+
+def test_cancel_marks_failed_and_submit_relaunches(tree, fake_sbatch, fake_scancel, capsys):
+    from desc_utils.submit.cancel import cancel_library
+    cfg = _frozen(tree, fake_sbatch)                                 # prepare array 1001 for the three molecules
+    cco, iso = tree["keys"]["CCO"], tree["keys"]["CC(C)O"]
+    prepare_molecule(cfg, cco, "CCO")                                # ORCA array 1002, conf_1 and conf_2 submitted
+    records.update_metadata(tree["lib"], cco, {"conformers": {"conf_1": {"status": "completed"}}})
+    before = records.load_metadata(tree["lib"], iso)
+
+    s = cancel_library(cfg, dry_run=True)
+    assert s["job_ids"] == ["1001", "1002"] and s["conformers"] == 1 and s["orca_stages"] == 2
+    assert fake_scancel == [] and records.load_metadata(tree["lib"], iso) == before
+    assert not (tree["lib"] / "_jobs" / "cancelled.json").exists()
+
+    cancel_library(cfg)
+    assert fake_scancel == [["1001", "1002"]]
+    meta = records.load_metadata(tree["lib"], cco)
+    assert meta["conformers"]["conf_1"]["status"] == "completed"     # finished work is left alone
+    c2 = meta["conformers"]["conf_2"]
+    assert c2["status"] == "failed" and c2["reason"] == "cancelled" and c2["cancelled_at"]
+    assert records.molecule_state(meta)[0] == "incomplete"
+    stage = records.load_metadata(tree["lib"], iso)["orca_stage"]
+    assert stage["status"] == "failed" and stage["reason"] == "cancelled"
+    assert records.molecule_state(records.load_metadata(tree["lib"], iso))[0] == "incomplete"
+    row = status_table(cfg).set_index("inchikey").loc[iso]
+    assert row["pruning"] == "failed" and row["state"] == "incomplete"
+
+    # a plain submit (no --force) takes both molecules again; prepare re-runs the cancelled conformer only
+    capsys.readouterr()
+    assert main(["submit", str(tree["cfg"]), "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert f"incomplete  {cco}" in out and f"incomplete  {iso}" in out
+    prepare_molecule(cfg, cco, "CCO")
+    c2 = records.load_metadata(tree["lib"], cco)["conformers"]["conf_2"]
+    assert c2["status"] == "submitted" and c2["resubmitted_from"] == "failed" and c2["reason"] is None
+
+
+def test_cancel_uses_squeue_and_releases_bceg_records(tree, fake_sbatch, fake_scancel, monkeypatch):
+    from desc_utils.submit.cancel import cancel_library
+    cfg = _frozen(tree, fake_sbatch)
+    jobdir = next((tree["lib"] / "_jobs").iterdir())
+    monkeypatch.setattr(slurm, "queued_jobs", lambda: [
+        {"array_job_id": "2000", "job_id": "2003", "script": str(jobdir / "bceg" / "chain_etkdg.sbatch")},
+        {"array_job_id": "2100", "job_id": "2100", "script": str(jobdir / "orca_X.sbatch")},   # never recorded
+        {"array_job_id": "3000", "job_id": "3000", "script": "/elsewhere/other_library.sbatch"},
+    ])
+    md = method_dir(tree["results"], "none", tree["keys"]["CCO"], "etkdg")
+    write_record(md.run_record(1), {"status": "running", "slurm_job_id": "2003", "phase": "search"})
+    md_iso = method_dir(tree["results"], "none", tree["keys"]["CC(C)O"], "etkdg")
+    write_record(md_iso.run_record(1), {"status": "running", "slurm_job_id": "3000"})  # another library's job
+    s = cancel_library(cfg)
+    assert fake_scancel == [["2000", "2100"]] and s["bceg_records"] == 1
+    rec = read_record(md.run_record(1))
+    assert rec["status"] == "failed" and rec["reason"] == rec["error"] == "cancelled" and rec["phase"] == "search"
+    assert read_record(md_iso.run_record(1))["status"] == "running"
+    assert read_record(md.run_record(1, LOT))["status"] == "done"
+    from types import SimpleNamespace
+    task = SimpleNamespace(transformation="none", inchikey=tree["keys"]["CCO"], method="etkdg", replicate=1)
+    assert not Ensembles(cfg)._running(task)                         # submit no longer holds it back
+
+
+def test_orca_task_cancelled_is_failed_not_timeout(tree, fake_sbatch, tmp_path, monkeypatch):
+    import os
+    import signal
+    import threading
+    from desc_utils.submit.cancel import cancelled_path
+    cfg = _frozen(tree, fake_sbatch)
+    key = tree["keys"]["CCO"]
+    prepare_molecule(cfg, key, "CCO")
+    slow = tmp_path / "orca_slow"
+    slow.write_text("#!/bin/bash\nexec sleep 30\n")
+    slow.chmod(slow.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "1002")
+    monkeypatch.setenv("SLURM_JOB_ID", "1003")
+
+    def term_soon():
+        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+
+    term_soon()
+    assert run_orca_conformer(cfg, key, "conf_1", orca_cmd=str(slow)) == "timeout"   # a walltime TERM
+    records.update_json(cancelled_path(tree["lib"]), {"1002": records.now()})
+    term_soon()
+    assert run_orca_conformer(cfg, key, "conf_2", orca_cmd=str(slow)) == "failed"
+    c2 = records.load_metadata(tree["lib"], key)["conformers"]["conf_2"]
+    assert c2["reason"] == "cancelled" and c2["wall_time_s"] > 0
