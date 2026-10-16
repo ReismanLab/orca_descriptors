@@ -227,3 +227,24 @@ def test_run_pins_openblas_to_one_thread(tmp_path):
                tmp_path, threads=4)
     assert proc.stdout.split() == ["1", "4,1"]
     assert "OPENBLAS_NUM_THREADS" not in os.environ or True  # the caller's environment is left untouched
+
+
+def test_n_confs_formula_of_rotatable_bonds():
+    from bceg.chem import rotatable_bonds
+    from bceg.search.base import n_confs_formula
+    from bceg.search.rdkit_etkdg import RDKitETKDG
+
+    assert n_confs_formula("(n_rot + 2) * 30", 3) == 150
+    assert n_confs_formula("min(300, 50 * 2 ** n_rot)", 4) == 300 and n_confs_formula("n_rot / 4", 0) == 1
+    # heavy-atom count: methyls and the chelate ring through Ni are not rotors
+    assert rotatable_bonds(Structure("CCCCO").mol) == 2
+    assert rotatable_bonds(Structure("[Ni]1(Cl)(Cl)<-N2=C(OCC2)C2=N->1CCO2", multiplicity=3).mol) == 0
+
+    s = RDKitETKDG(n_confs="(n_rot + 2) * 2", seed_offset=1)
+    assert s.params["n_confs"] == "(n_rot + 2) * 2" and s.n_confs(Structure("CCCCO")) == (8, 2)
+    result = s.run(Structure("CCCCO"), 1, Path("."))
+    assert len(result.conformers) == 8 and result.details["n_rot"] == 2 and result.details["n_confs"] == 8
+    assert RDKitETKDG(n_confs=5).compared_params()["n_confs"] == 5  # numbers unchanged (same params hash)
+    for bad in ("n + 2", "__import__('os')", "(n_rot"):
+        with pytest.raises(ValueError, match="n_confs formula"):
+            RDKitETKDG(n_confs=bad)

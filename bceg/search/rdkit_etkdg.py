@@ -19,7 +19,7 @@ class RDKitETKDG(Searcher):
 
     name = "rdkit_etkdg"
     defaults = {
-        "n_confs": 300,
+        "n_confs": 300,  # or a formula in the rotatable-bond count, e.g. "(n_rot + 2) * 30"
         "prune_rms": -1.0,
         "ff_optimize": "none",  # none | auto (MMFF94s if parametrised, else none) | MMFF94 | MMFF94s | UFF
         "max_iters": 2000,
@@ -43,14 +43,15 @@ class RDKitETKDG(Searcher):
         params.useMacrocycleTorsions = p["use_macrocycle_torsions"]
         params.useRandomCoords = p["use_random_coords"]
         params.enforceChirality = True
-        cids = list(AllChem.EmbedMultipleConfs(mol, numConfs=p["n_confs"], params=params))
+        n_confs, n_rot = self.n_confs(structure)
+        cids = list(AllChem.EmbedMultipleConfs(mol, numConfs=n_confs, params=params))
         chirality_fallback = False
         if not cids:
             # A stereocentre next to a metal in a rigid chelate (Ni-biox, Ni-bilm: three fused five-membered
             # rings) can fail ETKDG's tetrahedral-volume check on every attempt. Embed without it, then keep
             # only the conformers whose 3D stereo is the input's.
             params.enforceChirality = False
-            cids = _same_stereo(mol, list(AllChem.EmbedMultipleConfs(mol, numConfs=p["n_confs"], params=params)))
+            cids = _same_stereo(mol, list(AllChem.EmbedMultipleConfs(mol, numConfs=n_confs, params=params)))
             chirality_fallback = True
         if not cids:
             raise RuntimeError("ETKDG embedded no conformers")
@@ -77,7 +78,7 @@ class RDKitETKDG(Searcher):
         return SearchResult(
             confs,
             versions={"rdkit": rdkit.__version__},
-            details={"seed": self.seed(replicate), "ff_used": ff, "n_embedded": len(cids),
+            details={"seed": self.seed(replicate), "ff_used": ff, "n_rot": n_rot, "n_confs": n_confs, "n_embedded": len(cids),
                      "chirality_fallback": chirality_fallback},
         )
 

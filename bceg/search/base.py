@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import operator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -7,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from bceg import constraints as cons
+from bceg.chem import rotatable_bonds
 from bceg.geometry import make_start_geometry
 from bceg.params import Configurable
 from bceg.structure import Structure
@@ -28,6 +31,40 @@ START_DEFAULTS = {
 }
 START_RESOURCE_KEYS = {"xtb_executable"}
 
+# ``n_confs`` may be a number or a formula in the molecule's rotatable-bond count ``n_rot``
+# (bceg.chem.rotatable_bonds), e.g. "(n_rot + 2) * 30"; see n_confs_formula().
+_BINOPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
+           ast.FloorDiv: operator.floordiv, ast.Pow: operator.pow}
+_FUNCS = {"min": min, "max": max}
+
+
+def n_confs_formula(formula: str, n_rot: int) -> int:
+    """Evaluate an ``n_confs`` formula (numbers, ``n_rot``, + - * / // **, min, max), rounded to an int >= 1."""
+
+    def ev(node):
+        if isinstance(node, ast.Expression):
+            return ev(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return node.value
+        if isinstance(node, ast.Name) and node.id == "n_rot":
+            return n_rot
+        if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:
+            return _BINOPS[type(node.op)](ev(node.left), ev(node.right))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            return -ev(node.operand) if isinstance(node.op, ast.USub) else ev(node.operand)
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _FUNCS
+                and node.args and not node.keywords):
+            return _FUNCS[node.func.id](*(ev(a) for a in node.args))
+        raise ValueError(f"n_confs formula {formula!r}: unsupported expression {ast.unparse(node)!r} "
+                         f"(allowed: numbers, n_rot, + - * / // **, min, max)")
+
+    try:
+        tree = ast.parse(formula, mode="eval")
+    except SyntaxError as e:
+        raise ValueError(f"n_confs formula {formula!r}: {e.msg}") from None
+    return max(1, round(ev(tree)))
+
+
 # Searchers that honour geometric constraints during the search (CREST, GOAT); see bceg.constraints.
 CONSTRAINT_DEFAULTS = {"constraints": {}}  # freeze / bonds / angles / dihedrals selected by SMARTS, force_constant
 
@@ -48,7 +85,13 @@ class Searcher(Configurable):
     exact_constraints_only = False
 
     def __init__(self, **params: Any) -> None:
+        formula = params.get("n_confs") if isinstance(params.get("n_confs"), str) and "n_confs" in self.defaults else None
+        if formula is not None:
+            n_confs_formula(formula, 0)  # syntax check
+            params = {**params, "n_confs": self.defaults["n_confs"]}
         super().__init__(**params)
+        if formula is not None:
+            self.params["n_confs"] = formula
         if "constraints" in self.params:
             spec = cons.validate(self.params["constraints"], f"{self.name}.constraints")
             if self.exact_constraints_only and cons.has_force_constant(spec):
@@ -71,6 +114,12 @@ class Searcher(Configurable):
         if not self.params.get("constraints"):
             return None
         return cons.resolve(self.params["constraints"], structure.mol, coords)
+
+    def n_confs(self, structure: Structure) -> tuple[int, int]:
+        """(conformers to request, rotatable bonds of ``structure``); ``n_confs`` may be a formula in ``n_rot``."""
+        n_rot = rotatable_bonds(structure.mol)
+        n = self.params["n_confs"]
+        return (n_confs_formula(n, n_rot) if isinstance(n, str) else n), n_rot
 
     def has_start_step(self) -> bool:
         """True when this searcher starts from one pre-optimised geometry (CREST, GOAT, molassembler)."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdMolDescriptors
 
 # Elements treated as "organic" for applicability checks (LoQI, MMFF, ...)
 ORGANIC_ELEMENTS = {"H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Se", "Br", "I"}
@@ -102,3 +102,14 @@ def reorder_to_template(mol: Chem.Mol, template: Chem.Mol) -> list[int]:
     if len(match) != template.GetNumAtoms() or mol.GetNumAtoms() != template.GetNumAtoms():
         raise ValueError("Could not map generated structure onto the template atom order")
     return list(match)
+
+
+def rotatable_bonds(mol: Chem.Mol) -> int:
+    """RDKit's (strict) rotatable-bond count on the heavy-atom graph.
+
+    The hydrogens are removed first: with explicit H every methyl would count as a rotor. Bonds in
+    rings, including chelate rings through a metal, and dative bonds are not rotatable.
+    """
+    heavy = Chem.RemoveHs(mol, sanitize=False)
+    Chem.FastFindRings(heavy)
+    return rdMolDescriptors.CalcNumRotatableBonds(heavy)
