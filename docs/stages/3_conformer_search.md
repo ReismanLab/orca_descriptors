@@ -254,7 +254,7 @@ tetrahedral Ni) are perceived from the pre-refined start geometry, hence stage 2
 
 | `params` | Default | Meaning |
 |---|---|---|
-| `n_confs` | `100` | ensemble size requested |
+| `n_confs` | `100` | ensemble size requested: a number, or a [formula in `n_rot`](#n_confs-as-a-function-of-rotatable-bonds) |
 | `dg_config` | `{}` | attributes of `scine_molassembler.dg.Configuration` |
 | `fixed_start_seed` | `false` | `true`: one start geometry (seeded by `seed_offset`) for every replicate |
 | `seed_offset` | `0` | see above |
@@ -277,7 +277,7 @@ geometry: `pre_refinement` must be `none`.
 
 | `params` | Default | Meaning |
 |---|---|---|
-| `n_confs` | `300` | conformers embedded |
+| `n_confs` | `300` | conformers embedded: a number, or a [formula in `n_rot`](#n_confs-as-a-function-of-rotatable-bonds) |
 | `prune_rms` | `-1.0` | RMSD pruning threshold, Angstrom; negative = none |
 | `ff_optimize` | `none` | `none`, `auto` (MMFF94s if parametrised, else none), `MMFF94`, `MMFF94s`, `UFF` |
 | `max_iters` | `2000` | force-field iterations |
@@ -295,6 +295,25 @@ conformer_search:
   params: {n_confs: 300, ff_optimize: MMFF94s}
 ```
 
+### `n_confs` as a function of rotatable bonds
+
+For `molassembler`, `rdkit_etkdg` and `loqi`, `n_confs` can be a quoted formula in `n_rot`, the
+molecule's number of rotatable bonds, instead of a fixed number:
+
+```yaml
+conformer_search:
+  name: etkdg_rot30
+  searcher: rdkit_etkdg
+  params: {n_confs: "(n_rot + 2) * 30"}       # 0 rotors: 60, 3 rotors: 150
+```
+
+Allowed: numbers, `n_rot`, `+ - * / // **`, `min`, `max` (e.g. `"min(500, (n_rot + 2) * 30)"`); the
+result is rounded to an integer of at least 1. `n_rot` is RDKit's strict rotatable-bond count on the
+heavy-atom graph (`bceg.chem.rotatable_bonds`): methyl groups, bonds in rings (chelate rings through
+the metal included), amide C-N bonds and dative bonds are not counted. Each run records `n_rot` and the
+resulting `n_confs` in its `details`. The formula string is what enters the params hash, so a library
+run with `n_confs: 300` is not the same method as one run with a formula.
+
 ## `loqi`: LoQI conformer generator (organics only)
 
 Called through its CLI (`loqi sample`, the console script of the `loqi` pip package in the shared env);
@@ -305,7 +324,7 @@ searcher. No start geometry: `pre_refinement` must be `none`. The replicate seed
 
 | `params` | Default | Meaning |
 |---|---|---|
-| `n_confs` | `100` | conformers sampled |
+| `n_confs` | `100` | conformers sampled: a number, or a [formula in `n_rot`](#n_confs-as-a-function-of-rotatable-bonds) |
 | `model` | `loqi_flow_v1.1.0` | registered checkpoint (`loqi`, `loqi_flow`, `loqi_flow_v1.1.0`) or the path of a `.ckpt` file |
 | `config` | `null` | bundled config name or YAML path, only for a checkpoint outside the registry |
 | `steps` | `null` | sampling steps (`null`: the checkpoint's training value) |

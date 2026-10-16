@@ -20,7 +20,7 @@ from bceg.xyz import BOHR_TO_ANGSTROM, Conformer
 class Molassembler(Searcher):
     name = "molassembler"
     defaults = {
-        "n_confs": 100,
+        "n_confs": 100,  # or a formula in the rotatable-bond count, e.g. "(n_rot + 2) * 30"
         "dg_config": {},  # attributes of scine_molassembler.dg.Configuration
         "fixed_start_seed": False,
         **START_DEFAULTS,
@@ -51,13 +51,15 @@ class Molassembler(Searcher):
         config = masm.dg.Configuration()
         for k, v in self.params["dg_config"].items():
             setattr(config, k, v)
-        results = masm.dg.generate_ensemble(molecule, self.params["n_confs"], seed, config)
+        n_confs, n_rot = self.n_confs(structure)
+        results = masm.dg.generate_ensemble(molecule, n_confs, seed, config)
         confs = [Conformer(np.asarray(r) * BOHR_TO_ANGSTROM) for r in results if isinstance(r, np.ndarray)]
         if not confs:
             raise RuntimeError("Molassembler generated no conformers")
         return SearchResult(
             confs,
             versions={"scine_molassembler": getattr(masm, "__version__", "unknown")},
-            details={"seed": seed, "start_geometry": start, "n_failed": len(results) - len(confs)},
+            details={"seed": seed, "start_geometry": start, "n_rot": n_rot, "n_confs": n_confs,
+                     "n_failed": len(results) - len(confs)},
             log_files=[workdir / "start_geometry.xyz"],
         )
