@@ -163,8 +163,11 @@ Only what was imposed is kept, so that the bond lengths ETKDG got wrong (Sm-I at
 | another bond, angle or dihedral | `FixInternals` | `distance:` / `angle:` / `dihedral:` |
 
 xtb has no flat-bottom restraint (a harmonic one would bias Sm-I away from GFN2's 3.0 Angstrom), so with
-xtb an imposed atom that lets go of the metal rejects the seed: measured on 28 SmI2 complexes, an iodide
-left in 4 of 140 GFN2 runs (and in 3 of 140 UMA runs before the wall). Prefer `uma` for these complexes.
+xtb an imposed atom that lets go of the metal rejects the seed. Prefer `uma` for lanthanide complexes:
+measured on 28 L-SmI2 complexes (amino-alcohol/ether ligands, I-Sm-I imposed at 180,
+`allow_decoordination: true`, five seeds each, one attempt per seed), UMA gave an accepted start
+geometry for 140 of 140 seeds; GFN2 for 99 of 140, the others rejected for GFN2 artefacts at Sm
+(Sm...H contacts, broken C-H bonds) or a lost iodide.
 
 An atom held in two ways that do not combine (two planes, a plane and a line across it, a plane or line
 and an internal coordinate) is fixed outright with UMA. After the pre-optimisation the values are set
