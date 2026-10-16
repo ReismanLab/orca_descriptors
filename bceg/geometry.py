@@ -48,27 +48,32 @@ BOND_STRETCH_FACTOR = 1.35
 CLASH_FACTOR = 1.0
 
 
-def coordination_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[str]:
+def _coordination_issues(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[tuple]:
+    """(i, j, distance, +1 if too long / -1 if too short, message) of every problem pair."""
     pt = Chem.GetPeriodicTable()
     symbols = [a.GetSymbol() for a in mol.GetAtoms()]
     radii = np.array([pt.GetRcovalent(a.GetAtomicNum()) for a in mol.GetAtoms()])
     dist = np.linalg.norm(coords[:, None, :] - coords[None, :, :], axis=-1)
     bonded = Chem.GetAdjacencyMatrix(mol).astype(bool)
 
-    problems = []
+    issues = []
     for b in mol.GetBonds():
         i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
         d, label = dist[i, j], f"{symbols[i]}{i}-{symbols[j]}{j}"
         if symbols[i] not in ORGANIC_ELEMENTS or symbols[j] not in ORGANIC_ELEMENTS:
             if d > max_metal_ligand_distance:
-                problems.append(f"{label} {d:.2f} A > {max_metal_ligand_distance} A (decoordinated)")
+                issues.append((i, j, d, 1, f"{label} {d:.2f} A > {max_metal_ligand_distance} A (decoordinated)"))
         elif d > BOND_STRETCH_FACTOR * (radii[i] + radii[j]):
-            problems.append(f"{label} {d:.2f} A (bond broken)")
+            issues.append((i, j, d, 1, f"{label} {d:.2f} A (bond broken)"))
     iu = np.triu_indices(len(symbols), k=1)
     for i, j in zip(*iu):
         if not bonded[i, j] and dist[i, j] < CLASH_FACTOR * (radii[i] + radii[j]):
-            problems.append(f"{symbols[i]}{i}...{symbols[j]}{j} {dist[i, j]:.2f} A (non-bonded clash)")
-    return problems
+            issues.append((i, j, dist[i, j], -1, f"{symbols[i]}{i}...{symbols[j]}{j} {dist[i, j]:.2f} A (non-bonded clash)"))
+    return issues
+
+
+def coordination_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[str]:
+    return [issue[-1] for issue in _coordination_issues(mol, coords, max_metal_ligand_distance)]
 
 
 def connectivity_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[str]:
@@ -80,15 +85,27 @@ def connectivity_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_di
     return problems
 
 
-def new_problems(mol: Chem.Mol, reference: np.ndarray, max_metal_ligand_distance: float):
-    """``check(coords)``: the :func:`connectivity_problems` of ``coords`` that ``reference`` does not have
-    (by kind and atoms, not by distance). Imposing constraints must change nothing; an embedding's own
-    problems (ETKDG stretches some metal-ligand bonds) are the pre-optimisation's to fix, as without them."""
-    def key(problem: str) -> str:
-        return re.sub(r"\s[\d.]+ A(?: > [\d.]+ A)?", "", problem)
+#: Angstrom a pair must have moved the wrong way (closer for a clash, apart for a bond) since the reference to
+#: count as changed by imposing constraints; ETKDG's squeezed metal complexes sit right at the clash limit
+#: (M-O-C 1-3 pairs), where a 0.01 A wobble would otherwise reject the seed
+CHANGE_MARGIN = 0.1
 
-    before = {key(p) for p in connectivity_problems(mol, reference, max_metal_ligand_distance)}
-    return lambda coords: [p for p in connectivity_problems(mol, coords, max_metal_ligand_distance) if key(p) not in before]
+
+def new_problems(mol: Chem.Mol, reference: np.ndarray, max_metal_ligand_distance: float):
+    """``check(coords)``: the problems of ``coords`` that imposing constraints made, compared with
+    ``reference`` pair by pair: a pair past the limit and at least CHANGE_MARGIN further the wrong way than
+    in ``reference``, or an inverted stereocentre. Imposing constraints must change nothing; the
+    embedding's own problems (ETKDG squeezes or stretches metal-ligand bonds) are the pre-optimisation's
+    to fix, as without constraints."""
+    ref = np.asarray(reference, dtype=float)
+
+    def check(coords: np.ndarray) -> list[str]:
+        out = [msg for i, j, d, sign, msg in _coordination_issues(mol, coords, max_metal_ligand_distance)
+               if sign * (d - np.linalg.norm(ref[i] - ref[j])) > CHANGE_MARGIN]
+        if not stereo_matches(_with_coords(mol, coords)):
+            out.append("a stereocentre's configuration changed")
+        return out
+    return check
 
 
 def _with_coords(mol: Chem.Mol, coords: np.ndarray) -> Chem.Mol:

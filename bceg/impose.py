@@ -37,10 +37,14 @@ from bceg.chem import ORGANIC_ELEMENTS
 
 SNAP_TOLERANCE = {"bonds": 0.05, "angles": 3.0, "dihedrals": 3.0, "planes": 0.05}  # Angstrom, degrees, plane RMS
 FINAL_TOLERANCE = {"bonds": 0.01, "angles": 0.5, "dihedrals": 0.5, "planes": 0.01}
-K_BOND, K_13, K_REPULSION, K_TARGET = 1.0, 0.3, 10.0, 5.0  # network and restraint strengths (arbitrary units)
+K_BOND, K_13, K_REPULSION, K_TARGET = 1.0, 0.3, 10.0, 5.0
+K_METAL_BOND = 5.0  # network and restraint strengths (arbitrary units)
 REPULSION_MARGIN = 1.1  # non-bonded atoms are pushed apart below 1.1 x their covalent-radii sum (clash: 1.0 x)
+DONOR_ANGLE = 109.5  # degrees: an M-donor-C angle squeezed by ETKDG opens to at least this along the ramp
+MIN_LIGAND_ANGLE = 70.0  # degrees: an imposed angle's end is kept this far from the apex's other ligands
 K_STIFF = 1000.0  # the restraint replacing a rigid snap inside a ring
-SNAP_ROUNDS = 5  # a plane projection can disturb an angle that shares its atoms, and vice versa
+SNAP_ROUNDS = 5
+TERMINAL_SNAP = 30.0  # degrees: how far an angle with a single-atom end may be from its value before the snap  # a plane projection can disturb an angle that shares its atoms, and vice versa
 
 
 class ImposeError(RuntimeError):
@@ -92,10 +96,17 @@ def target_atoms(targets: dict) -> list[int]:
     return sorted({a for kind, t in _all_targets(targets) for a in (t if kind == "planes" else t["atoms"])})
 
 
-def _within(coords: np.ndarray, targets: dict, tolerance: dict) -> list[str]:
-    """Descriptions of the targets further than ``tolerance`` from their value (none: all reached)."""
+def _within(coords: np.ndarray, targets: dict, tolerance: dict, mol: Chem.Mol | None = None) -> list[str]:
+    """Descriptions of the targets further than ``tolerance`` from their value (none: all reached). With
+    ``mol``, an angle with a single-atom end (I-Sm-I) may be TERMINAL_SNAP off: the snap moves that atom
+    alone, and the connectivity is checked after it."""
+    def allowed(kind, t):
+        if mol is not None and kind == "angles" and any(mol.GetAtomWithIdx(a).GetDegree() == 1 for a in t["atoms"][::2]):
+            return max(tolerance[kind], TERMINAL_SNAP)
+        return tolerance[kind]
+
     return [f"{kind[:-1]} {t if kind == 'planes' else t['atoms']}: off by {deviation(coords, kind, t):.3f}"
-            for kind, t in _all_targets(targets) if deviation(coords, kind, t) > tolerance[kind]]
+            for kind, t in _all_targets(targets) if deviation(coords, kind, t) > allowed(kind, t)]
 
 
 # --------------------------------------------------------------------------- the elastic network
@@ -104,8 +115,9 @@ class Network:
 
     Bonds to a metal are the exception: ETKDG knows no metal radii (Sm-O 1.8, Sm-I 1.9 Angstrom where
     2.5 and 3.1 are right), so they go from their embedded length to the covalent-radii sum along the
-    ramp (:meth:`set_fraction`), and every 1-3 distance that includes such a bond (donor-M-donor, M-O-C)
-    follows at its embedded angle.
+    ramp (:meth:`set_fraction`); the 1-3 distances that include one follow, an M-donor-C angle opening
+    to at least DONOR_ANGLE. They are stiffer (K_METAL_BOND) than the other bonds, so that the repulsion
+    of crowded ligands does not stretch them.
     The pre-optimisation then refines them."""
 
     def __init__(self, mol: Chem.Mol, coords: np.ndarray, targets: dict) -> None:
@@ -119,10 +131,13 @@ class Network:
         # distances that the targets change are left to them: the bonds themselves, the ends of an angle,
         # the 1-3 distances inside a plane group (planarising a tetrahedron changes its angles)
         free = {tuple(sorted(t["atoms"])) for t in targets.get("bonds") or []}
+        target_bonds = set(free)
+        around = {}  # (ligand, ligand) of an apex -> the apex: no spring, but kept apart (below)
         for t in targets.get("angles") or []:  # the ends move around the apex, against its other ligands
             ends, apex = {t["atoms"][0], t["atoms"][2]}, t["atoms"][1]
             nbrs = {n.GetIdx() for n in mol.GetAtomWithIdx(apex).GetNeighbors()}
-            free |= {tuple(sorted((e, o))) for e in ends for o in nbrs if o != e}
+            around |= {tuple(sorted((e, o))): apex for e in ends for o in nbrs if o != e}
+        free |= set(around)
         for group in targets.get("planes") or []:
             g = set(group)
             free |= {p for p in pairs13 if set(p) <= g}
@@ -137,9 +152,12 @@ class Network:
         index = {tuple(p): n for n, p in enumerate(self.springs.tolist())}
         self.metal_bonds = np.array([index[b] for b in bonds if set(b) & metal], dtype=int)
         self.ideal = radii[self.springs[self.metal_bonds, 0]] + radii[self.springs[self.metal_bonds, 1]]
+        self.k[self.metal_bonds] = K_METAL_BOND
         self.embedded = self.d0[self.metal_bonds].copy()
-        # 1-3 distances with a bond to a metal on either side (donor-M-donor, M-donor-C) follow those bonds
-        # at their embedded angle: (1-3 spring, its two bond springs, cos of the angle)
+        # 1-3 distances that include a bond to a metal (donor-M-donor, M-donor-C) follow those bonds; an
+        # M-donor-C angle opens from the embedded one (ETKDG squeezes it along with the bond) to at least
+        # DONOR_ANGLE, a donor-M-donor angle keeps its embedded value:
+        # (1-3 spring, its two bond springs, start angle, end angle)
         self.through_metal = []
         metal_bond_rows = set(self.metal_bonds.tolist())
         for a, b in pairs13:
@@ -147,13 +165,27 @@ class Network:
                     & {nb.GetIdx() for nb in mol.GetAtomWithIdx(b).GetNeighbors()}:
                 ba, bb = index.get(tuple(sorted((a, m)))), index.get(tuple(sorted((b, m))))
                 if ba is not None and bb is not None and {ba, bb} & metal_bond_rows:
-                    self.through_metal.append((index[(a, b)], ba, bb, np.cos(np.radians(cons.angle(coords, a, m, b)))))
-        near = set(map(tuple, self.springs.tolist())) | free
+                    start_angle = cons.angle(coords, a, m, b)
+                    end_angle = start_angle if m in metal else max(start_angle, DONOR_ANGLE)
+                    self.through_metal.append((index[(a, b)], ba, bb, start_angle, end_angle))
+                    if m not in metal:  # the donor's own angle (M-N-C): as stiff as the metal bond it opens with
+                        self.k[index[(a, b)]] = K_METAL_BOND
+        # every pair without a spring is kept apart, the freed ones included (an angle's end must not slide
+        # onto the apex's other ligands); only a bond the targets set is left to its target
+        near = set(map(tuple, self.springs.tolist())) | target_bonds
         iu = [(i, j) for i in range(n) for j in range(i + 1, n) if (i, j) not in near]
         self.nonbonded = np.array(iu, dtype=int).reshape(-1, 2)
         start = np.linalg.norm(coords[self.nonbonded[:, 0]] - coords[self.nonbonded[:, 1]], axis=1)
         # kept a margin beyond the covalent-radii sum (the clash criterion), or where they are when closer
         self.rmin = np.minimum(REPULSION_MARGIN * (radii[self.nonbonded[:, 0]] + radii[self.nonbonded[:, 1]]), start)
+        # an imposed angle's end and the apex's other ligands: at least MIN_LIGAND_ANGLE apart as seen
+        # from the apex, at the bond lengths the ramp is heading for (a cis angle at a metal is rarely
+        # below 60-70 degrees)
+        for row, (a, b) in enumerate(self.nonbonded.tolist()):
+            apex = around.get((a, b))
+            if apex is not None:
+                ra, rb = radii[a] + radii[apex], radii[b] + radii[apex]
+                self.rmin[row] = np.sqrt(ra ** 2 + rb ** 2 - 2 * ra * rb * np.cos(np.radians(MIN_LIGAND_ANGLE)))
 
     def start_from(self, x: np.ndarray) -> None:
         """The ramp of the metal bonds starts from their lengths in ``x`` (after :func:`place_axial`)."""
@@ -164,8 +196,9 @@ class Network:
     def set_fraction(self, frac: float) -> None:
         """Metal bonds ``frac`` of the way to the covalent-radii sum, the 1-3 distances through them along."""
         self.d0[self.metal_bonds] = self.embedded + frac * (self.ideal - self.embedded)
-        for n, ba, bb, cos in self.through_metal:
+        for n, ba, bb, start_angle, end_angle in self.through_metal:
             r1, r2 = self.d0[ba], self.d0[bb]
+            cos = np.cos(np.radians(start_angle + frac * (end_angle - start_angle)))
             self.d0[n] = np.sqrt(max(r1 ** 2 + r2 ** 2 - 2 * r1 * r2 * cos, 1e-6))
 
     def ideal_length(self, a: int, b: int) -> float | None:
@@ -555,7 +588,7 @@ def impose(mol: Chem.Mol, coords: np.ndarray, targets: dict, held: list[int], st
         if problems:
             raise ImposeError(f"ramp step {s}/{steps} changed the connectivity: {problems}")
     info["after_ramp"] = values(x, targets)
-    far = _within(x, targets, SNAP_TOLERANCE)
+    far = _within(x, targets, SNAP_TOLERANCE, mol)
     if far:
         raise ImposeError(f"after the {steps}-step ramp some targets are beyond the snap tolerance: {far}")
 
