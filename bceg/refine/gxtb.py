@@ -13,9 +13,9 @@ from pathlib import Path
 
 from bceg.external import find_executable, resolve_threads, run
 from bceg.layout import check_name
-from bceg.refine.base import RefineResult, Refiner
+from bceg.refine.base import REFINER_CONSTRAINT_DEFAULTS, RefineResult, Refiner
 from bceg.structure import Structure
-from bceg.xtb import OPT_LEVELS, xtb_identity
+from bceg.xtb import OPT_LEVELS, fix_input, xtb_identity
 from bceg.xyz import Conformer, read_xyz, write_xyz
 
 _ENERGY = re.compile(r"TOTAL ENERGY\s+(-?\d+\.\d+)\s+Eh")
@@ -33,6 +33,7 @@ class GXTB(Refiner):
         "lot": "gxtb",  # label used in raw_<i>_<lot>.xyz
         "executable": "xtb",  # the g-xTB build of xtb: a name on PATH or an absolute path
         "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
+        **REFINER_CONSTRAINT_DEFAULTS,
     }
     resource_keys = {"executable", "threads"}
 
@@ -55,12 +56,13 @@ class GXTB(Refiner):
         exe = find_executable(self.params["executable"])
         _, version = xtb_identity(exe)
         threads = resolve_threads(self.params["threads"])
+        fixed = self.fixed_atoms(structure)
         out, n_unconverged = [], 0
         for i, conf in enumerate(conformers):
             sub = workdir / f"conf_{i}"
             sub.mkdir(parents=True, exist_ok=True)
             write_xyz(sub / "start.xyz", structure.elements, [Conformer(conf.coords)])
-            proc = run(self.command(structure, exe), sub, threads=threads, log_name="xtb.out")
+            proc = run(self.command(structure, exe) + fix_input(sub, fixed), sub, threads=threads, log_name="xtb.out")
             if _UNKNOWN_FLAG.search(proc.stdout):
                 raise RuntimeError(
                     f"{exe} does not know --gxtb: it is not the g-xTB build of xtb (https://github.com/grimme-lab/g-xTB). "
@@ -88,5 +90,6 @@ class GXTB(Refiner):
         return RefineResult(
             out,
             versions={"xtb": version or "unknown"},
-            details={"executable": exe, "n_input": len(conformers), "n_unconverged": n_unconverged},
+            details={"executable": exe, "n_input": len(conformers), "n_unconverged": n_unconverged}
+            | ({"fixed_atoms": fixed} if fixed else {}),
         )

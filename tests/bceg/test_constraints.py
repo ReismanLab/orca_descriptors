@@ -96,7 +96,7 @@ def test_selection_matching_nothing(nih2):
     ({"freeze": [{"element": "Ni", "value": 1.0}]}, "not freeze"),
     ({"bonds": ["[Ni]"]}, "selecting 2 atoms"),
     ({"angles": ["[Ni:1]~[#7:2]"]}, "selecting 3 atoms"),
-    ({"bonds": [{"smarts": "[Ni]~[#7]", "neighbors": 1}]}, "freeze only"),
+    ({"bonds": [{"smarts": "[Ni]~[#7]", "neighbors": 1}]}, "freeze and planes only"),
     ({"force_constant": 0}, "positive number"),
     ({"bonds": [{"smarts": "[Ni]~[#7]", "force_constant": "strong"}]}, "positive number"),
 ])

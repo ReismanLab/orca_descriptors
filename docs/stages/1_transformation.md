@@ -73,6 +73,49 @@ transformation:
   multiplicity: 3
 ```
 
+### `metal_x.py`: ligand to L-M(X)n, e.g. L-SmI2 (shipped with bceg)
+
+Binds every donor atom of the ligand (every match of `donors`) datively to one metal, which also carries
+`n_x` anionic X; the metal gets the formal charge `n_x`, each X -1, so the complex is neutral. The
+denticity is the number of donors matched: two for a bipyridine or a glyme, three for a terpyridine, five
+for 15-crown-5. A ligand with fewer than `min_donors` (or more than `max_donors`) is skipped
+(`not_applicable`). The SMILES file holds the ligands: their InChIKeys name the molecules (RDKit's InChI
+gives no key for a complex with dative bonds to a lanthanide, so the complex cannot be the input).
+
+| `params` | Default | Values |
+|---|---|---|
+| `metal` | `Sm` | element symbol |
+| `x` | `I` | `H`, `F`, `Cl`, `Br`, `I` |
+| `n_x` | `2` | number of X |
+| `donors` | `[n;X2,$([N;X2]=[#6])]` | SMARTS of the donor atoms (pyridine-type and imine N by default); with atom maps only the mapped atoms count: `"[O;X2]"` for ethers, `"[O;X1:1]=P"` for the O of HMPA |
+| `min_donors` | `1` | fewer donors: skipped |
+| `max_donors` | `null` | more donors: skipped |
+
+```yaml
+transformation:
+  name: SmI2
+  script: metal_x.py
+  params: {metal: Sm, x: I, n_x: 2}         # N donors; donors: "[O;X2]" for glymes and crown ethers
+  multiplicity: 7                            # Sm(II), f6
+```
+
+Amino-alcohol and ether ligands bind through their tertiary amines, pyridyl N, and every alcohol or
+alkyl-ether O two carbons from an N donor (OH, OMe, OPr, a methoxyethyl arm, the inner O of a MOM
+acetal; not an aryl ether such as an anisyl OMe):
+
+```yaml
+donors: "[$([NX3;!a;!$(N[C,S]=O);!$(Nc)]),$([nX2]),$([OX2;!$(O[a]);$(O[CX4][CX4][NX3,nX2])])]"
+```
+
+This gives O,N,N,O for the N,N'-dibenzyl-ethylenediamine (and cyclohexanediamine, stilbenediamine,
+bipyrrolidine) bis(amino alcohol/ether) ligands, O,N,O for their one-N analogues and N,N,N,O with a
+pyridylmethyl or dimethylaminoethyl arm.
+
+The geometry around the metal is not set here. For a linear I-Sm-I, impose it with
+`pre_refinement: constrained` ([2_pre_refinement.md](2_pre_refinement.md#imposing-constraints)).
+Measured on ten ETKDG seeds each, the imposition succeeds for every seed with bipyridine,
+terpyridine, 15-crown-5 and 28 of those amino-alcohol/ether ligands.
+
 ### Your own script
 
 A file next to the YAML (or anywhere, with an absolute path) defining:

@@ -11,6 +11,13 @@ pre-optimised with xtb (``start_preopt: gfn2 | gfn1 | gfn0 | gfnff``) or with UM
 A rejected geometry is re-embedded with the next seed (``seed + attempt * 10007``),
 so the result is deterministic per replicate.
 
+With ``start_constraints`` (``pre_refinement: constrained``) the searcher's ``constraints`` are imposed
+on each embedding before the pre-optimisation (bceg.impose: a gradual ramp, then an exact snap). The
+pre-optimisation keeps what was imposed (planes, linear angles, values: bceg.impose.holds) and relaxes
+everything else, bond lengths included; the values are snapped exact once more after it. During the imposition the connectivity and the stereocentres
+must not change from the embedding's; after the pre-optimisation they must pass outright. Otherwise the
+seed is rejected.
+
 The full pre-optimisation (``start_preopt_level: normal``) takes rigid chelates
 (e.g. bpy-NiF2) to the same minimum from every seed. This is accepted: the N-Ni-N bite
 angle varies between ligands but should be consistent for one ligand, and replicate
@@ -20,6 +27,7 @@ embedding and the geometry at each metal (angles, ``tau4``) for monitoring.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -27,38 +35,78 @@ from rdkit import Chem
 from rdkit.Chem import rdMolAlign
 from rdkit.Geometry import Point3D
 
-from bceg.chem import ORGANIC_ELEMENTS, embed
+from bceg import constraints as cons
+from bceg.chem import ORGANIC_ELEMENTS, embed, stereo_matches
 from bceg.external import resolve_threads
+from bceg.impose import ImposeError, holds, impose, off_targets, snap, target_atoms, values, xtb_restraints
 from bceg.structure import Structure
 from bceg.xtb import xtb_identity, xtb_optimize
 from bceg.xyz import Conformer
 
 SEED_STRIDE = 10007
+WALL_MARGIN = 0.3  # Angstrom below max_metal_ligand_distance where an imposed atom's bond to a metal meets its wall
 BOND_STRETCH_FACTOR = 1.35
 CLASH_FACTOR = 1.0
 
 
-def coordination_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[str]:
+def _coordination_issues(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[tuple]:
+    """(i, j, distance, +1 if too long / -1 if too short, message) of every problem pair."""
     pt = Chem.GetPeriodicTable()
     symbols = [a.GetSymbol() for a in mol.GetAtoms()]
     radii = np.array([pt.GetRcovalent(a.GetAtomicNum()) for a in mol.GetAtoms()])
     dist = np.linalg.norm(coords[:, None, :] - coords[None, :, :], axis=-1)
     bonded = Chem.GetAdjacencyMatrix(mol).astype(bool)
 
-    problems = []
+    issues = []
     for b in mol.GetBonds():
         i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
         d, label = dist[i, j], f"{symbols[i]}{i}-{symbols[j]}{j}"
         if symbols[i] not in ORGANIC_ELEMENTS or symbols[j] not in ORGANIC_ELEMENTS:
             if d > max_metal_ligand_distance:
-                problems.append(f"{label} {d:.2f} A > {max_metal_ligand_distance} A (decoordinated)")
+                issues.append((i, j, d, 1, f"{label} {d:.2f} A > {max_metal_ligand_distance} A (decoordinated)"))
         elif d > BOND_STRETCH_FACTOR * (radii[i] + radii[j]):
-            problems.append(f"{label} {d:.2f} A (bond broken)")
+            issues.append((i, j, d, 1, f"{label} {d:.2f} A (bond broken)"))
     iu = np.triu_indices(len(symbols), k=1)
     for i, j in zip(*iu):
         if not bonded[i, j] and dist[i, j] < CLASH_FACTOR * (radii[i] + radii[j]):
-            problems.append(f"{symbols[i]}{i}...{symbols[j]}{j} {dist[i, j]:.2f} A (non-bonded clash)")
+            issues.append((i, j, dist[i, j], -1, f"{symbols[i]}{i}...{symbols[j]}{j} {dist[i, j]:.2f} A (non-bonded clash)"))
+    return issues
+
+
+def coordination_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[str]:
+    return [issue[-1] for issue in _coordination_issues(mol, coords, max_metal_ligand_distance)]
+
+
+def connectivity_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[str]:
+    """:func:`coordination_problems` plus the tetrahedral stereocentres: a geometry whose 3D configuration
+    disagrees with the graph's (an inversion pushed through by imposing constraints) is a problem too."""
+    problems = coordination_problems(mol, coords, max_metal_ligand_distance)
+    if not stereo_matches(_with_coords(mol, coords)):
+        problems.append("a stereocentre's configuration changed")
     return problems
+
+
+#: Angstrom a pair must have moved the wrong way (closer for a clash, apart for a bond) since the reference to
+#: count as changed by imposing constraints; ETKDG's squeezed metal complexes sit right at the clash limit
+#: (M-O-C 1-3 pairs), where a 0.01 A wobble would otherwise reject the seed
+CHANGE_MARGIN = 0.1
+
+
+def new_problems(mol: Chem.Mol, reference: np.ndarray, max_metal_ligand_distance: float):
+    """``check(coords)``: the problems of ``coords`` that imposing constraints made, compared with
+    ``reference`` pair by pair: a pair past the limit and at least CHANGE_MARGIN further the wrong way than
+    in ``reference``, or an inverted stereocentre. Imposing constraints must change nothing; the
+    embedding's own problems (ETKDG squeezes or stretches metal-ligand bonds) are the pre-optimisation's
+    to fix, as without constraints."""
+    ref = np.asarray(reference, dtype=float)
+
+    def check(coords: np.ndarray) -> list[str]:
+        out = [msg for i, j, d, sign, msg in _coordination_issues(mol, coords, max_metal_ligand_distance)
+               if sign * (d - np.linalg.norm(ref[i] - ref[j])) > CHANGE_MARGIN]
+        if not stereo_matches(_with_coords(mol, coords)):
+            out.append("a stereocentre's configuration changed")
+        return out
+    return check
 
 
 def _with_coords(mol: Chem.Mol, coords: np.ndarray) -> Chem.Mol:
@@ -105,7 +153,7 @@ def _uma_preoptimizer(params: dict):
     from bceg.refine.ase_opt import package_version
     from bceg.refine.uma import UMA
 
-    allowed = set(UMA.defaults) - {"lot", "keep_unconverged", "workers"}  # one geometry: no pool
+    allowed = set(UMA.defaults) - {"lot", "keep_unconverged", "workers", "constraints"}  # one geometry: no pool
     unknown = set(params["start_preopt_params"]) - allowed
     if unknown:
         raise ValueError(f"start_preopt_params: unknown UMA parameter(s) {sorted(unknown)}; allowed: {sorted(allowed)}")
@@ -116,6 +164,9 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
     """Return (coords, info) following the start_* parameters of a searcher."""
     rejected = []
     preopt = params["start_preopt"]
+    spec = params.get("constraints") if params.get("start_constraints") else None
+    targets = cons.targets(spec, structure.mol) if spec else None
+
     # which program ran is not in the params hash (xtb_executable is a resource key), so record it here
     uma = None
     if preopt == "uma":
@@ -139,9 +190,27 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
         else:
             raise ValueError(f"Unknown start_geometry {params['start_geometry']!r}")
 
-        energy, embedded = None, coords
+        energy, embedded, imposed, hold = None, coords, None, None
+        if spec:
+            try:
+                check = new_problems(structure.mol, coords, params["max_metal_ligand_distance"])
+                coords, imposed = impose(structure.mol, coords, targets, target_atoms(targets),
+                                         steps=params["start_impose_steps"], check=check)
+            except ImposeError as exc:
+                rejected.append({"seed": s, "stage": "imposed", "problems": [str(exc)]})
+                if params["start_geometry"] == "input":
+                    break
+                continue
+            hold = holds(coords, targets)  # the pre-optimisation keeps these and relaxes the rest, bonds included
+            # the imposed atoms' own bonds to a metal (Sm-I of I-Sm-I) must not break: a flat-bottom wall (UMA)
+            held = set(target_atoms(targets))
+            hold["walls"] = [{"atoms": [b.GetBeginAtomIdx(), b.GetEndAtomIdx()],
+                              "max": params["max_metal_ligand_distance"] - WALL_MARGIN}
+                             for b in structure.mol.GetBonds()
+                             if {b.GetBeginAtomIdx(), b.GetEndAtomIdx()} <= held
+                             and not {b.GetBeginAtom().GetSymbol(), b.GetEndAtom().GetSymbol()} <= ORGANIC_ELEMENTS]
         if uma is not None:
-            result = uma.run(structure, [Conformer(coords)], workdir / f"preopt_{attempt}")
+            result = uma.run(structure, [Conformer(coords)], workdir / f"preopt_{attempt}", **({"holds": hold} if hold else {}))
             if not result.conformers:
                 raise RuntimeError("UMA pre-optimisation returned no geometry")
             coords, energy = np.asarray(result.conformers[0].coords), result.conformers[0].energy
@@ -149,10 +218,40 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
             coords, energy = xtb_optimize(
                 structure.elements, coords, structure.charge, structure.uhf, workdir / f"preopt_{attempt}",
                 method=preopt, level=params["start_preopt_level"],
-                executable=params["xtb_executable"], threads=resolve_threads(params.get("threads", params.get("nprocs"))))
-        problems = coordination_problems(structure.mol, coords, params["max_metal_ligand_distance"])
+                executable=params["xtb_executable"], threads=resolve_threads(params.get("threads", params.get("nprocs"))),
+                restraints=xtb_restraints(coords, hold) if hold else None)
+        if spec:
+            # UMA keeps the holds exactly, xtb's restraints nearly: the exact values once more, a small move
+            imposed["after_preopt"] = values(coords, targets)
+            far = off_targets(coords, targets)
+            if far:
+                rejected.append({"seed": s, "stage": "preopt", "problems": [f"the pre-optimisation left {far}"]})
+                if params["start_geometry"] == "input":
+                    break
+                continue
+            coords = snap(structure.mol, coords, targets)
+        # start_allow_decoordination: a stretched metal-ligand bond is recorded, unless it is one of the
+        # imposed atoms' (I-Sm of I-Sm-I), which must hold
+        decoordinated = []
+        if spec or params.get("start_allow_decoordination"):
+            strict = set(target_atoms(targets)) if spec else set()
+            problems = []
+            for i, j, d, sign, msg in _coordination_issues(structure.mol, coords, params["max_metal_ligand_distance"]):
+                if params.get("start_allow_decoordination") and "decoordinated" in msg and not {i, j} <= strict:
+                    decoordinated.append(msg)
+                else:
+                    problems.append(msg)
+        else:
+            problems = coordination_problems(structure.mol, coords, params["max_metal_ligand_distance"])
+        if spec:
+            if not stereo_matches(_with_coords(structure.mol, coords)):
+                problems.append("a stereocentre's configuration changed")
+            problems += off_targets(coords, targets, final=True)
         if not problems:
-            return coords, {
+            extra = {"imposed": imposed | {"preopt_holds": hold}} if spec else {}
+            if params.get("start_allow_decoordination"):
+                extra["decoordinated"] = decoordinated
+            return coords, extra | {
                 "source": source, "seed": s, "attempts": attempt + 1, "preopt": preopt,
                 "preopt_level": params["start_preopt_params"] if preopt == "uma" else params["start_preopt_level"],
                 "preopt_energy": energy, "rejected": rejected,
@@ -160,7 +259,7 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
                 "rmsd_preopt_vs_embedded": round(heavy_atom_rmsd(structure.mol, embedded, coords), 3),
                 "metal_geometry": metal_geometry(structure.mol, coords),
             }
-        rejected.append({"seed": s, "problems": problems})
+        rejected.append({"seed": s, "problems": problems} | ({"stage": "preopt"} if spec else {}))
         if params["start_geometry"] == "input":
             break
     raise RuntimeError(f"No acceptable start geometry after {len(rejected)} attempt(s): {rejected}")

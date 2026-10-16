@@ -62,15 +62,63 @@ def threads_per_worker(threads: int | None, workers: int) -> int:
     return resolve_threads(None) if workers == 1 else max(1, allocated_cpus() // workers)
 
 
+# ---------------------------------------------------------------------------------------- constraints
+WALL_K = 10.0  # eV/A^2 of the flat-bottom walls that keep an imposed angle's bonds to a metal from breaking
+
+
+def ase_constraints(fixed=(), holds: dict | None = None) -> list:
+    """ASE constraints for atoms ``fixed`` in place and for bceg.impose.holds: plane atoms move only within
+    their plane (FixedPlane), the atoms of a linear angle only along its line (FixedLine), the other imposed
+    values are kept by FixInternals, and a bond in ``walls`` is pulled back only beyond its ``max`` (Hookean). An atom held in two ways that do not combine (two planes; a plane and
+    a line across it; a line or plane and an internal coordinate) is fixed outright."""
+    from ase.constraints import FixAtoms, FixedLine, FixedPlane, FixInternals, Hookean
+
+    fixed = set(fixed)
+    out = []
+    if holds:
+        # flat-bottom walls first (Hookean adds its force, the line / plane constraints then project it)
+        out += [Hookean(w["atoms"][0], w["atoms"][1], k=WALL_K, rt=w["max"]) for w in holds.get("walls") or []]
+        lines = {a: line for line in holds["lines"] for a in line["atoms"]}
+        planes: dict[int, list] = {}
+        for plane in holds["planes"]:
+            for a in plane["atoms"]:
+                planes.setdefault(a, []).append(plane)
+        internal = {a for kind in ("bonds", "angles", "dihedrals") for t in holds[kind] for a in t["atoms"]}
+        for a in set(lines) | set(planes):
+            across = a in lines and a in planes and abs(np.dot(lines[a]["direction"], planes[a][0]["normal"])) > 1e-6
+            if len(planes.get(a, [])) > 1 or across or a in internal:
+                fixed.add(a)
+        for line in holds["lines"]:
+            free = [a for a in line["atoms"] if a not in fixed]
+            if free:
+                out.append(FixedLine(free, line["direction"]))
+        for plane in holds["planes"]:
+            free = [a for a in plane["atoms"] if a not in fixed and a not in lines]  # a line inside the plane wins
+            if free:
+                out.append(FixedPlane(free, plane["normal"]))
+        if internal:
+            out.append(FixInternals(bonds=[[t["value"], t["atoms"]] for t in holds["bonds"]],
+                                    angles_deg=[[t["value"], t["atoms"]] for t in holds["angles"]],
+                                    dihedrals_deg=[[t["value"], t["atoms"]] for t in holds["dihedrals"]]))
+    if fixed:
+        out.insert(0, FixAtoms(indices=sorted(fixed)))  # get_forces() then zeroes them
+    return out
+
+
 # ---------------------------------------------------------------------------------------- one conformer
 def _optimize(calc, structure: Structure, i: int, coords: np.ndarray, workdir: Path, *,
-              optimizer: str, fmax: float, max_steps: int) -> dict[str, Any]:
-    """Optimise one conformer with ``calc``; returns the geometry, the energy in eV, the residual force
-    and the number of steps. ``converged`` is decided by the caller."""
+              optimizer: str, fmax: float, max_steps: int, fixed: list[int] = (),
+              holds: dict | None = None) -> dict[str, Any]:
+    """Optimise one conformer with ``calc``, the atoms ``fixed`` held in place and the ``holds`` of an
+    imposed geometry kept (see :func:`ase_constraints`); returns the geometry, the energy in eV, the
+    residual force (with the constraints applied) and the number of steps. ``converged`` is decided by
+    the caller."""
     from ase import Atoms, optimize
 
     atoms = Atoms(symbols=structure.elements, positions=coords)
     atoms.info.update(charge=structure.charge, spin=structure.multiplicity)
+    if fixed or holds:
+        atoms.set_constraint(ase_constraints(fixed, holds))
     atoms.calc = calc
     opt = getattr(optimize, optimizer)(atoms, logfile=str(workdir / f"opt_{i}.log"))
     opt.run(fmax=fmax, steps=max_steps)
@@ -156,7 +204,7 @@ def _kill_workers(before: set) -> None:
 
 # ---------------------------------------------------------------------------------------- the loop
 def optimize_conformers(refiner, structure: Structure, conformers: list[Conformer], workdir: Path, *,
-                        versions: dict[str, Any]) -> RefineResult:
+                        versions: dict[str, Any], holds: dict | None = None) -> RefineResult:
     """Optimise every conformer with the refiner's ASE calculator; energies come back in Hartree.
 
     ``refiner.params`` supplies ``optimizer`` (a class of ``ase.optimize``: LBFGS, BFGS, FIRE), ``fmax``,
@@ -166,7 +214,9 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
     ``details`` record ``workers`` and ``threads`` (per worker) as resolved.
     """
     p = refiner.params
-    settings = {"optimizer": p["optimizer"], "fmax": p["fmax"], "max_steps": p["max_steps"]}
+    fixed = refiner.fixed_atoms(structure)
+    settings = {"optimizer": p["optimizer"], "fmax": p["fmax"], "max_steps": p["max_steps"], "fixed": fixed,
+                "holds": holds}
     workers = resolve_workers(p["workers"], p["device"], len(conformers))
     threads = threads_per_worker(p["threads"], workers)
     workdir.mkdir(parents=True, exist_ok=True)   # e.g. preopt_<attempt> of start_preopt: uma
@@ -187,4 +237,4 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
                               "source_index": r["index"]}))
     return RefineResult(out, versions=versions,
                         details={"n_input": len(conformers), "n_unconverged": n_unconverged,
-                                 "workers": workers, "threads": threads})
+                                 "workers": workers, "threads": threads} | ({"fixed_atoms": fixed} if fixed else {}))

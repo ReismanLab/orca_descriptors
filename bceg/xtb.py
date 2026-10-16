@@ -38,10 +38,40 @@ def xtb_identity(executable: str = "xtb") -> tuple[str | None, str | None]:
     return exe, _version_of(exe)
 
 
+def fix_input(workdir: Path, fixed: list[int] | None) -> list[str]:
+    """Write ``xcontrol`` fixing the atoms ``fixed`` (0-based; xtb counts from 1) and return the ``--input``
+    arguments that read it; nothing without fixed atoms.
+
+    ``$fix`` holds the atoms exactly only with the L-BFGS (or FIRE) optimiser: xtb 6.7.1's default ANCopt
+    ignores it without a word (measured on bipy-NiH2: the "fixed" first shell moved by 2 A). Restraining
+    the distances within the group (``$constrain atoms:``) does not hold a plane or a linear angle either:
+    bending out of the plane changes those distances only to second order."""
+    if not fixed:
+        return []
+    (workdir / "xcontrol").write_text("$fix\n   atoms: " + ",".join(str(i + 1) for i in fixed)
+                                      + "\n$opt\n   engine=lbfgs\n$end\n")
+    return ["--input", "xcontrol"]
+
+
+#: Eh/Bohr^2 (distances) or Eh/rad^2 of the restraints on an imposed geometry (xtb's default is 0.5)
+RESTRAINT_FORCE_CONSTANT = 2.0
+
+
+def restraint_input(workdir: Path, restraints: list[str] | None) -> list[str]:
+    """Write ``xcontrol`` with a ``$constrain`` block of ``restraints`` (``distance: i,j,d`` / ``angle: ...``
+    / ``dihedral: ...``, 1-based) and return the ``--input`` arguments that read it; nothing without any."""
+    if not restraints:
+        return []
+    body = "".join(f"   {line}\n" for line in restraints)
+    (workdir / "xcontrol").write_text(f"$constrain\n   force constant={RESTRAINT_FORCE_CONSTANT}\n{body}$end\n")
+    return ["--input", "xcontrol"]
+
+
 def xtb_optimize(elements: list[str], coords: np.ndarray, charge: int, uhf: int, workdir: Path,
                  method: str = "gfn2", level: str = "normal", executable: str = "xtb",
-                 threads: int = 1) -> tuple[np.ndarray, float | None]:
-    """Optimise one geometry with xtb; returns (coords, energy in Hartree)."""
+                 threads: int = 1, restraints: list[str] | None = None) -> tuple[np.ndarray, float | None]:
+    """Optimise one geometry with xtb, under the ``$constrain`` ``restraints`` lines when given (see
+    :func:`restraint_input`); returns (coords, energy in Hartree)."""
     if method not in METHOD_FLAGS:
         raise ValueError(f"Unknown xtb method {method!r}; choose from {sorted(METHOD_FLAGS)}")
     if level not in OPT_LEVELS:
@@ -50,6 +80,7 @@ def xtb_optimize(elements: list[str], coords: np.ndarray, charge: int, uhf: int,
     workdir.mkdir(parents=True, exist_ok=True)
     write_xyz(workdir / "start.xyz", elements, [Conformer(coords)])
     cmd = [exe, "start.xyz", "--opt", level, *METHOD_FLAGS[method], "--chrg", str(charge), "--uhf", str(uhf)]
+    cmd += restraint_input(workdir, restraints)
     proc = run(cmd, workdir, threads=threads, log_name="xtb.out")
     out = workdir / "xtbopt.xyz"
     if proc.returncode != 0 or not out.exists():

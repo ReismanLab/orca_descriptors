@@ -27,6 +27,7 @@ START_DEFAULTS = {
     "start_preopt_params": {},  # for start_preopt: uma, the UMA refiner's parameters (model, task, fmax, max_steps, ...)
     "max_metal_ligand_distance": 2.5,  # Angstrom; longer bonds to a metal reject the start geometry
     "start_max_attempts": 10,  # re-embeddings (new seeds) before giving up
+    "start_allow_decoordination": False,  # True: a metal-ligand bond longer than max_metal_ligand_distance is recorded, not rejected
     "xtb_executable": "xtb",
 }
 START_RESOURCE_KEYS = {"xtb_executable"}
@@ -66,7 +67,13 @@ def n_confs_formula(formula: str, n_rot: int) -> int:
 
 
 # Searchers that honour geometric constraints during the search (CREST, GOAT); see bceg.constraints.
-CONSTRAINT_DEFAULTS = {"constraints": {}}  # freeze / bonds / angles / dihedrals selected by SMARTS, force_constant
+CONSTRAINT_DEFAULTS = {
+    "constraints": {},  # freeze / bonds / angles / dihedrals / planes selected by SMARTS, force_constant
+    "start_constraints": False,  # impose the constraints on the start geometry, held fixed in its pre-optimisation
+    "start_impose_steps": 10,  # steps of the ramp that brings the start geometry onto the imposed values
+}
+#: compared only when start_constraints is on, so that the hash of every other search is unchanged
+START_CONSTRAINT_KEYS = ("start_constraints", "start_impose_steps")
 
 
 @dataclass
@@ -97,16 +104,27 @@ class Searcher(Configurable):
             if self.exact_constraints_only and cons.has_force_constant(spec):
                 raise ValueError(f"{self.name}.constraints: the constraints of {self.name} are exact, "
                                  f"remove `force_constant`")
+            if self.params["start_constraints"] and not spec:
+                raise ValueError(f"{self.name}.start_constraints: there are no constraints to impose")
+            if self.params["start_impose_steps"] < 1:
+                raise ValueError(f"{self.name}.start_impose_steps must be at least 1")
 
     @classmethod
     def supports_constraints(cls) -> bool:
         return "constraints" in cls.defaults
 
     def compared_params(self) -> dict[str, Any]:
-        """No ``constraints`` key when there are none, so the hash of an unconstrained search is unchanged."""
+        """No ``constraints`` key when there are none, no ``start_constraints`` / ``start_impose_steps`` unless
+        the constraints are imposed, and no ``start_allow_decoordination`` unless it is on, so the hash of
+        every search without them is unchanged."""
         out = super().compared_params()
         if "constraints" in out and not out["constraints"]:
             del out["constraints"]
+        if not out.get("start_constraints", True):
+            for key in START_CONSTRAINT_KEYS:
+                out.pop(key, None)
+        if not out.get("start_allow_decoordination", True):  # the default: absent from the hash, as before
+            out.pop("start_allow_decoordination", None)
         return out
 
     def resolve_constraints(self, structure: Structure, coords: np.ndarray) -> dict | None:

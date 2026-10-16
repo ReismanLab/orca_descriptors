@@ -83,6 +83,7 @@ conformer_search:
 | `bonds` | `[]` | one distance constraint per match of a 2-atom selection |
 | `angles` | `[]` | one angle constraint per match of a 3-atom selection |
 | `dihedrals` | `[]` | one dihedral constraint per match of a 4-atom selection |
+| `planes` | `[]` | one plane group per match (its atoms plus those within `neighbors` bonds, at least 4), frozen in the search; made planar by `pre_refinement: constrained` |
 | `force_constant` | `null` | strength of every constraint below that sets none, see [strength](#strength) |
 
 Each entry of the four lists is a SMARTS string, or a mapping:
@@ -91,7 +92,7 @@ Each entry of the four lists is a SMARTS string, or a mapping:
 |---|---|---|
 | `smarts` | | the atoms, e.g. `"[Ni]"`, `"[Ni]~[#7]"`; with atom maps (`"[#7:1]~[Ni:2]~[#7:3]"`) only the mapped atoms count, in map order. Bonds to a metal are dative, so write them `~` (any bond): `-` (single) matches none of them |
 | `element` | | instead of `smarts`: a symbol or a list of symbols, e.g. `Ni` or `[Ni, Pd]` |
-| `neighbors` | `0` | `freeze` only: also freeze the atoms within this many bonds of the matched ones |
+| `neighbors` | `0` | `freeze` and `planes` only: also take the atoms within this many bonds of the matched ones |
 | `value` | start geometry | `bonds`, `angles`, `dihedrals`: the target, Angstrom or degrees; by default the value in the start geometry |
 | `force_constant` | top-level `force_constant` | this entry's strength |
 | `optional` | `false` | `true`: a molecule where the selection matches nothing runs unconstrained; `false`: its search fails with the selection named |
@@ -102,10 +103,35 @@ outcome is recorded in `run_<i>.json` under `details.constraints`: `freeze` (0-b
 order of every xyz file), `bonds`, `angles`, `dihedrals` (`atoms`, `value`, `force_constant`), and
 `labels` (`"4": "Ni4"`, ...). The searcher's input file in `logs/` shows what the program received.
 
-What the constraints do **not** touch: the stage 2 pre-optimisation (it produces the geometry that is
-frozen, so pair the constraints with `pre_refinement: uma` or with `start_geometry: input`; with
-`xtb` the atoms are frozen where xtb put them) and the stage 4 post-optimisation, which relaxes every
-conformer freely.
+By default the constraints act on the search only: the stage 2 pre-optimisation produces the
+geometry that is frozen (pair the constraints with `pre_refinement: uma` or with `start_geometry: input`;
+with `xtb` the atoms are frozen where xtb put them), and stages 4 and 6 relax every conformer freely.
+Each of those stages can keep them with `constrained: true`:
+
+| Stage | `constrained: true` | bceg parameter |
+|---|---|---|
+| `pre_refinement` | the planes and the values given are imposed on the embedding and kept by the pre-optimisation, which relaxes the rest, bond lengths included ([imposing constraints](2_pre_refinement.md#imposing-constraints)) | `start_constraints`, `start_impose_steps` |
+| `post_optimization` | the held atoms stay fixed in every conformer's optimisation | the refiner's `constraints` |
+| `dft` | `{ C i C }` for every held atom in the ORCA optimisation | none |
+
+The *held atoms* are every atom an entry names: the frozen groups (with or without a force constant), the
+plane groups and the atoms of every bond, angle and dihedral. A plane, or a linear I-Sm-I, is then kept
+by freezing its atoms in the search, e.g. for a square-planar Ni:
+
+```yaml
+pre_refinement: {method: uma, constrained: true}
+conformer_search:
+  name: crest_gfn2_NiPlanar
+  searcher: crest
+  constraints:
+    planes: [{element: Ni, neighbors: 1}]
+  params: {shake: 0, tstep: 2.0, crossing: false}
+post_optimization: {refiner: uma, constrained: true}
+dft: {level_of_theory: {...}, constrained: true}
+```
+
+`start_constraints` and `start_impose_steps` (searcher parameters, set from the pre_refinement block)
+enter the method folder's hash only when the constraints are imposed.
 
 ### Strength
 

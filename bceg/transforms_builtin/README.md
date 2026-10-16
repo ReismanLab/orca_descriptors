@@ -43,3 +43,5 @@ transformation instead).
 - `ni_x2.py`: N,N ligand (pyox, box, biox, bilm, bipy scaffolds) → L-Ni(X)2 with X = F or H,
   Ni(+2)/X(-1), net charge 0. Adapted from `scripts_4_structure/make_Ni{F2,H2}.py`.
   Ligands matching no scaffold are skipped.
+- `metal_x.py`: ligand → L-M(X)n, every donor atom (a SMARTS, `donors`) bound datively to one metal
+  `metal` carrying `n_x` X(-1), e.g. L-SmI2; neutral. Ligands with too few donors are skipped.

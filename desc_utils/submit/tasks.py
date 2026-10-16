@@ -21,6 +21,7 @@ from pathlib import Path
 
 from rdkit import Chem
 
+from bceg.constraints import held_atoms
 from bceg.inputs import InputMolecule
 from bceg.provenance import ParamsMismatch
 from bceg.structure import Structure
@@ -126,7 +127,14 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
     nprocs = int(orca_prof.get("ntasks") or orca_prof.get("cpus_per_task") or 1)
     maxcore = template.maxcore_mb(orca_prof.get("mem_per_cpu"), orca_prof.get("mem"), nprocs)
     lot = cfg.dft["level_of_theory"]
-    rendered = template.render(cfg.template_path, lot, ens.charge, ens.multiplicity, nprocs, maxcore)
+    # dft.constrained: the atoms the constraints name stay where stages 2 to 4 put them (same indices in
+    # every conformer, so one rendering still serves them all)
+    fixed = []
+    if cfg.dft.get("constrained"):
+        if ens.structure is None:
+            raise RuntimeError(f"{inchikey}: dft.constrained needs the ensemble's structure (the molecular graph)")
+        fixed = held_atoms(cfg.search["constraints"], ens.structure.mol)
+    rendered = template.render(cfg.template_path, lot, ens.charge, ens.multiplicity, nprocs, maxcore, fixed)
     mol_dir.mkdir(parents=True, exist_ok=True)
     (mol_dir / "calcParam.inp").write_text(rendered)
     dft_record = {
@@ -136,6 +144,8 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         "level_of_theory": template.validate_level_of_theory(lot),
         "compound_steps": template.compound_steps(lot, ens.charge, ens.multiplicity),
     }
+    if fixed:
+        dft_record["fixed_atoms"] = {str(i): f"{ens.elements[i]}{i}" for i in fixed}
     previous_md5 = (meta.get("dft") or {}).get("calc_param_md5")
     if previous_md5 and previous_md5 != dft_record["calc_param_md5"] and meta.get("conformers"):
         # params.json at the library level should have refused this; record it anyway
