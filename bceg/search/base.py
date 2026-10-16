@@ -24,6 +24,7 @@ START_DEFAULTS = {
     "start_preopt_params": {},  # for start_preopt: uma, the UMA refiner's parameters (model, task, fmax, max_steps, ...)
     "max_metal_ligand_distance": 2.5,  # Angstrom; longer bonds to a metal reject the start geometry
     "start_max_attempts": 10,  # re-embeddings (new seeds) before giving up
+    "start_allow_decoordination": False,  # True: a metal-ligand bond longer than max_metal_ligand_distance is recorded, not rejected
     "xtb_executable": "xtb",
 }
 START_RESOURCE_KEYS = {"xtb_executable"}
@@ -70,14 +71,17 @@ class Searcher(Configurable):
         return "constraints" in cls.defaults
 
     def compared_params(self) -> dict[str, Any]:
-        """No ``constraints`` key when there are none, and no ``start_constraints`` / ``start_impose_steps``
-        unless the constraints are imposed, so the hash of every search without them is unchanged."""
+        """No ``constraints`` key when there are none, no ``start_constraints`` / ``start_impose_steps`` unless
+        the constraints are imposed, and no ``start_allow_decoordination`` unless it is on, so the hash of
+        every search without them is unchanged."""
         out = super().compared_params()
         if "constraints" in out and not out["constraints"]:
             del out["constraints"]
         if not out.get("start_constraints", True):
             for key in START_CONSTRAINT_KEYS:
                 out.pop(key, None)
+        if not out.get("start_allow_decoordination", True):  # the default: absent from the hash, as before
+            out.pop("start_allow_decoordination", None)
         return out
 
     def resolve_constraints(self, structure: Structure, coords: np.ndarray) -> dict | None:

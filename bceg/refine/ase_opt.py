@@ -63,16 +63,21 @@ def threads_per_worker(threads: int | None, workers: int) -> int:
 
 
 # ---------------------------------------------------------------------------------------- constraints
+WALL_K = 10.0  # eV/A^2 of the flat-bottom walls that keep an imposed angle's bonds to a metal from breaking
+
+
 def ase_constraints(fixed=(), holds: dict | None = None) -> list:
     """ASE constraints for atoms ``fixed`` in place and for bceg.impose.holds: plane atoms move only within
     their plane (FixedPlane), the atoms of a linear angle only along its line (FixedLine), the other imposed
-    values are kept by FixInternals. An atom held in two ways that do not combine (two planes; a plane and
+    values are kept by FixInternals, and a bond in ``walls`` is pulled back only beyond its ``max`` (Hookean). An atom held in two ways that do not combine (two planes; a plane and
     a line across it; a line or plane and an internal coordinate) is fixed outright."""
-    from ase.constraints import FixAtoms, FixedLine, FixedPlane, FixInternals
+    from ase.constraints import FixAtoms, FixedLine, FixedPlane, FixInternals, Hookean
 
     fixed = set(fixed)
     out = []
     if holds:
+        # flat-bottom walls first (Hookean adds its force, the line / plane constraints then project it)
+        out += [Hookean(w["atoms"][0], w["atoms"][1], k=WALL_K, rt=w["max"]) for w in holds.get("walls") or []]
         lines = {a: line for line in holds["lines"] for a in line["atoms"]}
         planes: dict[int, list] = {}
         for plane in holds["planes"]:

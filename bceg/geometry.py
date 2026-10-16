@@ -44,6 +44,7 @@ from bceg.xtb import xtb_identity, xtb_optimize
 from bceg.xyz import Conformer
 
 SEED_STRIDE = 10007
+WALL_MARGIN = 0.3  # Angstrom below max_metal_ligand_distance where an imposed atom's bond to a metal meets its wall
 BOND_STRETCH_FACTOR = 1.35
 CLASH_FACTOR = 1.0
 
@@ -201,6 +202,13 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
                     break
                 continue
             hold = holds(coords, targets)  # the pre-optimisation keeps these and relaxes the rest, bonds included
+            # the imposed atoms' own bonds to a metal (Sm-I of I-Sm-I) must not break: a flat-bottom wall (UMA)
+            held = set(target_atoms(targets))
+            hold["walls"] = [{"atoms": [b.GetBeginAtomIdx(), b.GetEndAtomIdx()],
+                              "max": params["max_metal_ligand_distance"] - WALL_MARGIN}
+                             for b in structure.mol.GetBonds()
+                             if {b.GetBeginAtomIdx(), b.GetEndAtomIdx()} <= held
+                             and not {b.GetBeginAtom().GetSymbol(), b.GetEndAtom().GetSymbol()} <= ORGANIC_ELEMENTS]
         if uma is not None:
             result = uma.run(structure, [Conformer(coords)], workdir / f"preopt_{attempt}", **({"holds": hold} if hold else {}))
             if not result.conformers:
@@ -222,12 +230,27 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
                     break
                 continue
             coords = snap(structure.mol, coords, targets)
-            problems = connectivity_problems(structure.mol, coords, params["max_metal_ligand_distance"])
-            problems += off_targets(coords, targets, final=True)
+        # start_allow_decoordination: a stretched metal-ligand bond is recorded, unless it is one of the
+        # imposed atoms' (I-Sm of I-Sm-I), which must hold
+        decoordinated = []
+        if spec or params.get("start_allow_decoordination"):
+            strict = set(target_atoms(targets)) if spec else set()
+            problems = []
+            for i, j, d, sign, msg in _coordination_issues(structure.mol, coords, params["max_metal_ligand_distance"]):
+                if params.get("start_allow_decoordination") and "decoordinated" in msg and not {i, j} <= strict:
+                    decoordinated.append(msg)
+                else:
+                    problems.append(msg)
         else:
             problems = coordination_problems(structure.mol, coords, params["max_metal_ligand_distance"])
+        if spec:
+            if not stereo_matches(_with_coords(structure.mol, coords)):
+                problems.append("a stereocentre's configuration changed")
+            problems += off_targets(coords, targets, final=True)
         if not problems:
             extra = {"imposed": imposed | {"preopt_holds": hold}} if spec else {}
+            if params.get("start_allow_decoordination"):
+                extra["decoordinated"] = decoordinated
             return coords, extra | {
                 "source": source, "seed": s, "attempts": attempt + 1, "preopt": preopt,
                 "preopt_level": params["start_preopt_params"] if preopt == "uma" else params["start_preopt_level"],

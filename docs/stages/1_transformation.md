@@ -99,16 +99,22 @@ transformation:
   multiplicity: 7                            # Sm(II), f6
 ```
 
-Amino-alcohol and ether ligands bind through the tertiary amine N and the O on the carbon next to the
-CH2-N (OH, OMe, the inner O of a MOM acetal): `donors: "[$([NX3;!a;!$(N[C,S]=O)]),$([OX2][CX4H1][CX4H2][NX3])]"`
-gives O,N,N,O for the N,N'-dibenzylethylenediamine bis(amino alcohol/ether) ligands and O,N,O for their
-one-N analogues.
+Amino-alcohol and ether ligands bind through their tertiary amines, pyridyl N, and every alcohol or
+alkyl-ether O two carbons from an N donor (OH, OMe, OPr, a methoxyethyl arm, the inner O of a MOM
+acetal; not an aryl ether such as an anisyl OMe):
+
+```yaml
+donors: "[$([NX3;!a;!$(N[C,S]=O);!$(Nc)]),$([nX2]),$([OX2;!$(O[a]);$(O[CX4][CX4][NX3,nX2])])]"
+```
+
+This gives O,N,N,O for the N,N'-dibenzyl-ethylenediamine (and cyclohexanediamine, stilbenediamine,
+bipyrrolidine) bis(amino alcohol/ether) ligands, O,N,O for their one-N analogues and N,N,N,O with a
+pyridylmethyl or dimethylaminoethyl arm.
 
 The geometry around the metal is not set here. For a linear I-Sm-I, impose it with
 `pre_refinement: constrained` ([2_pre_refinement.md](2_pre_refinement.md#imposing-constraints)).
-Measured on ten ETKDG seeds each, the imposition succeeds for 10/10 with bipyridine, terpyridine and
-15-crown-5, and for 6 to 9 out of 10 with those tetradentate O,N,N,O ligands; a rejected seed is
-replaced by the next one (`max_attempts`, 10 by default).
+Measured on ten ETKDG seeds each, the imposition succeeds for every seed with bipyridine,
+terpyridine, 15-crown-5 and 28 of those amino-alcohol/ether ligands.
 
 ### Your own script
 

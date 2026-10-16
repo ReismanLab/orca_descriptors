@@ -26,6 +26,7 @@ geometry is kept as `logs/raw_1_start_geometry.xyz`; the attempts of a failed ru
 | `max_attempts` | `10` | re-embeddings before the search fails | `start_max_attempts` | yes |
 | `xtb_executable` | `xtb` | which xtb binary; the path and version that ran are recorded | `xtb_executable` | no (resource) |
 | `constrained` | `false` | `true`: impose `conformer_search.constraints` on the embedding, then pre-optimise with their atoms fixed, see [imposing constraints](#imposing-constraints) | `start_constraints` | yes, when `true` |
+| `allow_decoordination` | `false` | `true`: a metal-ligand bond longer than `max_metal_ligand_distance` after the pre-optimisation (a hemilabile amine arm letting go) is recorded under `decoordinated` instead of rejecting the geometry; the bonds of imposed atoms (Sm-I of I-Sm-I) must still hold, and a broken organic bond or a clash still rejects | `start_allow_decoordination` | yes, when `true` |
 | `impose_steps` | `10` | with `constrained`: steps of the ramp that brings the embedding onto the imposed values | `start_impose_steps` | yes, when `constrained` |
 
 The last column names the parameters of the searcher that the block is translated into
@@ -132,17 +133,20 @@ The values are reached gradually (`bceg/impose.py`), never in one jump on the ET
    1.9 Angstrom), so they go to the covalent-radii sum along the ramp (Sm-O 2.64, Sm-I 3.37, Ni-N 1.95),
    with the 1-3 distances that include them following at their embedded angles; the pre-optimisation
    refines them. The two ends of a linear angle that are single atoms (I-Sm-I) start from the line
-   through the apex with the most room, so that neither has to be pulled through the other ligands.
-2. **Snap**: once every target is within 3 degrees / 0.05 Angstrom / a plane RMS of 0.05 Angstrom, the
-   exact values are set by rigid moves (the smaller side of the bond is rotated or translated; a plane
+   through the apex with the most room, so that neither has to be pulled through the other ligands, and
+   are kept at least 70 degrees from the apex's other ligands throughout.
+2. **Snap**: once every target is within 3 degrees / 0.05 Angstrom / a plane RMS of 0.05 Angstrom
+   (30 degrees for an angle with a single-atom end, which the snap moves alone), the exact values are
+   set by rigid moves (the smaller side of the bond is rotated or translated; a plane
    group is projected onto its least-squares plane). A target inside a ring is set by a stiff restraint
    instead.
 3. **Settle**: the network is minimised again with the targets' atoms fixed.
 
-The connectivity is compared with the embedding's after every ramp step and after the imposition: no
-metal-ligand bond longer than `max_metal_ligand_distance`, no other bond broken, no non-bonded clash and
-no tetrahedral stereocentre inverted that the embedding did not already have (ETKDG stretches some
-metal-ligand bonds, e.g. Sm-I; repairing those is the pre-optimisation's job, as without constraints).
+The connectivity is compared with the embedding's after every ramp step and after the imposition, pair by
+pair: no metal-ligand bond longer than `max_metal_ligand_distance`, no other bond broken and no
+non-bonded clash that is also at least 0.1 Angstrom worse than in the embedding, and no tetrahedral
+stereocentre inverted (ETKDG leaves some pairs at or past the limits, e.g. M-O-C at the clash limit;
+repairing those is the pre-optimisation's job, as without constraints).
 After the pre-optimisation the full check applies, stereocentres included. A new problem, or a ramp that
 ends outside the snap tolerance, rejects the embedding and the next seed is tried; `rejected` names the
 `stage` (`imposed` or `preopt`). `details.start_geometry.imposed` records the targets' values at the
@@ -155,8 +159,12 @@ Only what was imposed is kept, so that the bond lengths ETKDG got wrong (Sm-I at
 | Imposed | UMA (exact, ASE) | xtb (`$constrain`, force constant 2.0) |
 |---|---|---|
 | a plane | each atom of the group moves only within the plane (`FixedPlane`) | dihedrals of 0 or 180 degrees through the group, each avoiding near-linear triples |
-| an angle of 180 degrees | its three atoms move only along their line (`FixedLine`) | `angle: i,j,k,180.0` (xtb's angle restraint is well behaved there: 179.99 degrees, Sm-I relaxed from 3.71 to 2.98 Angstrom on SmI2(THF)2 with GFN2) |
+| an angle of 180 degrees | its three atoms move only along their line (`FixedLine`); their bonds to the metal meet a flat-bottom wall at `max_metal_ligand_distance` - 0.3 Angstrom (`Hookean`), so an iodide cannot slide off along the line | `angle: i,j,k,180.0` (xtb's angle restraint is well behaved there: 179.99 degrees, Sm-I relaxed from 3.71 to 2.98 Angstrom on SmI2(THF)2 with GFN2) |
 | another bond, angle or dihedral | `FixInternals` | `distance:` / `angle:` / `dihedral:` |
+
+xtb has no flat-bottom restraint (a harmonic one would bias Sm-I away from GFN2's 3.0 Angstrom), so with
+xtb an imposed atom that lets go of the metal rejects the seed: measured on 28 SmI2 complexes, an iodide
+left in 4 of 140 GFN2 runs (and in 3 of 140 UMA runs before the wall). Prefer `uma` for these complexes.
 
 An atom held in two ways that do not combine (two planes, a plane and a line across it, a plane or line
 and an internal coordinate) is fixed outright with UMA. After the pre-optimisation the values are set

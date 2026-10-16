@@ -170,3 +170,39 @@ def test_start_constraints_params_and_hash():
         Crest(start_constraints=True)
     with pytest.raises(ValueError, match="at least 1"):
         Crest(constraints=NI_PLANE, start_impose_steps=0)
+
+
+def test_ase_wall_keeps_a_bond_and_decoordination_is_recorded_when_allowed(tmp_path, monkeypatch):
+    """A Hookean wall on the imposed atoms' metal bonds; with start_allow_decoordination a stretched
+    metal-ligand bond elsewhere is recorded, not rejected, while the imposed atoms' bond still rejects."""
+    from ase.constraints import FixedLine, Hookean
+
+    from bceg.refine.ase_opt import ase_constraints
+    built = ase_constraints((), {"planes": [], "lines": [{"atoms": [0, 1, 2], "direction": [1.0, 0, 0]}],
+                                 "bonds": [], "angles": [], "dihedrals": [],
+                                 "walls": [{"atoms": [1, 0], "max": 3.3}]})
+    assert [type(c) for c in built] == [Hookean, FixedLine]
+
+    s = Transformation("SmI2", BUILTIN_TRANSFORMS / "metal_x.py", {}, multiplicity=7).apply("c1ccc(-c2ccccn2)nc1")
+    i, sm, k = cons.targets(SM_LINEAR, s.mol)["angles"][0]["atoms"]
+    ligand = [a for a in range(len(s.elements)) if a not in (i, sm, k)]
+
+    def stretched(atoms, by):  # the pre-optimisation returns its input with ``atoms`` moved away from Sm
+        def preopt(elements, coords, *args, **kwargs):
+            out = np.array(coords, dtype=float)
+            u = out[atoms].mean(axis=0) - out[sm]
+            out[atoms] += by * u / np.linalg.norm(u)
+            return out, -1.0
+        return preopt
+
+    params = {**Crest.defaults, "constraints": {"angles": SM_LINEAR["angles"]}, "start_constraints": True,
+              "max_metal_ligand_distance": 3.6, "start_allow_decoordination": True, "start_max_attempts": 1}
+    monkeypatch.setattr(geometry, "xtb_identity", lambda exe: ("xtb", "fake"))
+    monkeypatch.setattr(geometry, "xtb_optimize", stretched(ligand, 2.0))   # both Sm-N let go
+    coords, info = geometry.make_start_geometry(s, 1, tmp_path, params)
+    assert len(info["decoordinated"]) == 2 and all("N" in d and "Sm" in d for d in info["decoordinated"])
+    monkeypatch.setattr(geometry, "xtb_optimize", stretched([i], 1.5))      # an imposed atom's bond: still a rejection
+    with pytest.raises(RuntimeError, match="decoordinated"):
+        geometry.make_start_geometry(s, 1, tmp_path, params)
+    assert "start_allow_decoordination" not in Crest().compared_params()
+    assert Crest(start_allow_decoordination=True).compared_params()["start_allow_decoordination"] is True
