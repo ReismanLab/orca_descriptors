@@ -105,7 +105,7 @@ class LoQI(Searcher):
 
     def command(self, structure: Structure, replicate: int) -> list[str]:
         p = self.params
-        cmd = [self.executable(), "sample", "--smiles", structure.smiles, "--n-confs", str(p["n_confs"]),
+        cmd = [self.executable(), "sample", "--smiles", structure.smiles, "--n-confs", str(self.n_confs(structure)[0]),
                "--output", "confs.sdf", "--model", p["model"], "--seed", str(self.seed(replicate))]
         if p["config"]:
             cmd += ["--config", p["config"]]
