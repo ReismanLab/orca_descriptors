@@ -127,7 +127,12 @@ The values are reached gradually (`bceg/impose.py`), never in one jump on the ET
    must change, e.g. the 1-3 distances around the apex of an imposed angle), and non-bonded atoms are
    kept at least their covalent-radii sum apart. The network needs no force-field atom types, so it works
    for any metal (UFF types neither Sm(III) nor the Ni of these complexes). An angle is restrained
-   through the distance between its end atoms, which is smooth at 180 degrees.
+   through the distance between its end atoms, which is smooth at 180 degrees. Bonds to a metal are the
+   exception to "near their embedded length": ETKDG knows no metal radii (it gives Sm-O 1.8 and Sm-I
+   1.9 Angstrom), so they go to the covalent-radii sum along the ramp (Sm-O 2.64, Sm-I 3.37, Ni-N 1.95),
+   with the 1-3 distances that include them following at their embedded angles; the pre-optimisation
+   refines them. The two ends of a linear angle that are single atoms (I-Sm-I) start from the line
+   through the apex with the most room, so that neither has to be pulled through the other ligands.
 2. **Snap**: once every target is within 3 degrees / 0.05 Angstrom / a plane RMS of 0.05 Angstrom, the
    exact values are set by rigid moves (the smaller side of the bond is rotated or translated; a plane
    group is projected onto its least-squares plane). A target inside a ring is set by a stiff restraint

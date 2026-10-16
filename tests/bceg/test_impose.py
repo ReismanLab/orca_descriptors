@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from rdkit import Chem
 
 from bceg import constraints as cons
 from bceg import geometry, impose
@@ -22,8 +23,17 @@ def nih2():
     return Transformation("NiH2", BUILTIN_TRANSFORMS / "ni_x2.py", {"x": "H"}).apply("c1ccc(-c2ccccn2)nc1")
 
 
-def _bond_lengths(mol, coords):
-    return np.array([np.linalg.norm(coords[b.GetBeginAtomIdx()] - coords[b.GetEndAtomIdx()]) for b in mol.GetBonds()])
+def _bond_lengths(mol, coords, metal: bool = False):
+    """Lengths of the bonds to a metal (``metal``) or of every other bond."""
+    return np.array([np.linalg.norm(coords[b.GetBeginAtomIdx()] - coords[b.GetEndAtomIdx()]) for b in mol.GetBonds()
+                     if ("Ni" in (b.GetBeginAtom().GetSymbol(), b.GetEndAtom().GetSymbol())
+                         or "Sm" in (b.GetBeginAtom().GetSymbol(), b.GetEndAtom().GetSymbol())) == metal])
+
+
+def _radii_sums(mol):
+    pt = Chem.GetPeriodicTable()
+    return np.array([pt.GetRcovalent(b.GetBeginAtom().GetAtomicNum()) + pt.GetRcovalent(b.GetEndAtom().GetAtomicNum())
+                     for b in mol.GetBonds() if {"Ni", "Sm"} & {b.GetBeginAtom().GetSymbol(), b.GetEndAtom().GetSymbol()}])
 
 
 def test_planes_targets_and_held_atoms(nih2):
@@ -61,10 +71,14 @@ def test_ni_first_shell_made_planar_smoothly(nih2):
     rms = [impose.plane_rms(c, targets["planes"][0]) for c in steps[:-1]]
     assert all(b <= a + 1e-6 for a, b in zip(rms, rms[1:]))                       # gradually, not in one jump
     np.testing.assert_allclose(_bond_lengths(mol, out), _bond_lengths(mol, coords), atol=0.15)
+    # the bonds to Ni went from ETKDG's lengths to the covalent-radii sums, which the pre-optimisation refines
+    np.testing.assert_allclose(_bond_lengths(mol, out, metal=True), _radii_sums(mol), atol=0.15)
     assert set(info) == {"steps", "start", "after_ramp", "final"}
 
 
-def test_i_sm_i_made_linear_at_constant_bond_lengths():
+def test_i_sm_i_made_linear_with_the_metal_bonds_at_the_radii_sums():
+    """ETKDG compresses Sm's coordination sphere (Sm-O 1.8 A): the ramp brings the metal bonds to the
+    covalent-radii sums; the ends of the linear angle start on the roomiest line through Sm."""
     mol = mol_from_smiles("I[Sm](I)(<-O1CCCC1)(<-O1CCCC1)")
     targets, held = cons.targets(SM_LINEAR, mol), cons.held_atoms(SM_LINEAR, mol)
     (t,) = targets["angles"]
@@ -73,9 +87,8 @@ def test_i_sm_i_made_linear_at_constant_bond_lengths():
     out, info = impose.impose(mol, coords, targets, held, check=geometry.new_problems(mol, coords, 4.0))
     assert cons.angle(out, *t["atoms"]) == pytest.approx(180.0, abs=0.5)
     assert list(info["after_ramp"].values())[0] > 177                             # the ramp got there, the snap finished
-    i, sm, k = t["atoms"]
-    for a in (i, k):
-        assert np.linalg.norm(out[a] - out[sm]) == pytest.approx(np.linalg.norm(coords[a] - coords[sm]), abs=0.01)
+    np.testing.assert_allclose(_bond_lengths(mol, out, metal=True), _radii_sums(mol), atol=0.15)
+    assert info["placed_axial"][0]["atoms"] == t["atoms"]
 
 
 def test_unreachable_targets_and_broken_bonds_are_rejected_not_forced(nih2, monkeypatch):

@@ -16,6 +16,10 @@ ETKDG geometry can push atoms through each other, so they are reached in three p
 3. **settle**: the network is minimised once more with the held atoms fixed, so that the rest of the
    molecule absorbs the snap.
 
+A linear angle between two terminal atoms (I-Sm-I) starts from the line through the apex with the most
+room instead (:func:`place_axial`), so that the ramp never pulls one end through a wrapping ligand's
+donors.
+
 A target that the ramp cannot bring within the snap tolerance, or a step that breaks or forms a bond, is
 an :class:`ImposeError`: the caller rejects the embedding and tries the next seed, never forcing it.
 """
@@ -29,6 +33,7 @@ from rdkit import Chem
 from scipy.optimize import minimize
 
 from bceg import constraints as cons
+from bceg.chem import ORGANIC_ELEMENTS
 
 SNAP_TOLERANCE = {"bonds": 0.05, "angles": 3.0, "dihedrals": 3.0, "planes": 0.05}  # Angstrom, degrees, plane RMS
 FINAL_TOLERANCE = {"bonds": 0.01, "angles": 0.5, "dihedrals": 0.5, "planes": 0.01}
@@ -95,7 +100,13 @@ def _within(coords: np.ndarray, targets: dict, tolerance: dict) -> list[str]:
 
 # --------------------------------------------------------------------------- the elastic network
 class Network:
-    """Bonds and 1-3 distances held at the embedded lengths, non-bonded pairs kept apart."""
+    """Bonds and 1-3 distances held at the embedded lengths, non-bonded pairs kept apart.
+
+    Bonds to a metal are the exception: ETKDG knows no metal radii (Sm-O 1.8, Sm-I 1.9 Angstrom where
+    2.5 and 3.1 are right), so they go from their embedded length to the covalent-radii sum along the
+    ramp (:meth:`set_fraction`), and every 1-3 distance that includes such a bond (donor-M-donor, M-O-C)
+    follows at its embedded angle.
+    The pre-optimisation then refines them."""
 
     def __init__(self, mol: Chem.Mol, coords: np.ndarray, targets: dict) -> None:
         n = mol.GetNumAtoms()
@@ -122,12 +133,45 @@ class Network:
         self.d0 = np.linalg.norm(d, axis=1)
         pt = Chem.GetPeriodicTable()
         radii = np.array([pt.GetRcovalent(a.GetAtomicNum()) for a in mol.GetAtoms()])
+        metal = {a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() not in ORGANIC_ELEMENTS}
+        index = {tuple(p): n for n, p in enumerate(self.springs.tolist())}
+        self.metal_bonds = np.array([index[b] for b in bonds if set(b) & metal], dtype=int)
+        self.ideal = radii[self.springs[self.metal_bonds, 0]] + radii[self.springs[self.metal_bonds, 1]]
+        self.embedded = self.d0[self.metal_bonds].copy()
+        # 1-3 distances with a bond to a metal on either side (donor-M-donor, M-donor-C) follow those bonds
+        # at their embedded angle: (1-3 spring, its two bond springs, cos of the angle)
+        self.through_metal = []
+        metal_bond_rows = set(self.metal_bonds.tolist())
+        for a, b in pairs13:
+            for m in {nb.GetIdx() for nb in mol.GetAtomWithIdx(a).GetNeighbors()} \
+                    & {nb.GetIdx() for nb in mol.GetAtomWithIdx(b).GetNeighbors()}:
+                ba, bb = index.get(tuple(sorted((a, m)))), index.get(tuple(sorted((b, m))))
+                if ba is not None and bb is not None and {ba, bb} & metal_bond_rows:
+                    self.through_metal.append((index[(a, b)], ba, bb, np.cos(np.radians(cons.angle(coords, a, m, b)))))
         near = set(map(tuple, self.springs.tolist())) | free
         iu = [(i, j) for i in range(n) for j in range(i + 1, n) if (i, j) not in near]
         self.nonbonded = np.array(iu, dtype=int).reshape(-1, 2)
         start = np.linalg.norm(coords[self.nonbonded[:, 0]] - coords[self.nonbonded[:, 1]], axis=1)
         # kept a margin beyond the covalent-radii sum (the clash criterion), or where they are when closer
         self.rmin = np.minimum(REPULSION_MARGIN * (radii[self.nonbonded[:, 0]] + radii[self.nonbonded[:, 1]]), start)
+
+    def start_from(self, x: np.ndarray) -> None:
+        """The ramp of the metal bonds starts from their lengths in ``x`` (after :func:`place_axial`)."""
+        d = x[self.springs[self.metal_bonds, 0]] - x[self.springs[self.metal_bonds, 1]]
+        self.embedded = np.linalg.norm(d, axis=1)
+        self.d0[self.metal_bonds] = self.embedded
+
+    def set_fraction(self, frac: float) -> None:
+        """Metal bonds ``frac`` of the way to the covalent-radii sum, the 1-3 distances through them along."""
+        self.d0[self.metal_bonds] = self.embedded + frac * (self.ideal - self.embedded)
+        for n, ba, bb, cos in self.through_metal:
+            r1, r2 = self.d0[ba], self.d0[bb]
+            self.d0[n] = np.sqrt(max(r1 ** 2 + r2 ** 2 - 2 * r1 * r2 * cos, 1e-6))
+
+    def ideal_length(self, a: int, b: int) -> float | None:
+        """The covalent-radii sum of a bond to a metal, None for any other pair."""
+        hit = np.where((self.springs[self.metal_bonds] == sorted((a, b))).all(axis=1))[0]
+        return float(self.ideal[hit[0]]) if len(hit) else None
 
     def energy(self, x: np.ndarray) -> tuple[float, np.ndarray]:
         grad = np.zeros_like(x)
@@ -425,6 +469,45 @@ def xtb_restraints(x: np.ndarray, hold: dict) -> list[str]:
     return lines
 
 
+AXIS_CANDIDATES = 2000  # directions sampled (a Fibonacci sphere) for the axis of a linear angle's ends
+
+
+def _sphere(n: int) -> np.ndarray:
+    k = np.arange(n) + 0.5
+    phi, theta = np.arccos(1 - 2 * k / n), np.pi * (1 + 5 ** 0.5) * k
+    return np.stack([np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)], axis=1)
+
+
+def place_axial(mol: Chem.Mol, x: np.ndarray, targets: dict, network: Network | None = None) -> tuple[np.ndarray, list[dict]]:
+    """For a linear angle whose two ends are terminal atoms (I-Sm-I): put the ends on the line through the
+    apex with the most room, one at each end, at their current distances. The line is the one whose two
+    end positions are furthest from every other atom. A ramp from an embedding with both ends on the
+    same side of a wrapping ligand (O,N,N,O around Sm) would have to pull one end through the donors;
+    moving two single atoms changes nothing else, and the ramp's repulsion and checks follow."""
+    x = x.copy()
+    placed = []
+    for t in targets.get("angles") or []:
+        i, j, k = t["atoms"]
+        if t["value"] < LINEAR or mol.GetAtomWithIdx(i).GetDegree() != 1 or mol.GetAtomWithIdx(k).GetDegree() != 1:
+            continue
+        ri, rk = np.linalg.norm(x[i] - x[j]), np.linalg.norm(x[k] - x[j])
+        if network is not None:  # at the bond length the ramp is heading for, not ETKDG's
+            ri, rk = network.ideal_length(i, j) or ri, network.ideal_length(k, j) or rk
+        rest = np.array([a for a in range(len(x)) if a not in (i, j, k)], dtype=int)
+        axes = _sphere(AXIS_CANDIDATES)
+        ends_i, ends_k = x[j] + ri * axes, x[j] - rk * axes
+        room = np.minimum(np.linalg.norm(ends_i[:, None, :] - x[rest][None], axis=2).min(axis=1),
+                          np.linalg.norm(ends_k[:, None, :] - x[rest][None], axis=2).min(axis=1))
+        axis = axes[int(np.argmax(room))]
+        # the axis and its opposite give the same line: take the assignment that moves the ends least
+        sign = 1.0 if np.dot(x[i] - x[j], axis) - np.dot(x[k] - x[j], axis) >= 0 else -1.0
+        before = {i: x[i].copy(), k: x[k].copy()}
+        x[i], x[k] = x[j] + sign * ri * axis, x[j] - sign * rk * axis
+        placed.append({"atoms": [i, j, k], "room": round(float(room.max()), 3),
+                       "moved": {str(a): round(float(np.linalg.norm(x[a] - before[a])), 3) for a in (i, k)}})
+    return x, placed
+
+
 # --------------------------------------------------------------------------- the procedure
 def impose(mol: Chem.Mol, coords: np.ndarray, targets: dict, held: list[int], steps: int = 10,
            check=None) -> tuple[np.ndarray, dict]:
@@ -437,10 +520,15 @@ def impose(mol: Chem.Mol, coords: np.ndarray, targets: dict, held: list[int], st
     info: dict[str, Any] = {"steps": steps, "start": values(x, targets)}
     if not any(True for _ in _all_targets(targets)):
         return x, info | {"final": {}}
-    network = Network(mol, x, targets)
+    network = Network(mol, x, targets)  # on the embedding: a clash the placement makes is pushed apart
+    x, placed = place_axial(mol, x, targets, network)
+    if placed:
+        info["placed_axial"] = placed
+    network.start_from(x)
     begin = {id(t): measure(x, kind, t) for kind, t in _all_targets(targets) if kind != "planes"}
     for s in range(1, steps + 1):
         frac = s / steps
+        network.set_fraction(frac)
         planes = []
         for group in targets.get("planes") or []:
             centre, normal = _plane(x, group)
