@@ -26,7 +26,7 @@ UMA_SPEC = {
     "name": "uma_test",
     "data": {"root": "DATA/x", "geometry_file": "optimized_uma.xyz", "condensed_file": None},
     "atoms": {"at1": None, "at2": None},
-    "numbering": {"backend": "first_n",
+    "numbering": {"backend": "first_n", "smiles": {"source": "geometry"},   # no molecule_registry.json here
                   "energy": {"source": "xyz_comment", "key": "energy", "units": "eV", "column": "uma_energy_hartree"}},
     "descriptors": {"orca": {"xyz": {"atoms": ["at1", "at2"], "bonds": [["at1", "at2"]]}}},
 }

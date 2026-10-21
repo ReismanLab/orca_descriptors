@@ -81,7 +81,7 @@ DEFAULTS: dict[str, Any] = {
         "consistency": "per_molecule",
         "orient": [],
         "annotators": [],
-        "smiles": {"mode": "whole_molecule", "strip": [], "source": "geometry"},
+        "smiles": {"mode": "whole_molecule", "strip": [], "source": "registry"},
         # `source: orca` -> `basename` and `column`; `source: xyz_comment` -> `key`, `units` and an explicit
         # `column` that must not be called SCF_energy, so the table always says where its energies come from.
         "energy": {"source": "orca", "basename": "singlepoint", "column": "SCF_energy", "key": "energy", "units": "eV"},

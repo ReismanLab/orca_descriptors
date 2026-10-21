@@ -113,7 +113,11 @@ def submitted_smiles(source: str, data_root: str | Path, smiles_file: str | Path
     if source == "registry":
         path = Path(data_root) / REGISTRY_FILE
         if not path.is_file():
-            raise FileNotFoundError(f"numbering.smiles.source registry: no {path}")
+            raise FileNotFoundError(
+                f"numbering.smiles.source is registry (the default) but there is no {path}. Libraries made by "
+                f"`orcadesc submit` have one; for other data set numbering.smiles.source: file with the SMILES list "
+                f"the structures were made from, or source: geometry to perceive the SMILES from the xyz "
+                f"(unreliable for metal complexes)")
         return {ik: entry["smiles"] for ik, entry in json.loads(path.read_text()).items() if entry.get("smiles")}
     if source == "file":
         from bceg.inputs import load_inputs

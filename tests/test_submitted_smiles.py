@@ -49,15 +49,20 @@ def test_missing_molecule_gets_no_smiles_and_a_note(tmp_path):
     assert out.loc[0, "numbering_notes"] == ""
 
 
-def test_geometry_source_is_the_default_and_leaves_the_table_alone(tmp_path):
-    spec = _spec(tmp_path)
-    assert spec.numbering["smiles"]["source"] == "geometry"
+def test_registry_is_the_default(tmp_path):
+    raw = yaml.safe_load((REPO / "specs" / "lnih2_pyox.yaml").read_text())
+    raw["data"]["root"] = str(tmp_path)
+    del raw["numbering"]["smiles"]["source"], raw["numbering"]["smiles"]["file"]
+    assert validate_spec(raw).numbering["smiles"]["source"] == "registry"
+
+
+def test_geometry_source_leaves_the_table_alone(tmp_path):
     df = _table(PYOX_IK)
-    assert apply_submitted_smiles(df, spec, REPO) is df
+    assert apply_submitted_smiles(df, _spec(tmp_path, source="geometry"), REPO) is df
 
 
-def test_missing_registry_is_an_error(tmp_path):
-    with pytest.raises(FileNotFoundError, match="molecule_registry.json"):
+def test_missing_registry_is_an_error_that_says_what_to_do(tmp_path):
+    with pytest.raises(FileNotFoundError, match="source: file"):
         apply_submitted_smiles(_table(PYOX_IK), _spec(tmp_path, source="registry"), REPO)
 
 
@@ -74,5 +79,17 @@ def test_spec_validation(tmp_path, smiles, data, message):
         validate_spec(raw)
 
 
-def test_library_002_spec_reads_the_registry():
-    assert load_spec(REPO / "specs" / "lnih2_library_002.yaml").numbering["smiles"]["source"] == "registry"
+def test_shipped_specs_name_a_source_that_exists():
+    """Every spec either has a registry under its data root or says where else its SMILES come from."""
+    for path in sorted((REPO / "specs").glob("*.yaml")):
+        cfg = load_spec(path).numbering["smiles"]
+        if cfg["source"] == "file":
+            assert (REPO / cfg["file"]).is_file(), path.name
+
+
+def test_missing_registry_fails_before_numbering(tmp_path, monkeypatch):
+    from desc_utils import numbering
+    monkeypatch.setattr(numbering, "iter_conformers", lambda *a, **k: iter([]))
+    monkeypatch.setattr(numbering, "parallel_map", lambda *a, **k: pytest.fail("numbered before checking the source"))
+    with pytest.raises(FileNotFoundError):
+        numbering.build_numbering_table(_spec(tmp_path, source="registry"), REPO, progress=False)

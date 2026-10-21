@@ -50,7 +50,9 @@ numbering:
   orient: []                          # e.g. {rule: closest, move: [H1, H2], to: [N1, N2]}
   annotators: [lnih2_ligand_class]    # adds ligand_type (core_5/core_6) and ligand_class (pyox, biox, ...)
   smiles:
-    mode: strip_atoms                 # SMILES of the largest fragment after removing `strip`
+    source: file                      # pre-orcadesc library, no molecule_registry.json: the list it was submitted
+    file: inputs/LNiH2_ligands_audrey.txt   # with (= the LNiH2_library_002 list), matched to the folders by InChIKey
+    mode: strip_atoms                 # source: geometry only (wrong tautomer for L-NiH2, see docs/descriptor_pipeline.md)
     strip: [Ni]
   energy:
     basename: singlepoint             # <basename>.property.json -> SCF energy

@@ -44,7 +44,8 @@ numbering:
         required: true
   orient: []
   annotators: []
-  smiles: {mode: whole_molecule}
+  smiles: {mode: whole_molecule, source: geometry}   # pre-orcadesc data, no molecule_registry.json; organic, so
+                                                       # the SMILES perceived from the xyz is reliable
   energy: {basename: singlepoint, column: SCF_energy}
 
 descriptors:

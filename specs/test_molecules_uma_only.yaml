@@ -29,7 +29,8 @@ numbering:
   consistency: per_molecule
   orient: []
   annotators: []
-  smiles: {mode: whole_molecule}
+  smiles: {mode: whole_molecule, source: geometry}   # pre-orcadesc data, no molecule_registry.json; organic, so
+                                                       # the SMILES perceived from the xyz is reliable
   energy:
     source: xyz_comment                     # `energy=<value>` of the extended-xyz comment line (ASE / UMA)
     key: energy                             # or free_energy

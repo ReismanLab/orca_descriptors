@@ -188,6 +188,7 @@ def build_numbering_table(spec: Spec, repo_root: Path, backend: NumberingBackend
     backend = backend or make_backend(spec.numbering, spec.labels)
     id_col = spec.data["molecule_id_column"]
     contexts = list(iter_conformers(spec, repo_root, data_root))
+    smiles_lookup = submitted_smiles_lookup(spec, repo_root, data_root)
     records = parallel_map(_work, contexts, jobs, initializer=_init_worker, initargs=(spec, backend, regenerate_sdf),
                            progress=progress, desc=f"numbering[{backend.name}]")
 
@@ -197,7 +198,7 @@ def build_numbering_table(spec: Spec, repo_root: Path, backend: NumberingBackend
     base = int(spec.numbering.get("index_base", 1))
     for label in spec.labels:
         df[label] = (df[label] + base).astype("Int64")
-    df = apply_submitted_smiles(df, spec, repo_root, data_root)
+    df = apply_submitted_smiles(df, spec, repo_root, data_root, lookup=smiles_lookup)
     if spec.numbering.get("consistency", "per_molecule") == "per_molecule":
         df = check_consistency(df, spec.labels, id_col)
     bad = df[df["numbering_status"] != STATUS_OK]
@@ -206,9 +207,26 @@ def build_numbering_table(spec: Spec, repo_root: Path, backend: NumberingBackend
     return df
 
 
-def apply_submitted_smiles(df: pd.DataFrame, spec: Spec, repo_root: Path, data_root: Path | None = None) -> pd.DataFrame:
-    """``numbering.smiles.source`` other than ``geometry``: ``smiles`` = the SMILES the molecule was submitted
-    with, ``smiles_noH`` = its RDKit canonical form, instead of the SMILES perceived from the geometry.
+def submitted_smiles_lookup(spec: Spec, repo_root: Path, data_root: Path | None = None) -> dict[str, str] | None:
+    """Molecule id -> submitted SMILES for ``numbering.smiles.source`` ``registry`` / ``file``; None for
+    ``geometry``. Read before any conformer is numbered, so a missing source fails at once."""
+    cfg = spec.numbering["smiles"]
+    if cfg.get("source", "registry") == "geometry":
+        return None
+    repo_root = Path(repo_root).resolve()
+    root = Path(data_root) if data_root else Path(spec.data["root"])
+    root = root if root.is_absolute() else repo_root / root
+    smiles_file = cfg.get("file")
+    if smiles_file and not Path(smiles_file).is_absolute():
+        smiles_file = repo_root / smiles_file
+    return submitted_smiles(cfg["source"], root, smiles_file)
+
+
+def apply_submitted_smiles(df: pd.DataFrame, spec: Spec, repo_root: Path, data_root: Path | None = None,
+                           lookup: dict[str, str] | None = None) -> pd.DataFrame:
+    """``numbering.smiles.source`` ``registry`` (the default) or ``file``: ``smiles`` = the SMILES the molecule
+    was submitted with, ``smiles_noH`` = its RDKit canonical form, instead of the SMILES perceived from the
+    geometry (``source: geometry``, for data without a record of what was submitted).
 
     Bond orders perceived from a metal complex's xyz (Open Babel) are unreliable: an N bound to the metal is
     taken for an amine, so the ligand left after ``strip_atoms`` comes out as a wrong tautomer. The submitted
@@ -216,15 +234,10 @@ def apply_submitted_smiles(df: pd.DataFrame, spec: Spec, repo_root: Path, data_r
     and gets a note.
     """
     cfg = spec.numbering["smiles"]
-    if cfg.get("source", "geometry") == "geometry":
+    if cfg.get("source", "registry") == "geometry":
         return df
-    repo_root = Path(repo_root).resolve()
-    root = Path(data_root) if data_root else Path(spec.data["root"])
-    root = root if root.is_absolute() else repo_root / root
-    smiles_file = cfg.get("file")
-    if smiles_file and not Path(smiles_file).is_absolute():
-        smiles_file = repo_root / smiles_file
-    lookup = submitted_smiles(cfg["source"], root, smiles_file)
+    if lookup is None:
+        lookup = submitted_smiles_lookup(spec, repo_root, data_root)
     id_col = spec.data["molecule_id_column"]
     df = df.copy()
     df["smiles"] = df[id_col].map(lookup)
