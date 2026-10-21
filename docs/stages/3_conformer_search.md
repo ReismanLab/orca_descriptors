@@ -191,6 +191,8 @@ CREST 3.x driven by a TOML input (`crest --input input.toml`); starts from the p
 | `shake` | `null` | `[dynamics] shake`: `0` off, `1` bonds to H, `2` all bonds; `null` leaves CREST's choice (all bonds except to a metal) |
 | `tstep` | `null` | `[dynamics] tstep`, MD time step in fs; `null` leaves CREST's choice (5 fs for GFN2, which needs SHAKE) |
 | `crossing` | `true` | genetic crossing (GC) after the MTDs; `false` runs `crest -nocross` |
+| `reftopo` | `true` | CREST's check that every conformer keeps the topology of the input; `false` runs `crest --noreftopo` (needed when the start geometry's bonding is ambiguous, e.g. a hydride on a metal; may let rearranged structures through) |
+| `cluster` | `null` | `null`: hand on `crest_conformers.xyz`; `true`: `crest --cluster`, CREST's PCA/k-means clustering picks the number of clusters, and the clustered subset `crest_clustered.xyz` is handed on instead; a number `N`: `--cluster N`, N clusters. The full ensemble is kept as `logs/raw_<i>_crest_conformers.xyz` |
 | `toml_extra` | `{}` | deep-merged into the TOML document, e.g. `{cregen: {ewin: 6.0}}` for CREST's own energy window (kcal/mol); applied last, so it wins over `shake` and `tstep` |
 | `seed_offset` | `0` | see above |
 | `threads` | job's CPUs | resource: CREST threads (`SLURM_CPUS_PER_TASK`) |
@@ -199,8 +201,11 @@ CREST 3.x driven by a TOML input (`crest --input input.toml`); starts from the p
 | `executable` | `crest` | resource: which CREST binary |
 | `md_retries` | `2` | resource: when CREST's trial MD fails (`Automatic MD restart failed`, e.g. a hydride leaving the Ni at GFN2), rerun from a new start geometry up to this many times; the failed logs are kept as `raw_<i>_crest_md_failed_<k>.out`, the attempts in `details.md_retries` |
 
-Output: `crest_conformers.xyz` (the full ensemble, not `crest_clustered.xyz`), so `n_conf` can be
-large; stage 5 and CREST's `ewin` are how the count going to ORCA is kept in hand. CREST prints an
+Output: `crest_conformers.xyz` (the full ensemble), so `n_conf` can be large; stage 5, CREST's
+`ewin` and `cluster` are how the count going to ORCA is kept in hand. With `cluster` it is
+`crest_clustered.xyz`, one representative per cluster. `reftopo` and `cluster` are command-line
+flags (CREST's TOML has no keys for them) and enter the method's hash only when they are not
+their defaults. CREST prints an
 OpenBLAS warning per thread change unless `OPENBLAS_NUM_THREADS=1`, which bceg sets.
 
 ```yaml
@@ -210,6 +215,17 @@ conformer_search:
   params:
     workhorse: gfn2
     toml_extra: {cregen: {ewin: 6.0}}
+```
+
+```yaml
+conformer_search:
+  name: crest_gfn2_ewin15_clustered       # the pre-orcadesc LNiH2 libraries (CREST 2.12 then, 3.x now)
+  searcher: crest
+  params:
+    workhorse: gfn2
+    reftopo: false
+    cluster: true
+    toml_extra: {cregen: {ewin: 15.0}}
 ```
 
 ```yaml

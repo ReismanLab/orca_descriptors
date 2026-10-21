@@ -27,6 +27,12 @@ MD_DEFAULTS = {
     "crossing": True,  # genetic crossing (GC) after the MTDs; false adds -nocross (the TOML has no key)
 }
 
+# Command-line-only CREST settings, left to CREST unless given (then part of the method's hash).
+CLI_DEFAULTS = {
+    "reftopo": True,  # CREST's check that every conformer keeps the input topology; false adds --noreftopo
+    "cluster": None,  # null: hand on crest_conformers.xyz; true or N: --cluster [N], hand on crest_clustered.xyz
+}
+
 UMA_LEVEL = {"method": "mlip", "mlip_backend": "uma", "mlip_uma_task": "omol", "mlip_uma_model": "uma-s-1p2"}
 
 # CREST's message when its trial MD blows up (e.g. a hydride leaving a Ni at GFN2, 5 fs, no SHAKE on
@@ -45,6 +51,7 @@ class Crest(Searcher):
         "refine_level": dict(UMA_LEVEL),  # level used for the inline refinement
         "toml_extra": {},  # deep-merged into the TOML document (e.g. {"cregen": {"ewin": 6.0}})
         **MD_DEFAULTS,
+        **CLI_DEFAULTS,
         **CONSTRAINT_DEFAULTS,
         **START_DEFAULTS,
         "seed_offset": 0,
@@ -65,6 +72,9 @@ class Crest(Searcher):
             raise ValueError(f"crest.tstep: a time step in fs (> 0) or null, got {p['tstep']!r}")
         if not isinstance(p["crossing"], bool):
             raise ValueError(f"crest.crossing: true or false, got {p['crossing']!r}")
+        c = p["cluster"]
+        if not (c is None or c is True or (isinstance(c, int) and not isinstance(c, bool) and c >= 1)):
+            raise ValueError(f"crest.cluster: null, true (CREST picks the number of clusters) or a count >= 1, got {c!r}")
 
     def resource_class(self) -> str:
         p = self.params
@@ -97,12 +107,23 @@ class Crest(Searcher):
         return _deep_merge(doc, p["toml_extra"])
 
     def command(self, exe: str) -> list[str]:
-        return [exe, "--input", "input.toml", *([] if self.params["crossing"] else ["-nocross"])]
+        p = self.params
+        cmd = [exe, "--input", "input.toml", *([] if p["crossing"] else ["-nocross"])]
+        if not p["reftopo"]:
+            cmd.append("--noreftopo")
+        if p["cluster"] is not None:
+            cmd += ["--cluster"] + ([] if p["cluster"] is True else [str(p["cluster"])])
+        return cmd
+
+    @property
+    def ensemble_file(self) -> str:
+        """The CREST output handed on: the clustered subset with ``cluster``, else the full ensemble."""
+        return "crest_conformers.xyz" if self.params["cluster"] is None else "crest_clustered.xyz"
 
     def compared_params(self) -> dict[str, Any]:
-        """The MD settings only when they differ from CREST's own, so existing hashes are unchanged."""
+        """The MD and command-line settings only when they differ from CREST's own, so existing hashes are unchanged."""
         out = super().compared_params()
-        for key, default in MD_DEFAULTS.items():
+        for key, default in {**MD_DEFAULTS, **CLI_DEFAULTS}.items():
             if out.get(key) == default:
                 del out[key]
         return out
@@ -123,10 +144,15 @@ class Crest(Searcher):
             (wd / "input.toml").write_text(to_toml(self.build_input(structure, constraints)))
 
             proc = run(self.command(exe), wd, threads=resolve_threads(self.params["threads"]), log_name="crest.out")
-            out = wd / "crest_conformers.xyz"
+            out = wd / self.ensemble_file
             logs = [wd / "input.toml", wd / "start_geometry.xyz", wd / "crest.out"]
+            if self.params["cluster"] is not None:  # keep the full ensemble the clusters were picked from
+                logs.append(wd / "crest_conformers.xyz")
             if proc.returncode == 0 and out.exists():
                 break
+            if proc.returncode == 0 and (wd / "crest_conformers.xyz").exists():
+                raise RuntimeError(f"CREST ran but wrote no {out.name} (cluster: {self.params['cluster']!r}):\n"
+                                   f"{proc.stdout[-3000:]}")
             if TRIAL_MD_FAILED not in proc.stdout or attempt == self.params["md_retries"]:
                 raise RuntimeError(f"CREST failed (exit {proc.returncode}):\n{proc.stdout[-3000:]}")
             failed_log = wd / f"crest_md_failed_{attempt + 1}.out"

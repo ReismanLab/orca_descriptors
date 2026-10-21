@@ -117,3 +117,50 @@ def test_other_crest_failures_are_not_retried(crest_harness, monkeypatch, tmp_pa
     with pytest.raises(RuntimeError, match="CREST failed"):
         Crest(threads=1).run(structure, 1, tmp_path)
     assert len(calls) == 1
+
+
+def test_cli_options_are_out_of_the_hash_at_their_defaults():
+    assert Crest().compared_params() == Crest(reftopo=True, cluster=None).compared_params()
+    assert "reftopo" not in Crest().compared_params() and "cluster" not in Crest().compared_params()
+    assert Crest(reftopo=False).compared_params()["reftopo"] is False
+    assert Crest(cluster=True).compared_params()["cluster"] is True
+
+
+@pytest.mark.parametrize("params, flags", [
+    ({}, []),
+    ({"reftopo": False}, ["--noreftopo"]),
+    ({"cluster": True}, ["--cluster"]),
+    ({"cluster": 8, "reftopo": False, "crossing": False}, ["-nocross", "--noreftopo", "--cluster", "8"]),
+])
+def test_cli_flags(params, flags):
+    assert Crest(**params).command("crest") == ["crest", "--input", "input.toml", *flags]
+
+
+@pytest.mark.parametrize("bad", [{"reftopo": "no"}, {"cluster": 0}, {"cluster": False}, {"cluster": 2.5}])
+def test_cli_options_are_validated(bad):
+    with pytest.raises((ValueError, TypeError)):
+        Crest(**bad)
+
+
+def test_cluster_hands_on_the_clustered_ensemble(crest_harness, monkeypatch, tmp_path):
+    structure, seeds, calls, make_run = crest_harness
+    coords = np.zeros((structure.mol.GetNumAtoms(), 3))
+
+    def fake_run(cmd, cwd, threads=1, log_name="crest.out"):
+        assert "--cluster" in cmd
+        (cwd / log_name).write_text("ok\n")
+        write_xyz(cwd / "crest_conformers.xyz", structure.elements, [Conformer(coords, -2.0)] * 3)
+        write_xyz(cwd / "crest_clustered.xyz", structure.elements, [Conformer(coords, -2.0)])
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n")
+
+    monkeypatch.setattr(crest_mod, "run", fake_run)
+    result = Crest(threads=1, cluster=True).run(structure, 1, tmp_path)
+    assert len(result.conformers) == 1
+    assert tmp_path / "crest_conformers.xyz" in result.log_files
+
+
+def test_cluster_without_a_clustered_file_is_an_error(crest_harness, monkeypatch, tmp_path):
+    structure, seeds, calls, make_run = crest_harness
+    monkeypatch.setattr(crest_mod, "run", make_run([True]))  # writes crest_conformers.xyz only
+    with pytest.raises(RuntimeError, match="wrote no crest_clustered.xyz"):
+        Crest(threads=1, cluster=True).run(structure, 1, tmp_path)
