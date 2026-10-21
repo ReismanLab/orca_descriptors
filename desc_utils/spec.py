@@ -81,7 +81,7 @@ DEFAULTS: dict[str, Any] = {
         "consistency": "per_molecule",
         "orient": [],
         "annotators": [],
-        "smiles": {"mode": "whole_molecule", "strip": []},
+        "smiles": {"mode": "whole_molecule", "strip": [], "source": "geometry"},
         # `source: orca` -> `basename` and `column`; `source: xyz_comment` -> `key`, `units` and an explicit
         # `column` that must not be called SCF_energy, so the table always says where its energies come from.
         "energy": {"source": "orca", "basename": "singlepoint", "column": "SCF_energy", "key": "energy", "units": "eV"},
@@ -320,6 +320,10 @@ def _validate_numbering(numbering: dict, labels: list[str], problems: list[str])
     for l in smiles.get("strip") or []:
         if l not in labels:
             problems.append(f"numbering.smiles.strip: unknown label {l!r}")
+    if smiles.get("source") not in ("geometry", "registry", "file"):
+        problems.append("numbering.smiles.source must be 'geometry', 'registry' or 'file'")
+    elif smiles["source"] == "file" and not smiles.get("file"):
+        problems.append("numbering.smiles.file (the SMILES list) is required with source: file")
     numbering["smiles"] = smiles
     numbering["energy"] = _validate_energy(numbering.get("energy"), problems)
     return numbering
@@ -481,6 +485,9 @@ def validate_spec(raw: Mapping[str, Any], path: Path | None = None) -> Spec:
     label_set = set(labels)
 
     numbering = _validate_numbering(raw.get("numbering") or {}, labels, problems)
+    if numbering["smiles"].get("source") in ("registry", "file") and data.get("molecule_id_column") != "inchikey":
+        problems.append("numbering.smiles.source registry/file looks molecules up by InChIKey: "
+                        "it needs data.molecule_id_column: inchikey")
 
     descriptors = raw.get("descriptors") or {}
     for key in descriptors:

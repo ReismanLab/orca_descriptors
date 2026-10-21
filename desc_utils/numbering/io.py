@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -96,6 +97,34 @@ def smiles_for_mol(mol, mode: str = "whole_molecule", strip_indices: Iterable[in
         if frag.GetNumAtoms() > 1:
             return _to_smiles(frag, remove_hs)
     return _to_smiles(rw, remove_hs)
+
+
+REGISTRY_FILE = "molecule_registry.json"
+
+
+def submitted_smiles(source: str, data_root: str | Path, smiles_file: str | Path | None = None) -> dict[str, str]:
+    """Molecule id (InChIKey) -> the SMILES the structures were generated from.
+
+    ``registry``: ``<data_root>/molecule_registry.json``, written by ``orcadesc submit`` (and by the adoption of
+    older libraries): the submitted SMILES of every molecule. ``file``: a SMILES list (``.csv`` with a ``smiles``
+    column, or text, one SMILES per line with an optional name after it), each SMILES keyed by the InChIKey of
+    its canonical form, the rule ``orcadesc`` uses to name the molecule folders.
+    """
+    if source == "registry":
+        path = Path(data_root) / REGISTRY_FILE
+        if not path.is_file():
+            raise FileNotFoundError(f"numbering.smiles.source registry: no {path}")
+        return {ik: entry["smiles"] for ik, entry in json.loads(path.read_text()).items() if entry.get("smiles")}
+    if source == "file":
+        from bceg.inputs import load_inputs
+        return {m.inchikey: m.input_smiles for m in load_inputs(smiles_file)}
+    raise ValueError(f"unknown smiles source {source!r}")
+
+
+def canonical_noH(smiles: str) -> str | None:
+    """RDKit canonical SMILES (implicit hydrogens) of a submitted SMILES; None when it does not parse."""
+    mol = Chem.MolFromSmiles(smiles)
+    return None if mol is None else Chem.MolToSmiles(mol)
 
 
 #: 1 Hartree in each unit accepted by ``numbering.energy.units`` (CODATA 2018).

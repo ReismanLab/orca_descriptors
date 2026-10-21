@@ -21,7 +21,9 @@ from desc_utils.numbering.base import (
     STATUS_ELEMENT_MISMATCH, STATUS_FAILED, STATUS_INCOMPLETE, STATUS_INCONSISTENT, STATUS_OK,
     ConformerContext, NoMatch, NumberingBackend, NumberingRow, make_backend, validate_elements,
 )
-from desc_utils.numbering.io import get_sdf_from_xyz, load_mol, scf_energy, smiles_for_mol, xyz_comment_energy
+from desc_utils.numbering.io import (
+    canonical_noH, get_sdf_from_xyz, load_mol, scf_energy, smiles_for_mol, submitted_smiles, xyz_comment_energy,
+)
 from desc_utils.numbering.ligand_classes import ANNOTATORS
 from desc_utils.parallel import parallel_map
 from desc_utils.spec import Spec
@@ -195,11 +197,43 @@ def build_numbering_table(spec: Spec, repo_root: Path, backend: NumberingBackend
     base = int(spec.numbering.get("index_base", 1))
     for label in spec.labels:
         df[label] = (df[label] + base).astype("Int64")
+    df = apply_submitted_smiles(df, spec, repo_root, data_root)
     if spec.numbering.get("consistency", "per_molecule") == "per_molecule":
         df = check_consistency(df, spec.labels, id_col)
     bad = df[df["numbering_status"] != STATUS_OK]
     if strict and len(bad):
         raise RuntimeError(f"{len(bad)} conformer(s) not numbered cleanly:\n" + bad[["path", "numbering_status", "numbering_notes"]].to_string())
+    return df
+
+
+def apply_submitted_smiles(df: pd.DataFrame, spec: Spec, repo_root: Path, data_root: Path | None = None) -> pd.DataFrame:
+    """``numbering.smiles.source`` other than ``geometry``: ``smiles`` = the SMILES the molecule was submitted
+    with, ``smiles_noH`` = its RDKit canonical form, instead of the SMILES perceived from the geometry.
+
+    Bond orders perceived from a metal complex's xyz (Open Babel) are unreliable: an N bound to the metal is
+    taken for an amine, so the ligand left after ``strip_atoms`` comes out as a wrong tautomer. The submitted
+    SMILES is what the structures were generated from. A molecule missing from the source keeps no SMILES
+    and gets a note.
+    """
+    cfg = spec.numbering["smiles"]
+    if cfg.get("source", "geometry") == "geometry":
+        return df
+    repo_root = Path(repo_root).resolve()
+    root = Path(data_root) if data_root else Path(spec.data["root"])
+    root = root if root.is_absolute() else repo_root / root
+    smiles_file = cfg.get("file")
+    if smiles_file and not Path(smiles_file).is_absolute():
+        smiles_file = repo_root / smiles_file
+    lookup = submitted_smiles(cfg["source"], root, smiles_file)
+    id_col = spec.data["molecule_id_column"]
+    df = df.copy()
+    df["smiles"] = df[id_col].map(lookup)
+    df["smiles_noH"] = df["smiles"].map(lambda s: canonical_noH(s) if isinstance(s, str) else None)
+    missing = df["smiles"].isna()
+    if missing.any():
+        note = f"smiles: {id_col} not in numbering.smiles.source {cfg['source']}"
+        df.loc[missing, "numbering_notes"] = df.loc[missing, "numbering_notes"].map(
+            lambda s: "; ".join(filter(None, [s if isinstance(s, str) else "", note])))
     return df
 
 

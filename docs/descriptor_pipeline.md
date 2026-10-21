@@ -116,10 +116,24 @@ cannot run on an xyz; when none of them is requested the tables carry no `orca_j
 ## Atom numbering
 
 `number` writes one row per conformer folder with the 1-based index of every label, plus `path`,
-`inchikey`, `SCF_energy`, `smiles` (all hydrogens explicit, as in the xyz), `smiles_noH` (implicit hydrogens),
+`inchikey`, `SCF_energy`, `smiles`, `smiles_noH` (implicit hydrogens),
 annotator columns (e.g. `ligand_class`), `numbering_backend`,
 `numbering_status` (`ok`, `incomplete`, `failed`, `element_mismatch`, `inconsistent`) and
-`numbering_notes`. The table is a plain CSV so it can be inspected or corrected by hand; rows whose
+`numbering_notes`.
+
+Where the two SMILES columns come from is `numbering.smiles.source`:
+
+| `source` | `smiles` / `smiles_noH` |
+|---|---|
+| `geometry` (default) | perceived from the xyz (Open Babel bond orders), all hydrogens explicit / removed; with `mode: strip_atoms` the `strip` labels are removed first and the ligand fragment is kept |
+| `registry` | the SMILES the molecule was submitted with, from `<data.root>/molecule_registry.json` (written by `orcadesc submit`) / its RDKit canonical form |
+| `file` | the same, from the SMILES list `numbering.smiles.file` (`.csv` with a `smiles` column, or one SMILES per line), matched to the folders by InChIKey |
+
+Use `registry` (or `file`) for metal complexes: bond orders perceived from a complex's geometry are
+unreliable. An N bound to the metal is taken for an amine, so after `strip_atoms` an L-NiH2 pyox ligand
+comes out as a dihydro tautomer with two N–H, and its InChIKey no longer matches the folder. Atom
+numbering is not affected: its SMARTS use `~` (any bond). A molecule missing from the source gets no
+SMILES, and a note in `numbering_notes`. The table is a plain CSV so it can be inspected or corrected by hand; rows whose
 status is not `ok` are skipped downstream.
 
 Backends:
