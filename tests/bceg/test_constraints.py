@@ -165,6 +165,20 @@ def test_goat_geom_block_and_exact_only(nih2):
         Goat(constraints={"freeze": ["[Ni]"], "force_constant": 1.0})
 
 
+def test_goat_linear_angle_is_held_at_its_start_value():
+    """ORCA refuses a value for a linear bend ("you can only keep the initial value"): a target near 180 deg
+    is written without one, after checking that the start geometry is already there."""
+    from bceg.search.goat import geom_constraints
+    linear = np.array([[-3.0, 0.0, 0.0], [0.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
+    bent = np.array([[-3.0, 0.0, 0.0], [0.0, 0.0, 0.0], [2.0, 2.0, 0.0]])
+    resolved = {"freeze": [], "bonds": [], "dihedrals": [], "angles": [{"atoms": [0, 1, 2], "value": 180.0}]}
+    assert geom_constraints(resolved, linear) == ["{ A 0 1 2 C }"]
+    with pytest.raises(RuntimeError, match="linear bend"):
+        geom_constraints(resolved, bent)
+    resolved["angles"][0]["value"] = 120.0                                   # not linear: the value is written
+    assert geom_constraints(resolved, bent) == ["{ A 0 1 2 120.0000 C }"]
+
+
 def test_crest_run_writes_constraints_and_records_them(nih2, tmp_path, monkeypatch):
     """Through Crest.run with a stand-in crest that returns its input as the ensemble."""
     structure, _, ni, n, h = nih2

@@ -143,7 +143,10 @@ Eh/Bohr² for distances and Eh/rad² for angles and dihedrals; for reference, xt
 default is 0.5. A frozen group with a force constant becomes a restraint on every distance within
 the group (xtb's `$constrain atoms:`), so it keeps its shape but may move and turn as a whole.
 
-GOAT's constraints are always exact: a `force_constant` with `searcher: goat` is refused.
+GOAT's constraints are always exact: a `force_constant` with `searcher: goat` is refused. An angle
+target of 175° or more is a linear bend for ORCA, which can only hold it at its start value: it is
+written as `{ A i j k C }` (no value), and GOAT fails before starting unless the start geometry is
+within 1° of the target, so impose it first (`pre_refinement.constrained: true`, e.g. I-Sm-I at 180°).
 
 With CREST's defaults, frozen atoms are **not** exact: CREST 3.0.2 runs the MD with SHAKE on every
 bond except bonds to a metal, and SHAKE moves both atoms of a bond, frozen or not. A frozen atom
