@@ -970,6 +970,26 @@ def test_more_replicates_grow_the_library(tree, fake_sbatch, capsys):
     assert "replicates: 2 -> 1" in capsys.readouterr().err
 
 
+def test_level_of_theory_can_be_set_after_the_ensembles(tree, fake_sbatch, capsys):
+    """A library started with an unset level of theory (`{...}`, empty) accepts a real one later: no ORCA job
+    can have run without it. Once set, changing it is refused like any other stage-block change."""
+    assert main(["submit", str(_rewrite(tree, orca="off", dft={"level_of_theory": {"...": None}}))]) == 0
+    assert main(["submit", str(_rewrite(tree, orca="off", dft={"level_of_theory": None})), "--dry-run"]) == 0
+    capsys.readouterr()
+    assert main(["submit", str(_rewrite(tree))]) == 0
+    assert "the level of theory was not set yet" in capsys.readouterr().out
+    params = json.loads((tree["lib"] / "params.json").read_text())
+    assert params["compared"]["dft"]["level_of_theory"] == LEVEL_OF_THEORY
+    assert params["dft_history"][0]["dft"]["level_of_theory"] == {"...": None}
+    assert main(["submit", str(tree["cfg"]), "--dry-run"]) == 0              # same settings again: a match
+
+    changed = {**LEVEL_OF_THEORY, "opt_solvent": "CPCM(THF)"}
+    assert main(["submit", str(_rewrite(tree, dft={"level_of_theory": changed})), "--dry-run"]) == 2
+    assert "dft.level_of_theory.opt_solvent: '' -> 'CPCM(THF)'" in capsys.readouterr().err
+    unset = {"level_of_theory": None}
+    assert main(["submit", str(_rewrite(tree, orca="off", dft=unset)), "--dry-run"]) == 2   # set -> unset: refused
+
+
 # --------------------------------------------------------------------------- cancel
 @pytest.fixture
 def fake_scancel(monkeypatch):

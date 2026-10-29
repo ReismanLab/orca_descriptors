@@ -13,7 +13,7 @@ before the walltime), and condenses the outputs to `orca_condensed.json` when `c
 | Key | Default | Meaning | Hashed |
 |---|---|---|---|
 | `orca` (top level) | `on` | `off`: stop after the ensembles; the same command later with `on` refines them | no |
-| `dft.level_of_theory` | required | the table below | yes |
+| `dft.level_of_theory` | required | the table below; may stay unset (`{...}`) while `orca: off` | yes, but an unset one may later be set (and the rest of `dft` changed with it) |
 | `dft.constrained` | `false` | `true`: every atom `conformer_search.constraints` names stays where stages 2 to 4 put it in the optimisation step: one `{ C i C }` line (0-based) per atom, in place of the template's `&{geom_constraints}` line; the frequency step has no constraints, so small imaginary modes along the frozen coordinates are expected | yes, when `true` |
 | `dft.calc_param_template` | `desc_utils/submit/calcParam.inp.tmpl` | your own copy of the template, only to change which compound steps exist or how they chain | yes (its SHA-256; the copy is frozen under `_jobs/<timestamp>/`) |
 | `slurm.orca` | `{time: "160:00:00", mem_per_cpu: 4G, ntasks: 16, nodes: 1}` | the ORCA job profile; `ntasks` becomes `%pal nprocs`, `mem_per_cpu` (or `mem`/`ntasks`) gives `%maxcore` at 75 % | no |

@@ -47,8 +47,8 @@ def flatten(d: Any, prefix: str = "") -> dict[str, Any]:
         out = {}
         for k, v in d.items():
             out.update(flatten(v, f"{prefix}{k}."))
-        return out or {prefix.rstrip("."): {}}
-    return {prefix.rstrip("."): d}
+        return out or {prefix[:-1]: {}}  # only the separator: a key may itself end in "."
+    return {prefix[:-1]: d}
 
 
 def diff(old: dict, new: dict) -> list[str]:

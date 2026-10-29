@@ -10,7 +10,7 @@ from pathlib import Path
 
 from bceg.provenance import ParamsMismatch, check_or_write
 
-from desc_utils.submit import records, slurm
+from desc_utils.submit import records, slurm, template
 from desc_utils.submit.cancel import print_cancel
 from desc_utils.submit.config import Config
 from desc_utils.submit.cost import print_cost
@@ -35,12 +35,12 @@ def cmd_submit(args) -> int:
     lib.mkdir(parents=True, exist_ok=True)
 
     # 1. the library's compared settings: written once, refused ever after if they differ
-    #    (one exception: more replicates, see grow_replicates)
+    #    (two exceptions: more replicates, and a dft block whose level of theory was not set yet, see accepted_change)
     try:
         verdict = check_or_write(cfg.library_params_path(), cfg.params(),
                                  rename_hint="Different settings mean a different library_dir.", write=not args.dry_run)
     except ParamsMismatch as exc:
-        verdict = grow_replicates(cfg.library_params_path(), cfg.params(), write=not args.dry_run)
+        verdict = accepted_change(cfg.library_params_path(), cfg.params(), write=not args.dry_run)
         if verdict is None:
             print(f"REFUSED\n{exc}", file=sys.stderr)
             return 2
@@ -150,25 +150,56 @@ def cmd_submit(args) -> int:
     return 0
 
 
-def grow_replicates(path: Path, params: dict, write: bool = True) -> str | None:
-    """Accept a library whose only change is a larger ``replicates``; None for any other change.
+def level_of_theory_set(lot) -> bool:
+    """Whether ``dft.level_of_theory`` is complete enough to render calcParam.inp (else no ORCA job can have run)."""
+    try:
+        template.validate_level_of_theory(lot)
+    except (TypeError, KeyError):
+        return False
+    return True
+
+
+def accepted_change(path: Path, params: dict, write: bool = True) -> str | None:
+    """Accept a library whose only changes are a larger ``replicates`` and/or a ``dft`` block that replaces a
+    level of theory not set yet (``{...}``, empty, missing keys); None for any other change.
 
     Replicates are pooled in order and conf_N numbers the pooled position, so the new replicates' conformers
     come after the existing conf_N: what was computed stays valid, the new conformers are prepared next to it.
-    params.json is rewritten with the new count; the earlier ones are kept under ``replicates_history``."""
+    An unset level of theory cannot render calcParam.inp, so no ORCA job ran with it: the ensembles can be built
+    first (``orca: off``) and the level of theory chosen afterwards.
+    params.json is rewritten with the new values; the earlier ones are kept under ``replicates_history`` /
+    ``dft_history``."""
     old = json.loads(path.read_text())
     before, after = dict(old.get("compared", {})), dict(params["compared"])
     n_old, n_new = before.pop("replicates", 1), after.pop("replicates", 1)
-    if before != after or not n_new > n_old:
+    if n_new < n_old:
         return None
-    print(f"replicates {n_old} -> {n_new}: the library grows, existing conformers are kept")
+    dft_old = before.get("dft") or {}
+    if not level_of_theory_set(dft_old.get("level_of_theory")):
+        before.pop("dft", None)
+        after.pop("dft", None)
+    dft_changed = dft_old != (params["compared"].get("dft") or {})
+    if before != after or not (n_new > n_old or dft_changed):
+        return None
+    changes, out = [], dict(params)
+    stamp = {"sha256": old.get("sha256"), "until": records.now()}
+    if n_new > n_old:
+        print(f"replicates {n_old} -> {n_new}: the library grows, existing conformers are kept")
+        changes.append(f"replicates {n_old} -> {n_new}")
+        out["replicates_history"] = old.get("replicates_history", []) + [{"replicates": n_old, **stamp}]
+    elif "replicates_history" in old:
+        out["replicates_history"] = old["replicates_history"]
+    if dft_changed:
+        print("dft: the level of theory was not set yet, the new dft block replaces it")
+        changes.append("dft set")
+        out["dft_history"] = old.get("dft_history", []) + [{"dft": dft_old, **stamp}]
+    elif "dft_history" in old:
+        out["dft_history"] = old["dft_history"]
     if write:
-        history = old.get("replicates_history", []) + [{"replicates": n_old, "sha256": old.get("sha256"),
-                                                         "until": records.now()}]
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(params | {"replicates_history": history}, indent=2, sort_keys=True))
+        tmp.write_text(json.dumps(out, indent=2, sort_keys=True))
         tmp.replace(path)
-    return f"replicates {n_old} -> {n_new}"
+    return ", ".join(changes)
 
 
 def pipeline_line(cfg: Config) -> str:

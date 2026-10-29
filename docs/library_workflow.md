@@ -38,8 +38,11 @@ whether it is hashed, and an example block per option.
 
 The six stage blocks define the results: they are written to `$LIB/params.json` by the first `submit`
 (with the searcher's and refiner's defaults filled in), and a later submit with other values is refused
-with a diff. A different choice in any of them is a different `library_dir`. `orca`, `run_bceg`, the
-paths, `slurm` and `condense` are recorded but may change freely. The shipped example carries the level
+with a diff. A different choice in any of them is a different `library_dir`. Two exceptions: a larger
+`conformer_search.replicates`, and a `dft` block whose `level_of_theory` was not set yet (`{...}`, empty,
+keys missing; no ORCA job can run without it), so the ensembles can be built with `orca: off` and the
+level of theory chosen afterwards; the earlier values stay in `params.json` (`replicates_history`,
+`dft_history`). `orca`, `run_bceg`, the paths, `slurm` and `condense` are recorded but may change freely. The shipped example carries the level
 of theory of the LNiH2 library. The compound job's structure is
 [desc_utils/submit/calcParam.inp.tmpl](../desc_utils/submit/calcParam.inp.tmpl); give `dft.calc_param_template`
 your own copy only to change which steps exist.
