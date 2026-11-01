@@ -6,6 +6,7 @@ A fake ``xtb`` on PATH (modelled on ``fake_xtb`` in conftest) stands in for the 
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import stat
@@ -264,6 +265,33 @@ def test_aimnet2_optimises_every_conformer_and_reports_hartree(fake_aimnet, tmp_
         assert (tmp_path / f"opt_{i}.log").exists()
     assert set(result.versions) == {"aimnet", "ase"}
     assert result.details == {"n_input": 2, "n_unconverged": 0, "workers": workers, "threads": 1}
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_a_checkpoint_keeps_finished_conformers_and_a_rerun_resumes(fake_aimnet, tmp_path, workers):
+    """Every optimised conformer is appended to the checkpoint as it comes back; a rerun with the same key
+    optimises only the others (a line cut off by the kill is skipped), one with another key all of them."""
+    structure = Structure("CCO")
+    confs = _conformers(structure, 4)
+    ckpt = tmp_path / "raw_1_lot.partial.jsonl"
+    refiner = REFINERS["aimnet2"](workers=workers, threads=1)
+    full = refiner.run(structure, confs, tmp_path, checkpoint=(ckpt, "k"))
+    lines = ckpt.read_text().splitlines()
+    assert json.loads(lines[0]) == {"key": "k"} and len(lines) == 5 and "n_resumed" not in full.details
+
+    kept = sorted(json.loads(line)["index"] for line in lines[1:3])
+    ckpt.write_text("\n".join(lines[:3]) + '\n{"index": 3, "coo')          # two conformers, then the kill
+    for log in tmp_path.glob("opt_*.log"):
+        log.unlink()
+    resumed = refiner.run(structure, confs, tmp_path, checkpoint=(ckpt, "k"))
+    assert resumed.details["n_resumed"] == 2
+    assert sorted(int(f.stem[4:]) for f in tmp_path.glob("opt_*.log")) == sorted(set(range(4)) - set(kept))
+    for a, b in zip(full.conformers, resumed.conformers):
+        np.testing.assert_allclose(a.coords, b.coords)
+        assert a.energy == pytest.approx(b.energy) and a.info == b.info
+
+    other = refiner.run(structure, confs, tmp_path, checkpoint=(ckpt, "other inputs"))
+    assert "n_resumed" not in other.details and len(ckpt.read_text().splitlines()) == 5
 
 
 def test_aimnet2_unconverged_conformers_are_flagged_or_dropped(fake_aimnet, tmp_path):

@@ -7,8 +7,10 @@ a ``search`` (writes raw_<i>.xyz), a ``refine`` (writes raw_<i>_<lot>.xyz), or a
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import signal
 import platform
 import shutil
 import socket
@@ -82,6 +84,20 @@ def _hint(method: str, what: str = "method") -> str:
 # ----------------------------------------------------------------------------
 # expansion
 # ----------------------------------------------------------------------------
+class Interrupted(Exception):
+    """SIGTERM reached the task: SLURM's warning before the time limit (``--signal``), or scancel."""
+
+
+def _on_sigterm(signum, frame) -> None:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)  # once: the record is being written
+    raise Interrupted("SIGTERM (time limit or scancel)")
+
+
+def handle_sigterm() -> None:
+    """Turn SIGTERM into ``Interrupted``, so the running step records how it ended (``bceg run-task``)."""
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
+
 def _is_complete(record: dict | None, xyz: Path) -> bool:
     if record is None:
         return False
@@ -347,17 +363,33 @@ def _run_refine(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
     elements, conformers = read_xyz(md.raw(task.replicate))
     if elements != structure.elements:
         raise RuntimeError(f"{md.raw(task.replicate)}: atom order does not match the structure template")
-    record = _base_record(task, structure, refine_params(cfg, sp["sha256"])["sha256"]) | {"lot": lot}
+    rp_sha = refine_params(cfg, sp["sha256"])["sha256"]
+    record = _base_record(task, structure, rp_sha) | {"lot": lot}
+    # the conformers optimised so far are kept there, so a killed job resumes rather than restarts; the key
+    # ties them to this search output and these refinement parameters
+    partial = md.refine_checkpoint(task.replicate, lot)
+    resume = {}
+    if cfg.refiner.resumable:
+        key = hashlib.sha256(md.raw(task.replicate).read_bytes() + rp_sha.encode()).hexdigest()
+        resume = {"checkpoint": (partial, key)}
     write_record(rec_path, record | {"status": RUNNING})
     t0 = time.time()
     with workdir(prefix=f"{task.method}_{task.replicate}_{lot}_") as wd:
         try:
-            result = cfg.refiner.run(structure, conformers, wd)
+            result = cfg.refiner.run(structure, conformers, wd, **resume)
             _write_xyz_atomic(xyz, structure.elements, result.conformers)
         except Exception as exc:
-            write_record(rec_path, record | _usage(record, time.time() - t0) | {
+            kept = {}
+            if resume and partial.exists():
+                n = max(0, len(partial.read_text().splitlines()) - 1)
+                kept = {"checkpoint": partial.name, "n_checkpointed": n}
+                if isinstance(exc, Interrupted):
+                    print(f"{task.id}: interrupted, {n}/{len(conformers)} conformers kept in {partial.name}; "
+                          f"resubmit to resume", flush=True)
+            write_record(rec_path, record | _usage(record, time.time() - t0) | kept | {
                 "status": FAILED, "error": repr(exc), "traceback": traceback.format_exc()[-5000:]})
             return FAILED
+    partial.unlink(missing_ok=True)
     write_record(rec_path, record | _usage(record, time.time() - t0) | {
         "status": DONE, "n_conformers": len(result.conformers),
         "versions": result.versions, "details": result.details,

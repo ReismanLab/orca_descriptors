@@ -457,6 +457,52 @@ def test_every_replicate_must_be_finished(tree, fake_sbatch):
     assert records.load_metadata(tree["lib"], mol.inchikey)["orca_stage"]["status"] == "ensemble_missing"
 
 
+def test_a_record_left_running_by_an_ended_job_is_released(tree, monkeypatch):
+    """A job killed before it could write its end (time limit, memory, scancel) leaves its record at
+    "running": once sacct says the job has ended, status reports the step failed and submit runs it again
+    (no --force). While the job is alive, or without sacct, the record stays running."""
+    cfg = Config.load(_two_replicates(tree))
+    mol = InputMolecule.from_smiles("CC(C)O")
+    md = method_dir(tree["results"], "none", mol.inchikey, "etkdg")
+    write_record(md.run_record(2), {"status": "done", "n_conformers": 3})
+    write_record(md.run_record(2, LOT), {"status": "running", "slurm_job_id": "777"})
+    task = type("T", (), {"transformation": "none", "inchikey": mol.inchikey, "method": "etkdg", "replicate": 2})()
+    asked = []
+
+    def ended(states):
+        return lambda ids: asked.append(set(ids) - {None}) or states
+    monkeypatch.setattr(slurm, "ended_jobs", ended({}))                      # alive (or no sacct)
+    assert status_table(cfg).set_index("inchikey").loc[mol.inchikey, "post_opt"] == "running"
+    assert Ensembles(cfg)._running(task) and {"777"} in asked
+
+    monkeypatch.setattr(slurm, "ended_jobs", ended({"777": "TIMEOUT"}))
+    assert status_table(cfg).set_index("inchikey").loc[mol.inchikey, "post_opt"] == "failed"
+    source = Ensembles(cfg)
+    assert not source._running(task)
+    rec = source.read_run(md.run_record(2, LOT))
+    assert rec["status"] == "failed" and "777 ended (TIMEOUT)" in rec["error"]
+    assert read_record(md.run_record(2, LOT))["status"] == "running"        # the file itself is left to the next run
+
+
+def test_ended_jobs_reads_sacct(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        out = "5654009|TIMEOUT\n5654010|RUNNING\n5654011|CANCELLED by 42\n5654012|OUT_OF_MEMORY\n"
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+    monkeypatch.setattr(slurm.subprocess, "run", fake_run)
+    got = slurm.ended_jobs(["5654009", "5654010", "5654011", "5654012", None])
+    assert got == {"5654009": "TIMEOUT", "5654011": "CANCELLED", "5654012": "OUT_OF_MEMORY"}
+    assert calls[0][:6] == ["sacct", "-n", "-X", "-P", "-j", "5654009,5654010,5654011,5654012"]
+    assert slurm.ended_jobs([None]) == {} and len(calls) == 1                 # nothing to ask
+
+    def missing(cmd, **kw):
+        raise FileNotFoundError(cmd[0])
+    monkeypatch.setattr(slurm.subprocess, "run", missing)
+    assert slurm.ended_jobs(["1"]) == {}                                     # no sacct: every job taken as alive
+
+
 def test_aggregate_records_rules():
     from desc_utils.submit.source import aggregate_records
     done = {"status": "done", "n_conformers": 2}

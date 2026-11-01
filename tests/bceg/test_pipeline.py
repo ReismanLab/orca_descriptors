@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 
+import pytest
 import yaml
 
 from bceg.cli import main
 from bceg.config import Config
 from bceg.inputs import InputMolecule
 from bceg.slurm import write_jobs
-from bceg.tasks import expand, run_local
+from bceg.refine import REFINERS
+from bceg.refine.ase_opt import _CheckpointWriter, load_checkpoint
+from bceg.tasks import Interrupted, expand, handle_sigterm, run_local
+from bceg.xyz import Conformer, read_xyz
 from bceg.transforms import BUILTIN_TRANSFORMS
 
 BUTANE = InputMolecule.from_smiles("CCCC").inchikey
@@ -148,6 +154,7 @@ def test_submit_chained_snapshot_and_run_task(project, capsys):
     assert list(snapshot["transformations"]) == ["none"] and snapshot["inputs"].endswith("ligands.txt")
     sbatch = (jobdir / "chain_etkdg.sbatch").read_text()
     assert str(jobdir / "config.yaml") in sbatch and "#SBATCH --array=0-2" in sbatch
+    assert "#SBATCH --signal=B:TERM@600" in sbatch and "\nexec bceg run-task " in sbatch   # the warning reaches Python
     assert "dependency" not in (jobdir / "submit.sh").read_text()
 
     # what a SLURM array element does
@@ -311,3 +318,66 @@ def test_pool_mem_is_sized_from_the_cpus():
     with pytest.warns(UserWarning, match="mem 16G is below the ~35G"):
         assert with_pool_mem({"cpus_per_task": 8, "mem": "16G"}, uma, "c")["mem"] == "16G"   # kept, but said
     assert _mem_gb("16G") == 16 and _mem_gb("16384") == 16 and _mem_gb("16384M") == 16 and _mem_gb("1T") == 1024
+
+
+FakeRefiner = REFINERS["fake"]   # registered by conftest
+
+
+class ResumableFake(FakeRefiner):
+    """The fake refiner with the checkpoint of the ASE refiners; ``stop_after`` conformers, then SIGTERM."""
+
+    resumable = True
+    stop_after: int | None = None
+    computed: dict = {}
+
+    def run(self, structure, conformers, workdir, checkpoint=None):
+        path, key = checkpoint
+        done = load_checkpoint(path, key)
+        write = _CheckpointWriter(path, key, resumed=bool(done))
+        mine = self.computed.setdefault(path, [])
+        try:
+            for i, c in enumerate(conformers):
+                if i in done:
+                    continue
+                if self.stop_after is not None and len(mine) >= self.stop_after:
+                    raise Interrupted("SIGTERM (time limit or scancel)")
+                done[i] = {"index": i, "coords": c.coords, "energy_ev": -float(i)}
+                write(done[i])
+                mine.append(i)
+        finally:
+            write.close()
+        return FakeRefiner.run(self, structure, conformers, workdir)
+
+
+def test_an_interrupted_post_optimisation_resumes_from_its_checkpoint(project, monkeypatch):
+    """Killed after 2 conformers: the record says failed with what was kept, the checkpoint stays; the next
+    run optimises only the others, writes the ensemble and removes the checkpoint."""
+    root, write = project
+    monkeypatch.setitem(REFINERS, "fake", ResumableFake)
+    monkeypatch.setattr(ResumableFake, "computed", {})
+    cfg_path = write()
+    monkeypatch.setattr(ResumableFake, "stop_after", 2)
+    run_local(Config.load(cfg_path))
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    rec = json.loads((md / "run_1_fake-lot.json").read_text())
+    partial = md / "raw_1_fake-lot.partial.jsonl"
+    assert rec["status"] == "failed" and "Interrupted" in rec["error"]
+    assert rec["checkpoint"] == partial.name and rec["n_checkpointed"] == 2 and partial.exists()
+    assert not (md / "raw_1_fake-lot.xyz").exists()
+
+    monkeypatch.setattr(ResumableFake, "stop_after", None)
+    run_local(Config.load(cfg_path))
+    rec = json.loads((md / "run_1_fake-lot.json").read_text())
+    n = len(read_xyz(md / "raw_1.xyz")[1])
+    assert rec["status"] == "done" and rec["n_conformers"] == n and not partial.exists()
+    assert ResumableFake.computed[partial] == list(range(n))           # 0, 1 before the kill, the rest after
+
+
+def test_sigterm_becomes_interrupted_once():
+    handle_sigterm()
+    try:
+        with pytest.raises(Interrupted):
+            os.kill(os.getpid(), signal.SIGTERM)
+        assert signal.getsignal(signal.SIGTERM) is signal.SIG_IGN    # a second TERM must not interrupt the record
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)

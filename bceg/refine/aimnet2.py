@@ -41,6 +41,7 @@ class AIMNet2(Refiner):
         **REFINER_CONSTRAINT_DEFAULTS,
     }
     resource_keys = {"device", "workers", "threads"}
+    resumable = True
 
     def __init__(self, **params) -> None:
         super().__init__(**params)
@@ -91,8 +92,10 @@ class AIMNet2(Refiner):
 
     make_calculator = calculator  # the hook of the shared ASE loop
 
-    def run(self, structure: Structure, conformers: list[Conformer], workdir: Path) -> RefineResult:
+    def run(self, structure: Structure, conformers: list[Conformer], workdir: Path,
+            checkpoint: tuple[Path, str] | None = None) -> RefineResult:
         return optimize_conformers(
             self, structure, conformers, workdir,
             versions={"aimnet": package_version("aimnet"), "ase": package_version("ase")},
+            checkpoint=checkpoint,
         )

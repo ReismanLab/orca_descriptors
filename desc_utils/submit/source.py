@@ -31,6 +31,7 @@ from bceg.provenance import ParamsMismatch, read_record
 from bceg.structure import Structure
 from bceg.xyz import Conformer, read_xyz
 
+from desc_utils.submit import slurm
 from desc_utils.submit.config import Config
 
 DONE = "done"
@@ -183,8 +184,8 @@ class Ensembles:
             out["transformation"] = "not_applicable"
             return out
         md = self.method_dir(mol.inchikey)
-        search = aggregate_records([read_record(md.run_record(i)) for i in self.replicates])
-        refine = aggregate_records([read_record(md.run_record(i, self.lot)) for i in self.replicates]) if self.lot else None
+        search = aggregate_records([self.read_run(md.run_record(i)) for i in self.replicates])
+        refine = aggregate_records([self.read_run(md.run_record(i, self.lot)) for i in self.replicates]) if self.lot else None
         out["search_record"], out["refine_record"] = search, refine
         for rec in (refine, search):
             if rec and rec.get("n_conformers") is not None:
@@ -196,16 +197,47 @@ class Ensembles:
                 break
         return out
 
+    def _running_paths(self):
+        """The run records of this library (every molecule, replicate and step) that say "running"."""
+        for mol in self.molecules():
+            md = self.method_dir(mol.inchikey)
+            for i in self.replicates:
+                for path in (md.run_record(i), md.run_record(i, self.lot) if self.lot else None):
+                    if path is not None and (read_record(path) or {}).get("status") == "running":
+                        yield path
+
+    @property
+    def ended_jobs(self) -> dict[str, str]:
+        """``{job id: state}`` of the SLURM jobs that ended while a record still says "running" (one sacct
+        call, cached): killed by the time limit, the memory limit or scancel before they could write it."""
+        if not hasattr(self, "_ended"):
+            ids = {(read_record(p) or {}).get("slurm_job_id") for p in self._running_paths()}
+            self._ended = slurm.ended_jobs(ids)
+        return self._ended
+
+    def read_run(self, path: Path) -> dict | None:
+        """A run record, with a "running" one whose SLURM job has ended turned into a failure (so that the
+        status says so and submit runs the step again; a post-optimisation then resumes from its checkpoint)."""
+        rec = read_record(path)
+        if rec and rec.get("status") == "running":
+            job = str(rec.get("slurm_job_id"))
+            state = self.ended_jobs.get(job) if rec.get("slurm_job_id") else None
+            if state:
+                rec = rec | {"status": "failed", "stale_running": True,
+                             "error": f"SLURM job {job} ended ({state}) while this step was running, before it could "
+                                      f"record its end (time limit, memory, node failure or scancel); resubmit to run it again"}
+        return rec
+
     def _running(self, task) -> bool:
         """True when bceg's own record says this replicate's search or refinement is running right now.
 
         bceg's skip rule only recognises a finished step, so a resubmission while a job is still running
         would start the same search again (two CREST runs of one molecule, last writer wins). A record
-        left at "running" by a job killed before it wrote its end is released by --force.
+        left at "running" by a job that has ended (sacct) is not running; without sacct, --force releases it.
         """
         md = method_dir(self.results_dir, task.transformation, task.inchikey, task.method)
         for rec_path in (md.run_record(task.replicate), md.run_record(task.replicate, self.lot) if self.lot else None):
-            if rec_path is not None and (read_record(rec_path) or {}).get("status") == "running":
+            if rec_path is not None and (self.read_run(rec_path) or {}).get("status") == "running":
                 return True
         return False
 

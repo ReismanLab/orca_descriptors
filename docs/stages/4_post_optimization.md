@@ -21,6 +21,19 @@ Recorded per run for every refiner (`run_1_<lot>.json`): `n_conformers`, `detail
 `converged=True|False` and `source_index` (its index in `raw_1.xyz`). Charge and multiplicity come from
 the transformation (stage 1).
 
+### A job that runs out of time: the checkpoint
+
+`uma` and `aimnet2` append every optimised conformer to `raw_<i>_<lot>.partial.jsonl` as soon as it is
+done, so a job killed by its time limit, its memory limit, a node failure or `scancel` loses only the
+conformers in flight. The bceg jobs get SIGTERM 10 min before their time limit (`--signal=B:TERM@600`): the
+run record is then written `failed` with an `Interrupted` error and `n_checkpointed`, the conformers kept.
+After a hard kill the record stays `running`, and `orcadesc status` / `submit` ask `sacct` whether its job
+(`slurm_job_id`) has ended: if so the step counts as failed. Either way `orcadesc submit` runs it again,
+without `--force`, and the run optimises only the conformers not yet in the checkpoint; the file is
+removed once `raw_<i>_<lot>.xyz` is written (`details.n_resumed`: how many came from it). Its first line
+is a key, the hash of `raw_<i>.xyz` and the refiner's parameters: a checkpoint of another search output or
+other parameters is ignored. `gxtb` has no checkpoint: it starts again from the first conformer.
+
 ### Constrained post-optimisation
 
 With `constrained: true` the refiner gets the search's constraint block as its `constraints` parameter

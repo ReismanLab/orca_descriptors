@@ -18,6 +18,10 @@ Config (``slurm:`` block)::
 Methods and ``post_optimization`` may override the profile with their own ``slurm:`` mapping
 (in chained mode both apply, the method's taking precedence).
 
+Every job asks for SIGTERM 10 min before its time limit (``--signal=B:TERM@600``) and ``exec``s the task,
+so the signal reaches Python: the running step records that it was interrupted, and a post-optimisation
+keeps what it had finished for the next submission (bceg.refine.ase_opt).
+
 A job that runs a CPU pool of model copies (``uma``) gets ``mem`` from its CPUs when the profile sets
 none: ``(workers + 1) x worker_mem_gb + 2 GB``, ``workers`` being one per CPU unless set. An explicit
 ``mem`` below that is kept, with a warning.
@@ -36,6 +40,7 @@ from pathlib import Path
 from bceg.config import Config
 from bceg.tasks import Task
 
+TERM_WARNING = "#SBATCH --signal=B:TERM@600"
 _SBATCH_KEYS = {"partition", "account", "time", "cpus_per_task", "mem", "gres", "qos", "constraint", "nodes", "ntasks"}
 
 
@@ -117,10 +122,11 @@ def write_jobs(cfg: Config, tasks: list[Task], jobdir: Path | None = None) -> Pa
             f"#SBATCH --array={array}",
             f"#SBATCH --output={jobdir}/slurm_logs/{name}_%A_%a.out",
             *_directives(profile),
+            *([] if any("--signal" in x for x in profile.get("extra", [])) else [TERM_WARNING]),
             "",
             *s.get("setup", []),
             "",
-            f"{bceg} run-task {shlex.quote(str(cfg.path))} --tasks {shlex.quote(str(jobdir / f'{name}.jsonl'))} "
+            f"exec {bceg} run-task {shlex.quote(str(cfg.path))} --tasks {shlex.quote(str(jobdir / f'{name}.jsonl'))} "
             f"--chunk $SLURM_ARRAY_TASK_ID --chunk-size {per_job}",
         ]
         (jobdir / f"{name}.sbatch").write_text("\n".join(script) + "\n")

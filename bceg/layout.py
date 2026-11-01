@@ -35,6 +35,10 @@ class MethodDir:
     def refined(self, replicate: int, lot: str) -> Path:
         return self.path / f"raw_{replicate}_{lot}.xyz"
 
+    def refine_checkpoint(self, replicate: int, lot: str) -> Path:
+        """The conformers of an unfinished post-optimisation, one JSON line each (bceg.refine.ase_opt)."""
+        return self.path / f"raw_{replicate}_{lot}.partial.jsonl"
+
     def params(self, lot: str | None = None) -> Path:
         return self.path / ("params.json" if lot is None else f"params_{lot}.json")
 

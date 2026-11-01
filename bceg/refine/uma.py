@@ -67,6 +67,7 @@ class UMA(Refiner):
         **REFINER_CONSTRAINT_DEFAULTS,
     }
     resource_keys = {"device", "workers", "threads"}
+    resumable = True
     # uma-s-1p2 on CPU, measured on the cluster: ~2.0 GB per process up to ~100 atoms, then roughly
     # +15 kB x atoms^2 (+0.7 GB at 200 atoms, +1.6 GB at 300); 3.6 GB holds molecules up to ~300 atoms.
     worker_mem_gb = 3.6
@@ -119,10 +120,11 @@ class UMA(Refiner):
         return self.calculator()
 
     def run(self, structure: Structure, conformers: list[Conformer], workdir: Path,
-            holds: dict | None = None) -> RefineResult:
-        """``holds``: what an imposed start geometry must keep (bceg.impose.holds; ``pre_refinement: uma``)."""
+            holds: dict | None = None, checkpoint: tuple[Path, str] | None = None) -> RefineResult:
+        """``holds``: what an imposed start geometry must keep (bceg.impose.holds; ``pre_refinement: uma``).
+        ``checkpoint``: see bceg.refine.ase_opt."""
         return optimize_conformers(
             self, structure, conformers, workdir,
             versions={"fairchem-core": package_version("fairchem-core"), "ase": package_version("ase")},
-            holds=holds,
+            holds=holds, checkpoint=checkpoint,
         )

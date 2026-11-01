@@ -10,18 +10,24 @@ The workers are started with the ``spawn`` method: a fork of a process that has 
 thread pools can deadlock. Each worker therefore rebuilds the refiner from its parameters (with
 ``threads`` set to its share) and asks it for a calculator; the per-conformer ``opt_<i>.log`` files
 are written by the workers.
+
+With a ``checkpoint`` every optimised conformer is appended to a JSON-lines file as soon as it comes
+back, so a job killed by its time limit (or anything else) loses only the conformers in flight: the
+next run reads the file and optimises only the others. Its first line is a key (the caller's hash of
+the input ensemble and the parameters); a file with another key is from other inputs and is ignored.
 """
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -166,12 +172,14 @@ def _thread_env(threads: int):
                 os.environ[var] = value
 
 
-def _optimize_in_pool(refiner, structure: Structure, conformers: list[Conformer], workdir: Path,
-                      workers: int, threads: int, settings: dict) -> list[dict[str, Any]]:
+def _optimize_in_pool(refiner, structure: Structure, todo: list[tuple[int, np.ndarray]], workdir: Path,
+                      workers: int, threads: int, settings: dict,
+                      on_result: Callable[[dict], None]) -> list[dict[str, Any]]:
     """Futures are submitted one by one and never cancelled: on Python 3.11, ``pool.map`` cancels the
     pending futures when a worker dies, the pool's manager thread then fails on them
     (``InvalidStateError``) before terminating the surviving workers, and the job hangs at exit
-    waiting for them. On any failure the workers still alive are killed here, before the shutdown."""
+    waiting for them. On any failure the workers still alive are killed here, before the shutdown.
+    ``on_result`` sees every result as it comes back (in completion order)."""
     params = {**refiner.params, "threads": threads}
     context = multiprocessing.get_context(START_METHOD)
     before = set(multiprocessing.active_children())
@@ -179,8 +187,11 @@ def _optimize_in_pool(refiner, structure: Structure, conformers: list[Conformer]
         pool = ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_init_worker,
                                    initargs=(type(refiner), params, structure, workdir, settings, context.Lock()))
     try:
-        futures = [pool.submit(_optimize_in_worker, i, c.coords) for i, c in enumerate(conformers)]
-        out = [f.result() for f in futures]
+        futures = [pool.submit(_optimize_in_worker, i, coords) for i, coords in todo]
+        out = []
+        for f in as_completed(futures):
+            out.append(f.result())
+            on_result(out[-1])
     except BrokenProcessPool as exc:
         _kill_workers(before)
         raise RuntimeError(
@@ -202,9 +213,52 @@ def _kill_workers(before: set) -> None:
         p.join(timeout=30)
 
 
+# ---------------------------------------------------------------------------------------- the checkpoint
+def load_checkpoint(path: Path, key: str) -> dict[int, dict[str, Any]]:
+    """The results already in ``path`` (by conformer index); empty when it is absent or has another key.
+    A last line cut off by the kill is skipped."""
+    if not path.exists():
+        return {}
+    lines = path.read_text().splitlines()
+    try:
+        if json.loads(lines[0]).get("key") != key:
+            return {}
+    except (IndexError, ValueError, AttributeError):
+        return {}
+    done = {}
+    for line in lines[1:]:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        done[r["index"]] = r | {"coords": np.asarray(r["coords"])}
+    return done
+
+
+class _CheckpointWriter:
+    """Appends each result to the checkpoint file (flushed and synced, so a kill keeps it)."""
+
+    def __init__(self, path: Path, key: str, resumed: bool) -> None:
+        self.fh = open(path, "a" if resumed else "w")
+        if not resumed:
+            self._write({"key": key})
+
+    def _write(self, obj: dict) -> None:
+        self.fh.write(json.dumps(obj) + "\n")
+        self.fh.flush()
+        os.fsync(self.fh.fileno())
+
+    def __call__(self, r: dict) -> None:
+        self._write(r | {"coords": np.asarray(r["coords"]).tolist()})
+
+    def close(self) -> None:
+        self.fh.close()
+
+
 # ---------------------------------------------------------------------------------------- the loop
 def optimize_conformers(refiner, structure: Structure, conformers: list[Conformer], workdir: Path, *,
-                        versions: dict[str, Any], holds: dict | None = None) -> RefineResult:
+                        versions: dict[str, Any], holds: dict | None = None,
+                        checkpoint: tuple[Path, str] | None = None) -> RefineResult:
     """Optimise every conformer with the refiner's ASE calculator; energies come back in Hartree.
 
     ``refiner.params`` supplies ``optimizer`` (a class of ``ase.optimize``: LBFGS, BFGS, FIRE), ``fmax``,
@@ -212,19 +266,35 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
     conformer is written to ``workdir``. A conformer whose residual force exceeds ``fmax`` after
     ``max_steps`` is kept with ``converged=False`` or dropped, after ``keep_unconverged``. The
     ``details`` record ``workers`` and ``threads`` (per worker) as resolved.
+
+    ``checkpoint``: ``(path, key)`` of the file the results are appended to as they come (module
+    docstring); the conformers already in it are not optimised again (``details["n_resumed"]``).
     """
     p = refiner.params
     fixed = refiner.fixed_atoms(structure)
     settings = {"optimizer": p["optimizer"], "fmax": p["fmax"], "max_steps": p["max_steps"], "fixed": fixed,
                 "holds": holds}
-    workers = resolve_workers(p["workers"], p["device"], len(conformers))
+    done = load_checkpoint(*checkpoint) if checkpoint else {}
+    todo = [(i, c.coords) for i, c in enumerate(conformers) if i not in done]
+    on_result = _CheckpointWriter(checkpoint[0], checkpoint[1], resumed=bool(done)) if checkpoint else (lambda r: None)
+    workers = resolve_workers(p["workers"], p["device"], max(1, len(todo)))
     threads = threads_per_worker(p["threads"], workers)
     workdir.mkdir(parents=True, exist_ok=True)   # e.g. preopt_<attempt> of start_preopt: uma
-    if workers == 1:
-        calc = refiner.make_calculator(structure)
-        raw = [_optimize(calc, structure, i, c.coords, workdir, **settings) for i, c in enumerate(conformers)]
-    else:
-        raw = _optimize_in_pool(refiner, structure, conformers, workdir, workers, threads, settings)
+    try:
+        if not todo:
+            new = []
+        elif workers == 1:
+            calc = refiner.make_calculator(structure)
+            new = []
+            for i, coords in todo:
+                new.append(_optimize(calc, structure, i, coords, workdir, **settings))
+                on_result(new[-1])
+        else:
+            new = _optimize_in_pool(refiner, structure, todo, workdir, workers, threads, settings, on_result)
+    finally:
+        if checkpoint:
+            on_result.close()
+    raw = sorted([*done.values(), *new], key=lambda r: r["index"])
 
     out, n_unconverged = [], 0
     for r in raw:
@@ -237,4 +307,5 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
                               "source_index": r["index"]}))
     return RefineResult(out, versions=versions,
                         details={"n_input": len(conformers), "n_unconverged": n_unconverged,
-                                 "workers": workers, "threads": threads} | ({"fixed_atoms": fixed} if fixed else {}))
+                                 "workers": workers, "threads": threads} | ({"fixed_atoms": fixed} if fixed else {})
+                        | ({"n_resumed": len(done)} if done else {}))

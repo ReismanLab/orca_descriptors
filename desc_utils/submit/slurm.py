@@ -161,6 +161,34 @@ def queued_jobs() -> list[dict] | None:
     return jobs
 
 
+#: SLURM job states of a job that may still write its records (anything else has ended)
+ALIVE_STATES = {"PENDING", "RUNNING", "REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD", "RESIZING", "SUSPENDED",
+                "CONFIGURING", "COMPLETING", "SIGNALING", "STAGE_OUT"}
+
+
+def ended_jobs(job_ids) -> dict[str, str]:
+    """``{job id: state}`` of the jobs among ``job_ids`` that sacct reports as ended (TIMEOUT,
+    OUT_OF_MEMORY, CANCELLED, ...). Ids are the raw ones (``SLURM_JOB_ID`` of an array element). Empty
+    when sacct is unavailable (laptop, tests) or fails: a job it does not report is taken as alive."""
+    ids = sorted({str(j) for j in job_ids if j})
+    if not ids:
+        return {}
+    try:
+        out = subprocess.run(["sacct", "-n", "-X", "-P", "-j", ",".join(ids), "-o", "JobIDRaw,State"],
+                             capture_output=True, text=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+    if out.returncode != 0:
+        return {}
+    ended = {}
+    for line in out.stdout.splitlines():
+        raw, _, state = line.strip().partition("|")
+        state = state.split()[0] if state.strip() else ""   # "CANCELLED by 123"
+        if raw in ids and state and state not in ALIVE_STATES:
+            ended[raw] = state
+    return ended
+
+
 def scancel(job_ids: list[str]) -> None:
     """Cancel ``job_ids`` (an array id cancels every element of it)."""
     result = subprocess.run(["scancel", *[str(j) for j in job_ids]], capture_output=True, text=True)

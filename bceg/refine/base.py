@@ -25,6 +25,7 @@ POOL_RESERVE_GB = 2.0  # the job's own process besides its model copy: search re
 
 class Refiner(Configurable):
     worker_mem_gb: float | None = None  # memory of one process holding the model; None: no estimate
+    resumable = False  # run() takes ``checkpoint=(path, key)`` and resumes from it (the ASE refiners)
 
     def __init__(self, **params) -> None:
         super().__init__(**params)

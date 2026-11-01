@@ -8,6 +8,7 @@ Typical use on the cluster::
 from __future__ import annotations
 
 import argparse
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +19,7 @@ from bceg.config import Config, read_raw, select, write_raw
 from bceg.inputs import load_inputs, update_index
 from bceg.layout import method_dir
 from bceg.provenance import read_record
-from bceg.tasks import Task, expand, run_local, run_task
+from bceg.tasks import Interrupted, Task, expand, handle_sigterm, run_local, run_task
 
 
 def _selected_raw(args) -> dict:
@@ -75,11 +76,18 @@ def cmd_run_task(args) -> int:
     lines = [ln for ln in Path(args.tasks).read_text().splitlines() if ln.strip()]
     start = args.chunk * args.chunk_size
     failed = False
+    handle_sigterm()
     for line in lines[start : start + args.chunk_size]:
         task = Task.from_json(line)
-        status = run_task(cfg, task)
+        try:
+            status = run_task(cfg, task)
+        except Interrupted:  # between two steps: nothing of this task was running
+            print(f"[{'interrupted':>18}] {task.id}", flush=True)
+            return 1
         print(f"[{status:>18}] {task.id}", flush=True)
         failed |= status in ("failed", "waiting_for_search")
+        if signal.getsignal(signal.SIGTERM) is signal.SIG_IGN:  # the time is up: leave the rest of the chunk
+            return 1
     return int(failed)
 
 
