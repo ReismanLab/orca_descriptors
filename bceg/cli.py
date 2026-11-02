@@ -19,7 +19,7 @@ from bceg.config import Config, read_raw, select, write_raw
 from bceg.inputs import load_inputs, update_index
 from bceg.layout import method_dir
 from bceg.provenance import read_record
-from bceg.tasks import Interrupted, Task, expand, handle_sigterm, run_local, run_task
+from bceg.tasks import WAITING_FOR_INPUT, Interrupted, Task, expand, handle_sigterm, run_local, run_task
 
 
 def _selected_raw(args) -> dict:
@@ -85,7 +85,7 @@ def cmd_run_task(args) -> int:
             print(f"[{'interrupted':>18}] {task.id}", flush=True)
             return 1
         print(f"[{status:>18}] {task.id}", flush=True)
-        failed |= status in ("failed", "waiting_for_search")
+        failed |= status in ("failed", WAITING_FOR_INPUT)
         if signal.getsignal(signal.SIGTERM) is signal.SIG_IGN:  # the time is up: leave the rest of the chunk
             return 1
     return int(failed)

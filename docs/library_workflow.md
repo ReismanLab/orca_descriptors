@@ -145,6 +145,62 @@ every compound step as it ran) and one record per conformer (energy above the mi
 exit code, termination banner, run time, condense result). To reproduce a library: copy its YAML file, and
 the frozen template if you customised it, next to a new SMILES list.
 
+## 5. A second library on an existing ensembles tree
+
+`library_dir` (the ORCA side) and `ensembles_dir` (the bceg stages 1-4 tree) are separate paths, and
+`ensembles_dir` is recorded, not hashed. A second config may therefore point at an ensembles tree another
+library already built, so that stages 1-3 are never recomputed. The two libraries then sit side by side:
+the first is not modified, and because both read the same `raw_<i>_<lot>.xyz`, stage 5 prunes on the same
+energies and the `conf_N` numbering matches between them — which is what makes a conformer-by-conformer
+comparison meaningful.
+
+Two uses:
+
+**(a) Refine the geometries further.** Keep the stage 1-3 blocks verbatim and give stage 4 a new lot
+continued from the old one ([`continue_from`](stages/4_post_optimization.md#refining-further-continue_from)):
+
+```yaml
+library_dir: ../DATA/my_library_tight          # new
+ensembles_dir: ../DATA/my_library/ensembles    # the existing tree
+run_bceg: true                                 # stages 1-3 are already done there; only the new lot runs
+
+conformer_search: {...}                        # copied verbatim from the first config
+post_optimization:
+  refiner: uma
+  continue_from: uma-s-1p2
+  params: {model: uma-s-1p2, lot: uma-tight, fmax: 0.005, max_steps: 2000}
+```
+
+**(b) Run a different stage 6 on the same geometries**, e.g. an ORCA library and a g-xTB library
+([6_dft.md](stages/6_dft.md)). The two configs then differ only in `library_dir`, the engine and its
+SLURM profile; stages 1-4 are copied verbatim and `run_bceg: false`, because there is nothing left to
+compute in the ensembles tree:
+
+```yaml
+library_dir: ../DATA/my_library_gxtb
+ensembles_dir: ../DATA/my_library/ensembles
+run_bceg: false
+# ... stages 1-5 identical to the ORCA config ...
+orca: off
+dft:
+  engine: gxtb
+  gxtb: {opt_geom: true, freq_calc: true}
+```
+
+Rules, all of them enforced:
+
+- **Stages 1-4 must be copied verbatim.** They are hashed into the shared `params.json` /
+  `params_<lot>.json`; any drift is refused with a key-by-key diff. That refusal is the point — it is
+  what guarantees the two libraries really are talking about the same geometries.
+- **Each library keeps its own `<library_dir>/params.json`**, `molecule_registry.json`, `_jobs/` and
+  `<InChIKey>/` folders. Nothing of the first library is written to.
+- **Stages 5 and 6 use the lot of that config's own `post_optimization` block** (`raw_<i>_<lot>.xyz`).
+  There is no "latest lot": lots are labels, not a ranking, so a library always states which geometries
+  it ran on, and its `params.json` records the chain that produced them.
+- **Do not submit two libraries into one `ensembles_dir` at the same time.** The hyper-parameter logs are
+  written race-safely, but the run records are not. Submit them one after the other, or give the second
+  `run_bceg: false` when it has nothing to compute there.
+
 ## Other ways to produce the ORCA folders
 
 Libraries made before `orcadesc` (the LNiH2 libraries, the alkynes) were produced by earlier scripts whose

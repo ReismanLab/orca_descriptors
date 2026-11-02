@@ -64,7 +64,7 @@ EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
                   "xtb_executable": "xtb_executable", "impose_steps": "start_impose_steps",
                   "allow_decoordination": "start_allow_decoordination"}
 SEARCH_KEYS = {"name", "searcher", "params", "constraints", "slurm", "replicates"}
-POST_OPT_KEYS = {"refiner", "params", "slurm", "constrained"}
+POST_OPT_KEYS = {"refiner", "params", "slurm", "constrained", "continue_from"}
 PRUNING_KEYS = {"energy_window_kcal_mol"}
 DFT_KEYS = {"calc_param_template", "level_of_theory", "constrained", "engine", "gxtb"}
 #: stage-6 engines: the ORCA compound job, or one g-xTB run per conformer (desc_utils.submit.gxtb)
@@ -248,6 +248,19 @@ def _post_optimization(block, where: str, present: bool) -> dict | None:
     out = {"refiner": refiner, "params": dict(block.get("params") or {}), "slurm": dict(block.get("slurm") or {})}
     if _constrained(block, where):
         out["constrained"] = True
+    source = block.get("continue_from")
+    if source is not None:
+        # refine an ensemble that is already optimised: the input is raw_<i>_<source>.xyz rather than the
+        # search output, so this step needs a lot label of its own or it would overwrite what it reads
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError(f"{where}.continue_from must be the lot of an existing refinement, got {source!r}")
+        if not out["params"].get("lot"):
+            raise ValueError(f"{where}.continue_from: set {where}.params.lot to a label of this step's own "
+                             f"(the default lot is the model name, which would collide with {source!r})")
+        if out["params"]["lot"] == source:
+            raise ValueError(f"{where}.continue_from: {source!r} is also {where}.params.lot; a refinement "
+                             f"cannot overwrite the file it starts from")
+        out["continue_from"] = source
     return out
 
 
@@ -602,6 +615,8 @@ class Config:
         post = None
         if bcfg.refiner is not None:
             post = {"refiner": bcfg.refiner.name, "lot": bcfg.refiner.lot, "params": bcfg.refiner.compared_params()}
+            if bcfg.refine_from:  # left out without it, so a library built before continue_from keeps its hash
+                post["continue_from"] = bcfg.refine_from
         dft = dict(self.dft)
         if self.dft_engine == "gxtb":
             # the binary's location is a property of the machine, not of the results

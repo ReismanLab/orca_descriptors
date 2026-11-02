@@ -14,6 +14,7 @@ search, right after it.
 | `refiner` | `uma` | `uma` (fairchem UMA through ASE), `gxtb` (g-xTB, one `xtb --gxtb` run per conformer, CPU) or `aimnet2` (AIMNet2 through ASE); a refiner is a class in `bceg/refine/` registered in `REFINERS`, see the end of this page | yes |
 | `params` | `{}` | the refiner's parameters, below | yes, except the resource keys |
 | `slurm` | `{}` | overrides of `slurm.ensembles.cpu`/`.gpu` for this step (split mode) or merged under the search's overrides (chained mode) | no |
+| `continue_from` | — | the lot of an existing refinement in the same method folder: this step starts from `raw_<i>_<lot>.xyz` instead of the search output, so a library can be refined further without recomputing stages 1-3, see [below](#refining-further-continue_from) | yes, when set |
 | `constrained` | `false` | `true`: the atoms `conformer_search.constraints` names stay fixed in every conformer's optimisation (ASE `FixAtoms` for `uma` and `aimnet2`; xtb `$fix` with the L-BFGS optimiser, `$opt engine=lbfgs`, for `gxtb`: xtb's default ANC optimiser ignores `$fix`), see below | yes, when `true` |
 
 Recorded per run for every refiner (`run_1_<lot>.json`): `n_conformers`, `details.n_input`,
@@ -33,6 +34,53 @@ without `--force`, and the run optimises only the conformers not yet in the chec
 removed once `raw_<i>_<lot>.xyz` is written (`details.n_resumed`: how many came from it). Its first line
 is a key, the hash of `raw_<i>.xyz` and the refiner's parameters: a checkpoint of another search output or
 other parameters is ignored. `gxtb` has no checkpoint: it starts again from the first conformer.
+
+### Refining further: `continue_from`
+
+A refinement is identified by its `lot`, and `lot` names the files (`raw_<i>_<lot>.xyz`,
+`params_<lot>.json`, `run_<i>_<lot>.json`). Several lots therefore live side by side in one method
+folder, and `continue_from` makes one of them the *input* of the next:
+
+```yaml
+post_optimization:
+  refiner: uma
+  continue_from: uma-s-1p2                      # reads raw_<i>_uma-s-1p2.xyz
+  params: {model: uma-s-1p2, lot: uma-tight, fmax: 0.005, max_steps: 2000}
+```
+
+```
+<ensembles_dir>/<transformation>/<InChIKey>/<method>/
+    raw_1.xyz                 search output            (untouched)
+    raw_1_uma-s-1p2.xyz       fmax 0.05, 500 steps     (untouched, and still the input of its own library)
+    raw_1_uma-tight.xyz       fmax 0.005, 2000 steps   <- continued from the file above
+```
+
+This is how an already computed library is refined further: the conformer search and the optimiser
+steps already spent are kept, and only the extra steps are paid for. The usual way to use it is a second
+library config pointing at the same `ensembles_dir`, see
+[library_workflow.md](../library_workflow.md#5-a-second-library-on-an-existing-ensembles-tree).
+
+- `params.lot` is **required** with `continue_from`, and must differ from it: the default lot is the
+  model name, which would make the step overwrite the file it reads.
+- The refiner may differ from the one that produced the source lot, so `gxtb` -> `uma` and `uma` ->
+  `gxtb` cascades are written the same way.
+- The step is never [chained](3_conformer_search.md) behind a search (`slurm.ensembles.mode` is ignored
+  for it): its input is a lot an earlier run produced.
+- `params_<lot>.json` records `compared.continue_from` = the source lot and the sha256 of *its*
+  `params_<lot>.json`, so the provenance chains search -> source lot -> this one, and all of it is
+  checked before the step runs. A source lot that was recomputed with other parameters fails the step
+  with `ParamsMismatch` rather than silently refining the new geometries.
+- `run_<i>_<lot>.json` records `continued_from: {lot, file, n_input}`.
+- Without `continue_from` the key is left out of the hash, so **every `params_<lot>.json` written before
+  this feature keeps its hash** and no existing library is invalidated.
+- A replicate whose source lot has no finished run yet simply has nothing pending: `orcadesc submit`
+  warns and skips it (the library reports it as `ensemble_missing`), and the rest of the submission goes
+  ahead. Run the config that produces the source lot first.
+- The checkpoint above is keyed on the file this step actually reads, so a checkpoint of the source lot
+  is never mistaken for one of this step.
+- Conformer order is preserved, but `source_index` in the output counts positions in
+  `raw_<i>_<source-lot>.xyz`, not in `raw_<i>.xyz`. The two coincide while `keep_unconverged: true` (the
+  default); with `keep_unconverged: false` the source lot has already dropped conformers.
 
 ### Constrained post-optimisation
 

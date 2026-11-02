@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -13,7 +14,8 @@ from bceg.inputs import InputMolecule
 from bceg.slurm import write_jobs
 from bceg.refine import REFINERS
 from bceg.refine.ase_opt import _CheckpointWriter, load_checkpoint
-from bceg.tasks import Interrupted, expand, handle_sigterm, run_local
+from bceg.provenance import ParamsMismatch
+from bceg.tasks import Interrupted, expand, handle_sigterm, run_local, run_task
 from bceg.xyz import Conformer, read_xyz
 from bceg.transforms import BUILTIN_TRANSFORMS
 
@@ -381,3 +383,110 @@ def test_sigterm_becomes_interrupted_once():
         assert signal.getsignal(signal.SIGTERM) is signal.SIG_IGN    # a second TERM must not interrupt the record
     finally:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+# --------------------------------------------------------------------------- continue_from
+def _refine_again(write, **kw):
+    """A second config refining the `first` lot into `second`, in the same results_dir."""
+    return Config.load(write(name="refine.yaml", **kw))
+
+
+def test_continue_from_refines_the_previous_lot_and_leaves_it_alone(project):
+    """The second lot reads raw_<i>_<first>.xyz, not the search output, and writes a file of its own."""
+    root, write = project
+    first = Config.load(write(refiner_params="{label: coarse, keep: 2}"))     # 4 conformers in, 2 out
+    assert run_local(first) == {"done": 9}
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    before = {p.name: p.read_bytes() for p in md.iterdir() if p.is_file()}
+
+    second = _refine_again(write, refiner_params="{label: tight}", continue_from="coarse")
+    assert second.refine_from == "coarse" and not second.chained      # never chained behind a search
+    tasks, problems = expand(second)
+    assert not problems and [t.kind for t in tasks] == ["refine"] * 9  # no search task: it is already done
+    assert run_local(second) == {"done": 9}
+
+    # it read the 2-conformer coarse lot, not the 4-conformer search output
+    rec = json.loads((md / "run_1_tight.json").read_text())
+    assert rec["continued_from"] == {"lot": "coarse", "file": "raw_1_coarse.xyz", "n_input": 2}
+    assert rec["details"]["n_input"] == 2 and rec["n_conformers"] == 2
+    assert len(read_xyz(md / "raw_1_tight.xyz")[1]) == 2
+
+    # the first lot and the search output are untouched
+    assert {p.name: p.read_bytes() for p in md.iterdir() if p.is_file() and p.name in before} == before
+    assert (md / "params_tight.json").exists()
+
+
+def test_continue_from_chains_the_provenance_and_keeps_old_hashes(project):
+    """params_<lot>.json records the source lot and its hash; without continue_from the key is absent,
+    so a params file written before the feature keeps the hash it has."""
+    root, write = project
+    first = Config.load(write(refiner_params="{label: coarse}"))
+    run_local(first)
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    coarse = json.loads((md / "params_coarse.json").read_text())
+    assert "continue_from" not in coarse["compared"]
+
+    run_local(_refine_again(write, refiner_params="{label: tight}", continue_from="coarse"))
+    tight = json.loads((md / "params_tight.json").read_text())
+    assert tight["compared"]["continue_from"] == {"lot": "coarse", "params_sha256": coarse["sha256"]}
+    assert tight["compared"]["search_params_sha256"] == json.loads((md / "params.json").read_text())["sha256"]
+    # the source lot's own log is not rewritten
+    assert json.loads((md / "params_coarse.json").read_text()) == coarse
+
+
+def test_continue_from_an_unfinished_lot_warns_and_skips_that_replicate(project):
+    """A replicate whose source lot is not finished has nothing pending: it is warned about and skipped,
+    not queued (it could only wait) and not reported as a params mismatch (that would abort the submit,
+    and an unfinished source lot is a normal transient state)."""
+    root, write = project
+    run_local(Config.load(write(refiner_params="{label: coarse}")))
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    (md / "raw_2_coarse.xyz").unlink()
+
+    second = _refine_again(write, refiner_params="{label: tight}", continue_from="coarse")
+    with pytest.warns(UserWarning, match="raw_2_coarse.xyz"):
+        tasks, problems = expand(second)
+    assert problems == []                                             # not a params mismatch
+    assert len(tasks) == 8                                            # the other 8 replicates still run
+    assert not any(t.inchikey == BUTANE and t.replicate == 2 for t in tasks)
+
+
+def test_continue_from_a_lot_recomputed_with_other_parameters_is_refused(project):
+    """The source lot's run record must match its params_<lot>.json, or the geometries are not the ones
+    this refinement's hash says it started from."""
+    root, write = project
+    run_local(Config.load(write(refiner_params="{label: coarse}")))
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    rec = json.loads((md / "run_1_coarse.json").read_text())
+    (md / "run_1_coarse.json").write_text(json.dumps(rec | {"params_sha256": "0" * 64}))
+
+    second = _refine_again(write, refiner_params="{label: tight}", continue_from="coarse")
+    tasks, _ = expand(second)
+    with pytest.raises(ParamsMismatch, match="raw_1_coarse.xyz"):
+        run_task(second, next(t for t in tasks if t.inchikey == BUTANE and t.replicate == 1))
+
+
+def test_a_checkpoint_of_the_source_lot_is_not_reused_by_the_continued_one(project, monkeypatch):
+    """The checkpoint key hashes the file the step actually reads, so the coarse lot's checkpoint is
+    ignored by the lot continued from it even though both are for the same replicate."""
+    root, write = project
+    monkeypatch.setitem(REFINERS, "fake", ResumableFake)
+    run_local(Config.load(write(refiner_params="{label: coarse}")))
+    md = root / "results" / "none" / BUTANE / "etkdg"
+
+    second = _refine_again(write, refiner_params="{label: tight}", continue_from="coarse")
+    tasks, _ = expand(second)                                    # writes params_tight.json
+    rp_sha = json.loads((md / "params_tight.json").read_text())["sha256"]
+
+    # a checkpoint that would be valid if this step read the search output: 1 conformer already "done"
+    partial = md / "raw_1_tight.partial.jsonl"
+    from_search = hashlib.sha256((md / "raw_1.xyz").read_bytes() + rp_sha.encode()).hexdigest()
+    partial.write_text(json.dumps({"key": from_search}) + "\n"
+                       + json.dumps({"index": 0, "coords": [[0.0, 0.0, 0.0]], "energy_ev": 0.0}) + "\n")
+    ResumableFake.computed.pop(partial, None)
+
+    run_task(second, next(t for t in tasks if t.inchikey == BUTANE and t.replicate == 1))
+    assert json.loads((md / "run_1_tight.json").read_text())["status"] == "done"
+    # every conformer was recomputed: conformer 0 was NOT taken from the stale checkpoint
+    assert ResumableFake.computed[partial] == [0, 1, 2, 3]
+    assert not partial.exists()                                  # removed once raw_1_tight.xyz is written

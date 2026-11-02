@@ -136,14 +136,20 @@ class Config:
     refiner: Refiner | None
     refiner_slurm: dict[str, Any]
     slurm: dict[str, Any]
+    #: ``post_optimization.continue_from``: the lot whose ``raw_<i>_<lot>.xyz`` this refinement starts
+    #: from, instead of the search output. None: start from ``raw_<i>.xyz`` (the usual case).
+    refine_from: str | None = None
 
     @property
     def chained(self) -> bool:
-        """True (default): each job runs search then post-optimisation; False: separate job arrays."""
+        """True (default): each job runs search then post-optimisation; False: separate job arrays.
+
+        A ``continue_from`` refinement is never chained: its input is a lot some earlier run produced,
+        so there is no search to chain it behind."""
         mode = self.slurm.get("mode", "chained")
         if mode not in ("chained", "split"):
             raise ValueError(f"slurm.mode must be 'chained' or 'split', got {mode!r}")
-        return mode == "chained"
+        return mode == "chained" and self.refine_from is None
 
     @classmethod
     def load(cls, path: str | Path) -> Config:
@@ -174,11 +180,18 @@ class Config:
             raise ValueError(f"{path}: no methods defined")
 
         post = raw.get("post_optimization", {"refiner": "uma"})
-        refiner, refiner_slurm = None, {}
+        refiner, refiner_slurm, refine_from = None, {}, None
         if post:
             post = dict(post)
             refiner = REFINERS[post.pop("refiner", "uma")](**(post.pop("params", None) or {}))
             refiner_slurm = post.pop("slurm", None) or {}
+            refine_from = post.pop("continue_from", None)
+            if refine_from is not None:
+                refine_from = check_name(str(refine_from), "level of theory")
+                if refine_from == refiner.lot:
+                    raise ValueError(f"post_optimization.continue_from: {refine_from!r} is this step's own "
+                                     f"lot; set params.lot to a different label so the refinement does not "
+                                     f"overwrite its own input")
             if post:
                 raise ValueError(f"post_optimization: unknown keys {sorted(post)}")
 
@@ -197,4 +210,5 @@ class Config:
             refiner=refiner,
             refiner_slurm=refiner_slurm,
             slurm=slurm,
+            refine_from=refine_from,
         )

@@ -15,10 +15,15 @@ from bceg.xyz import Conformer
 
 
 class FakeRefiner(Refiner):
-    """Stand-in for UMA: shifts nothing, assigns energy = -index."""
+    """Stand-in for UMA: shifts nothing, assigns energy = -index.
+
+    ``keep`` truncates the output (0: keep every conformer). A lot written with ``keep`` therefore has
+    fewer conformers than the search output, which is how the ``continue_from`` tests tell which file a
+    refinement actually read.
+    """
 
     name = "fake"
-    defaults = {"label": "fake-lot", "scale": 1.0, "device": "cpu"}
+    defaults = {"label": "fake-lot", "scale": 1.0, "keep": 0, "device": "cpu"}
     resource_keys = {"device"}
 
     @property
@@ -27,7 +32,9 @@ class FakeRefiner(Refiner):
 
     def run(self, structure, conformers, workdir):
         out = [Conformer(c.coords, -float(i) * self.params["scale"], {"converged": True}) for i, c in enumerate(conformers)]
-        return RefineResult(out, versions={"fake": "0"})
+        keep = self.params["keep"]
+        return RefineResult(out[:keep] if keep else out, versions={"fake": "0"},
+                            details={"n_input": len(conformers)})
 
 
 REFINERS["fake"] = FakeRefiner
@@ -83,8 +90,9 @@ def project(tmp_path: Path):
 
     def write(params: str = "{n_confs: 4}", refiner_params: str = "{}", mode: str = "chained",
               searcher: str = "rdkit_etkdg", transformations: str = "{none: null, H: protonate.py}",
-              method_slurm: str = "{}", refiner_slurm: str = "{}") -> Path:
-        cfg = tmp_path / "config.yaml"
+              method_slurm: str = "{}", refiner_slurm: str = "{}", continue_from: str | None = None,
+              name: str = "config.yaml") -> Path:
+        cfg = tmp_path / name
         cfg.write_text(textwrap.dedent(f"""
             inputs: inputs.csv
             results_dir: results
@@ -99,6 +107,7 @@ def project(tmp_path: Path):
               refiner: fake
               params: {refiner_params}
               slurm: {refiner_slurm}
+              {"continue_from: " + continue_from if continue_from else ""}
             slurm:
               mode: {mode}
               cpu: {{partition: short, cpus_per_task: 2}}

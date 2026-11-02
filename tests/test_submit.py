@@ -7,6 +7,7 @@ post_optimization / pruning / dft) with ``run_bceg: false`` so nothing is comput
 
 from __future__ import annotations
 
+import hashlib
 import json
 import stat
 from pathlib import Path
@@ -22,7 +23,7 @@ from bceg.layout import method_dir
 from bceg.provenance import make_params, read_record, write_record
 from bceg.structure import Structure
 from bceg.structure import Structure
-from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
+from bceg.xyz import HARTREE_TO_KCAL, Conformer, read_xyz, write_xyz
 
 from desc_utils.submit import records, slurm, template
 from desc_utils.submit.cli import main
@@ -181,6 +182,11 @@ def test_stage_defaults_and_mapping_to_bceg(tree):
     ({"pruning": {"ewin": 5}}, "unknown keys"),
     ({"transformation": {"script": "ni_x2.py"}}, "`name` is required"),
     ({"post_optimization": {"refiner": "uma", "params": {"modle": "x"}}}, "unknown parameter"),
+    # continue_from: the step must have a lot of its own, or it would overwrite the file it reads
+    ({"post_optimization": {"refiner": "uma", "continue_from": LOT, "params": {"model": LOT}}}, "params.lot"),
+    ({"post_optimization": {"refiner": "uma", "continue_from": LOT,
+                            "params": {"model": LOT, "lot": LOT}}}, "cannot overwrite"),
+    ({"post_optimization": {"refiner": "uma", "continue_from": "", "params": {"model": LOT}}}, "continue_from"),
     ({"dft": {"level_of_theory": {**LEVEL_OF_THEORY, "conf_search": False}}, "prune": 1}, "unknown keys"),
 ])
 def test_config_errors_are_caught_at_load(tree, capsys, override, message):
@@ -1131,3 +1137,68 @@ def test_orca_task_cancelled_is_failed_not_timeout(tree, fake_sbatch, tmp_path, 
     assert run_orca_conformer(cfg, key, "conf_2", orca_cmd=str(slow)) == "failed"
     c2 = records.load_metadata(tree["lib"], key)["conformers"]["conf_2"]
     assert c2["reason"] == "cancelled" and c2["wall_time_s"] > 0
+
+
+# --------------------------------------------------------------------------- a second library, one ensembles tree
+def _hashes(root: Path) -> dict:
+    return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_a_second_library_shares_the_ensembles_tree(tree, fake_sbatch):
+    """Two libraries on one ensembles_dir: the second gets its own params.json, registry and molecule
+    folders, writes nothing into the first, and prunes the same conformers to the same conf_N names
+    (which is what makes the two comparable conformer by conformer)."""
+    first = _frozen(tree, fake_sbatch)
+    key = tree["keys"]["CCO"]
+    assert prepare_molecule(first, key, "CCO") == "prepared"
+    lib_a = _hashes(tree["lib"])
+    ensembles = _hashes(tree["results"])
+
+    # same stages 1-5, a different library_dir and a different stage 6
+    second_path = tree["root"] / "lib_gxtb.yaml"
+    raw = _lib_cfg(library_dir="LIB_GXTB")
+    raw["dft"] = {"level_of_theory": {**LEVEL_OF_THEORY, "nmr_calc": False}}
+    second_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    assert main(["submit", str(second_path)]) == 0
+    second = Config.load(sorted((tree["root"] / "LIB_GXTB" / "_jobs").iterdir())[-1] / "config.yaml")
+    assert prepare_molecule(second, key, "CCO") == "prepared"
+
+    # the first library and the shared ensembles tree are untouched
+    assert _hashes(tree["lib"]) == lib_a
+    assert _hashes(tree["results"]) == ensembles
+
+    # the second stands on its own, and reads the same geometries under the same conformer names
+    lib_b = tree["root"] / "LIB_GXTB"
+    assert (lib_b / "params.json").exists() and (lib_b / "molecule_registry.json").exists()
+    assert json.loads((lib_b / "params.json").read_text())["sha256"] != \
+           json.loads((tree["lib"] / "params.json").read_text())["sha256"]
+    confs = sorted(p.name for p in (lib_b / key).iterdir() if p.is_dir())
+    assert confs == sorted(p.name for p in (tree["lib"] / key).iterdir() if p.is_dir())
+    for conf in confs:
+        assert (lib_b / key / conf / "input.xyz").read_text() == (tree["lib"] / key / conf / "input.xyz").read_text()
+
+
+def test_a_refined_library_reads_the_continued_lot(tree):
+    """A library whose stage 4 continues from another lot refines on raw_<i>_<new-lot>.xyz; stages 5-6
+    take the lot from that config's own post_optimization block, never a 'latest' one."""
+    tight = "uma-tight"
+    md = method_dir(tree["results"], "none", tree["keys"]["CCO"], "etkdg")
+    path = _rewrite(tree, library_dir="LIB_TIGHT",
+                    post_optimization={"refiner": "uma", "continue_from": LOT,
+                                       "params": {"model": LOT, "lot": tight, "fmax": 0.005}})
+    cfg = Config.load(path)
+    assert cfg.lot == tight and cfg.bceg_config().refine_from == LOT
+    assert cfg.compared()["post_optimization"]["continue_from"] == LOT
+
+    # the new lot does not exist yet: the library says so rather than silently using the old geometries
+    ens = Ensembles(cfg).ensemble(InputMolecule.from_smiles("CCO"))
+    assert ens.status == "ensemble_missing" and f"run_1_{tight}.json" in ens.reason
+
+    # once it is there, that is what the library refines
+    elements, confs = read_xyz(md.refined(1, LOT))
+    write_xyz(md.refined(1, tight), elements, confs[:2])
+    md.params(tight).write_text(json.dumps(make_params({"refiner": "uma", "lot": tight})))
+    write_record(md.run_record(1, tight), {"status": "done", "n_conformers": 2})
+    ens = Ensembles(cfg).ensemble(InputMolecule.from_smiles("CCO"))
+    assert ens.done and [p.name for p in ens.xyz_paths] == [f"raw_1_{tight}.xyz"] and len(ens.conformers) == 2

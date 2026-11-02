@@ -71,9 +71,15 @@ def search_params(cfg: Config, method: str, transformation: str, structure: Stru
     return make_params(compared, {"params": searcher.recorded_params(), "replicates": cfg.replicates})
 
 
-def refine_params(cfg: Config, search_sha256: str) -> dict:
+def refine_params(cfg: Config, search_sha256: str, md: MethodDir) -> dict:
+    """The refinement's hyper-parameter log. ``continue_from`` adds the source lot and the hash of its
+    own log, so the provenance chains search -> first lot -> this one; without it the key is left out
+    and an existing ``params_<lot>.json`` keeps the hash it was written with."""
     r = cfg.refiner
     compared = {"refiner": r.name, "lot": r.lot, "params": r.compared_params(), "search_params_sha256": search_sha256}
+    if cfg.refine_from:
+        source = read_record(md.params(cfg.refine_from)) or {}
+        compared["continue_from"] = {"lot": cfg.refine_from, "params_sha256": source.get("sha256")}
     return make_params(compared, {"params": r.recorded_params()})
 
 
@@ -96,6 +102,10 @@ def _on_sigterm(signum, frame) -> None:
 def handle_sigterm() -> None:
     """Turn SIGTERM into ``Interrupted``, so the running step records how it ended (``bceg run-task``)."""
     signal.signal(signal.SIGTERM, _on_sigterm)
+
+
+#: a refinement whose input (the search output, or the ``continue_from`` lot) is not ready yet
+WAITING_FOR_INPUT = "waiting_for_input"
 
 
 def _is_complete(record: dict | None, xyz: Path) -> bool:
@@ -130,7 +140,7 @@ def expand(cfg: Config, molecules: list[InputMolecule] | None = None, write_para
                     continue  # e.g. LoQI for a Ni complex: no folder, no task
                 md = method_dir(cfg.results_dir, tname, mol.inchikey, mname)
                 sp = search_params(cfg, mname, tname, structure)
-                rp = refine_params(cfg, sp["sha256"]) if cfg.refiner else None
+                rp = refine_params(cfg, sp["sha256"], md) if cfg.refiner else None
                 try:
                     check_or_write(md.params(), sp, _hint(mname), write=write_params)
                     if rp:
@@ -142,9 +152,20 @@ def expand(cfg: Config, molecules: list[InputMolecule] | None = None, write_para
                     s = Task("search", tname, mol.inchikey, mol.input_smiles, mname, rep, method.searcher.resource_class())
                     rec = read_record(md.run_record(rep))
                     search_done = _is_complete(rec, md.raw(rep))
-                    if not (pending_only and search_done):
+                    # a continue_from refinement never runs the search: its input is a lot an earlier
+                    # config produced, and this config does not know how to make it
+                    if not (pending_only and search_done) and not cfg.refine_from:
                         tasks.append(s)
                     if rp is None or (rec and rec.get("status") == NOT_APPLICABLE):
+                        continue
+                    # the source lot of a continue_from step is produced by another config: until it is
+                    # there this molecule simply has nothing pending (its library reports the ensemble as
+                    # missing). Not a params mismatch, so it must not abort the submission.
+                    if cfg.refine_from and not _is_complete(read_record(md.run_record(rep, cfg.refine_from)),
+                                                            md.refined(rep, cfg.refine_from)):
+                        warnings.warn(f"{md.path}: continue_from lot {cfg.refine_from!r} has no finished "
+                                      f"replicate {rep} ({md.refined(rep, cfg.refine_from).name}); run the "
+                                      f"config that produces it first")
                         continue
                     lot = cfg.refiner.lot
                     r = Task("refine", tname, mol.inchikey, mol.input_smiles, mname, rep, cfg.refiner.resource_class())
@@ -282,7 +303,7 @@ def run_task(cfg: Config, task: Task) -> str:
         status = _run_search(cfg, task, structure, md, sp)
         if task.kind == "search" or cfg.refiner is None or status not in (DONE, "skipped"):
             return status
-    rp = refine_params(cfg, sp["sha256"])
+    rp = refine_params(cfg, sp["sha256"], md)
     check_or_write(md.params(cfg.refiner.lot), rp, _hint(task.method))
     return _run_refine(cfg, task, structure, md, sp)
 
@@ -354,23 +375,39 @@ def _run_refine(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
     rec_path, xyz = md.run_record(task.replicate, lot), md.refined(task.replicate, lot)
     if _is_complete(read_record(rec_path), xyz):
         return "skipped"
+    # the search is checked whether or not this step continues from another lot: the chain
+    # search -> source lot -> this one is verified end to end
     search_rec = read_record(md.run_record(task.replicate))
     if not search_rec or search_rec.get("status") != DONE or not md.raw(task.replicate).exists():
-        return "waiting_for_search"
+        return WAITING_FOR_INPUT
     if search_rec.get("params_sha256") != sp["sha256"]:
         raise ParamsMismatch(f"{md.raw(task.replicate)} was produced with different search parameters")
 
-    elements, conformers = read_xyz(md.raw(task.replicate))
+    src_lot = cfg.refine_from
+    src = md.refined(task.replicate, src_lot) if src_lot else md.raw(task.replicate)
+    if src_lot:
+        src_rec = read_record(md.run_record(task.replicate, src_lot))
+        if not src_rec or src_rec.get("status") != DONE or not src.exists():
+            return WAITING_FOR_INPUT
+        src_params = read_record(md.params(src_lot)) or {}
+        if src_rec.get("params_sha256") != src_params.get("sha256"):
+            raise ParamsMismatch(f"{src} was produced with different {src_lot} parameters than "
+                                 f"{md.params(src_lot).name} now records")
+
+    elements, conformers = read_xyz(src)
     if elements != structure.elements:
-        raise RuntimeError(f"{md.raw(task.replicate)}: atom order does not match the structure template")
-    rp_sha = refine_params(cfg, sp["sha256"])["sha256"]
+        raise RuntimeError(f"{src}: atom order does not match the structure template")
+    rp_sha = refine_params(cfg, sp["sha256"], md)["sha256"]
     record = _base_record(task, structure, rp_sha) | {"lot": lot}
+    if src_lot:
+        record["continued_from"] = {"lot": src_lot, "file": src.name, "n_input": len(conformers)}
     # the conformers optimised so far are kept there, so a killed job resumes rather than restarts; the key
-    # ties them to this search output and these refinement parameters
+    # ties them to the file this step reads (the search output, or the continue_from lot) and these
+    # refinement parameters
     partial = md.refine_checkpoint(task.replicate, lot)
     resume = {}
     if cfg.refiner.resumable:
-        key = hashlib.sha256(md.raw(task.replicate).read_bytes() + rp_sha.encode()).hexdigest()
+        key = hashlib.sha256(src.read_bytes() + rp_sha.encode()).hexdigest()
         resume = {"checkpoint": (partial, key)}
     write_record(rec_path, record | {"status": RUNNING})
     t0 = time.time()
