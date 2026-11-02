@@ -27,6 +27,8 @@ One table, cluster first then laptop. The commands named here are explained in
 | `ImportError: /lib64/libstdc++.so.6: version CXXABI_1.3.15 not found` when importing fairchem or `sqlite3` | pip-installed torch loaded the old system libstdc++ before the env's | `export LD_LIBRARY_PATH=$CONDA_PREFIX/lib` (in `slurm.setup` in the example); in Python, `import sqlite3` before torch, which bceg does |
 | UMA post-optimisation fails with a Hugging Face authentication error on the login node | the UMA weights are gated | `huggingface-cli login` once in your account, then fetch the weights again |
 | `condense` prints `failed ... no complete NBO block (NBO started but never returned)` | the ORCA job aborted; `tail calcParam.out` shows the error | rerun the ORCA job or drop the conformer folder |
+| `condense` prints `failed ... NBO block 0: NBO skipped the analysis: N atoms, this NBO build handles at most 999` | the standard NBO 7 executables stop at 999 atoms (`maxatm.fh`); NBO printed a notice, analysed nothing, and ORCA still ended normally | NBO descriptors need a rebuilt NBO (source distribution, larger `maxatm`) or a smaller system |
+| `condense` prints `failed ... NBO block 0: NBO ended without an analysis` | NBO started and stopped without any table, usually because `FILE.47` was cut off by the default 8 MB stack once the basis is large | `ulimit -s unlimited` in `slurm.setup` (in the example config) or before running ORCA, rerun the job |
 | `condense` prints `failed ... optimization.xyz missing` / `singlepoint.property.json missing` | the job did not reach that step, or a different input file was used | same as above; the pipeline needs the `calcParam.inp` steps |
 
 ## On the laptop: `desc_utils.run`

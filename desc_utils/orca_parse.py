@@ -29,6 +29,65 @@ from typing import Optional
 h_to_eV = 27.2114
 bohr_to_A = 0.529177
 
+# NBO 7 writes an atom label as Fortran (a2,i3) and an NBO / NAO number as i4. Past the field width Fortran prints
+# asterisks: atom 1000 on reads "C***", orbital 10000 on "****". Atoms 100-999 abut the element ("H100") and orbitals
+# 1000-9999 fill the i4 field, so their rows start in column 1 wherever no 1x precedes it (NAO table, hybrid
+# details, NHO directionality). The parsers below accept both; an overflowed number becomes None unless the row
+# order of its table recovers it (NPA, NAO, hybrid details, and the NBO summary when the gap is unambiguous).
+_FORTRAN_INT = r"(?:\d+|\*{3,})"
+_ATOM_LABEL_RE = re.compile(r"([A-Z][a-z]?)\s*(\d+|\*{3,})")
+
+
+def _fortran_int(text):
+    """int of a Fortran integer field; None when it overflowed (printed as asterisks)."""
+    return None if text.startswith("*") else int(text)
+
+
+def nbo_atom_numbers(text):
+    """Atom numbers of an NBO atom list: "C 64- H125" -> [64, 125]; None for an atom past 999 ("C***")."""
+    return [_fortran_int(num) for _, num in _ATOM_LABEL_RE.findall(str(text))]
+
+
+def _fill_numbering(nums, trailing=True):
+    """Fill the None entries of a numbering that rises by one per row: a run of None between two known numbers
+    when the gap fits it exactly, a trailing run (after the last known number) only if ``trailing``."""
+    out = list(nums)
+    known = [i for i, n in enumerate(out) if n is not None]
+    for i, j in zip(known, known[1:] + [len(out)]):
+        if j - i < 2:
+            continue
+        if j == len(out) and not trailing:
+            continue
+        if j < len(out) and out[j] - out[i] != j - i:
+            continue
+        for k in range(i + 1, j):
+            out[k] = out[i] + (k - i)
+    if not known and trailing:
+        out = list(range(1, len(out) + 1))
+    return out
+
+
+NBO_STOP_MARKER = "Stopping NBO"
+NBO_ANALYSIS_MARKER = "Summary of Natural Population Analysis"   # NPA is part of every NBO analysis
+_NBO_ATOM_LIMIT_RE = re.compile(r"attempting to analyze\s+(\d+)\s+atoms, although NBO is currently\s+"
+                                r"configured to handle up to only\s+(\d+)\s+atoms")
+
+
+def nbo_skipped_reason(text):
+    """Why an NBO block holds no analysis when NBO says so, else None. The standard NBO 7 executables handle at
+    most 999 atoms (maxatm.fh, the width of the i3 atom field): with more, NBO prints a notice, analyses nothing
+    and ORCA still terminates normally."""
+    m = _NBO_ATOM_LIMIT_RE.search(text or "")
+    if m:
+        return (f"NBO skipped the analysis: {m.group(1)} atoms, this NBO build handles at most {m.group(2)} "
+                f"(maxatm.fh; rebuild NBO from source to raise it)")
+    return None
+
+
+def _warn_overflow(what, n):
+    if n:
+        print(f"NBO: {n} {what} printed as asterisks (Fortran field overflow) could not be recovered; set to None")
+
 #: Default name of the condensed per-conformer file written by ``desc_utils.condense``.
 CONDENSED_FILENAME = "orca_condensed.json"
 
@@ -564,15 +623,30 @@ class NBOProps:
         nbo_end_marker = "*** returned from  NBO  program ***"
         self.nbo_blocks = []
 
-        for m in re.finditer(re.escape(nbo_start_marker), self.content):
-            start = m.start()
-            end = self.content.find(nbo_end_marker, start)
-            if end != -1:
-                self.nbo_blocks.append(self.content[start:end + len(nbo_end_marker)])
+        # One block per NBO run, ended by ORCA's "returned from NBO" line (ORCA 6.1.0 and 6.1.1 print it after every
+        # NBO run that produced an analysis) or, failing that, by NBO's own "Stopping NBO..." (printed by 6.1.1 also
+        # when NBO analysed nothing). A block never runs past the next "Now starting NBO", so a failed run cannot
+        # borrow the next run's analysis. A run with no end line at all (ORCA aborted inside NBO) is left out;
+        # a run that ended without an analysis is kept, with its reason in ``block_errors``.
+        self.block_errors = {}
+        starts = [m.start() for m in re.finditer(re.escape(nbo_start_marker), self.content)]
+        for start, next_start in zip(starts, starts[1:] + [len(self.content)]):
+            end, marker = self.content.find(nbo_end_marker, start, next_start), nbo_end_marker
+            if end == -1:
+                end, marker = self.content.find(NBO_STOP_MARKER, start, next_start), NBO_STOP_MARKER
+            if end == -1:
+                continue
+            block = self.content[start:end + len(marker)]
+            if NBO_ANALYSIS_MARKER not in block:
+                self.block_errors[len(self.nbo_blocks)] = nbo_skipped_reason(block) or (
+                    "NBO ended without an analysis (often FILE.47 cut off by the default 8 MB stack: "
+                    "run ORCA after `ulimit -s unlimited`)")
+            self.nbo_blocks.append(block)
 
         if not self.nbo_blocks:
             print("Could not find any complete NBO section in the file")
             self.nbo_section = None
+            self.error = None
             self.spin_sections = {}
         else:
             if not (0 <= self.nbo_block_index < len(self.nbo_blocks)):
@@ -582,6 +656,9 @@ class NBOProps:
                 )
                 self.nbo_block_index = 0
             self.nbo_section = self.nbo_blocks[self.nbo_block_index]
+            self.error = self.block_errors.get(self.nbo_block_index)
+            if self.error:
+                print(f"NBO block {self.nbo_block_index}: {self.error}")
             self.spin_sections = self._split_spin_sections(self.nbo_section)
 
         self.results = {
@@ -666,11 +743,19 @@ class NBOProps:
             # Extract atom charges and populations
             # Look for the table between dashed lines with pattern: "    H  1    0.00000      0.00000     0.99914    0.00086     1.00000"
             # The line has: Atom Symbol, Atom Number, Charge, Core, Valence, Rydberg, Total
-            atom_lines = re.findall(r'\n\s+([A-Z][a-z]?)\s+(\d+)\s+([-\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)', npa_section)
-            
-            for atom_data in atom_lines:
+            # Rows are in atom order, so a label past 999 ("C***") takes its number from its position.
+            atom_lines = re.findall(r'(?m)^\s*([A-Z][a-z]?)\s*(' + _FORTRAN_INT + r')\s+([-\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)', npa_section)
+            printed = [_fortran_int(a[1]) for a in atom_lines]
+            if any(n is not None and n != k for k, n in enumerate(printed, 1)):
+                print("NPA: atom numbers are not in table order; rows past atom 999 left out")
+                order = printed
+            else:
+                order = range(1, len(atom_lines) + 1)
+
+            for atom_data, atom_num in zip(atom_lines, order):
+                if atom_num is None:
+                    continue
                 atom_symbol = atom_data[0]
-                atom_num = int(atom_data[1])
                 
                 # Extend array if needed to include this atom number
                 # This indexes atoms starting from 1
@@ -715,15 +800,34 @@ class NBOProps:
             
             # Look for the table header and then parse lines
             # Pattern: "   1    H  1  s      Val( 1s)     0.99914       0.02931"
-            nao_lines = re.findall(r'\n\s+(\d+)\s+([A-Z][a-z]?)\s+(\d+)\s+(\S+)\s+(\S+\([^)]+\))\s+([\d.]+)\s+([-\d.]+)', nao_subsection)
-            
-            for line_data in nao_lines:
+            # NAO 1000-9999 starts in column 1 ("1236    H 99  s ..."). NAOs are numbered 1..N in table order,
+            # and each atom's NAOs form one block, so an overflowed atom label ("C***") takes the number of its block.
+            nao_re = re.compile(r'^\s*(' + _FORTRAN_INT + r')\s+([A-Z][a-z]?)\s*(' + _FORTRAN_INT
+                                + r')\s+(\S+)\s+(\S+\([^)]+\))\s+([\d.]+)\s+([-\d.]+)')
+            nao_lines, block_atom, block, prev_label = [], [], 0, None
+            for line in nao_subsection.splitlines():
+                m = nao_re.match(line)
+                if not m:
+                    prev_label = None    # a blank line ends an atom's block
+                    continue
+                if (m.group(2), m.group(3)) != prev_label:
+                    block += 1
+                prev_label = (m.group(2), m.group(3))
+                nao_lines.append(m.groups())
+                block_atom.append(block)
+            orbital_nums = _fill_numbering([_fortran_int(d[0]) for d in nao_lines])
+            atom_nums = [_fortran_int(d[2]) for d in nao_lines]
+            if all(n is None or n == b for n, b in zip(atom_nums, block_atom)):
+                atom_nums = block_atom
+            _warn_overflow("NAO atom labels", sum(n is None for n in atom_nums))
+
+            for line_data, orbital_num, atom_num in zip(nao_lines, orbital_nums, atom_nums):
                 orbital_type = line_data[4].split('(')[0]  # Extract orbital type before '('
                 orbital = line_data[4].split('(')[1].strip(')').strip()  # Extract orbital details inside '()'
                 nao_properties.append({
-                    'orbital_num': int(line_data[0]),
+                    'orbital_num': orbital_num,
                     'atom': line_data[1],
-                    'atom_num': int(line_data[2]),
+                    'atom_num': atom_num,
                     'angular': line_data[3],
                     'orbital_type': orbital_type,
                     'orbital': orbital,
@@ -747,7 +851,7 @@ class NBOProps:
     # Note: a two-letter element symbol abuts the closing parenthesis ("LP ( 1)Ni  2"), so the
     # patterns below must allow zero whitespace between ")" and the atom list.
     _NBO_TYPE = r"(BD\*?|LP\*?|CR|RY\*?|LV|3C\*?|3Cn)"
-    _NBO_ATOMS = r"([A-Z][a-z]?\s+\d+(?:\s*-\s*[A-Z][a-z]?\s+\d+)*)"
+    _NBO_ATOMS = r"([A-Z][a-z]?\s*" + _FORTRAN_INT + r"(?:\s*-\s*[A-Z][a-z]?\s*" + _FORTRAN_INT + r")*)"
 
     _SUMMARY_END_MARKERS = (
         "$CHOOSE", "Checkpoint orbital", "NATURAL BOND ORBITALS (Summary):",
@@ -757,7 +861,7 @@ class NBOProps:
     # keeps NHO-directionality rows such as "45. BD ( 1) H  1-Ni  2   97.1   53.4 ..." out.
     # "   87. LV ( 1)Ni  2             0.26397    -0.07374" (no space before "Ni")
     _SUMMARY_ROW_RE = re.compile(
-        r'\n\s+(\d+)\.\s+' + _NBO_TYPE + r'\s*\(\s*(\d+)\)\s*' + _NBO_ATOMS
+        r'(?m)^\s*(' + _FORTRAN_INT + r')\.\s+' + _NBO_TYPE + r'\s*\(\s*(\d+)\)\s*' + _NBO_ATOMS
         + r'\s+(\d\.\d+)\s+(-?\d+\.\d+)'
     )
 
@@ -788,11 +892,17 @@ class NBOProps:
     def _parse_summary_rows(cls, summary_section):
         # Pattern: "    1. BD ( 1) H  1- H  2       2.00000    -0.43520"
         rows = []
-        for line_data in cls._SUMMARY_ROW_RE.findall(summary_section):
+        found = cls._SUMMARY_ROW_RE.findall(summary_section)
+        # Rows are grouped by molecular unit, so NBO numbers rise by one only within a unit; a trailing run of
+        # overflowed numbers ("****.") is filled only when there is a single unit.
+        single_unit = len(re.findall(r"(?m)^\s*Molecular unit\s+\d+", summary_section)) <= 1
+        nbo_nums = _fill_numbering([_fortran_int(d[0]) for d in found], trailing=single_unit)
+        _warn_overflow("NBO numbers (summary)", sum(n is None for n in nbo_nums))
+        for line_data, nbo_num in zip(found, nbo_nums):
             # Parse atom numbers from atoms_string (e.g., "H  1- H  2" -> [1, 2] or "H  1" -> [1])
-            atom_numbers = [int(num) for _, num in re.findall(r'([A-Z][a-z]?)\s+(\d+)', line_data[3].strip())]
+            atom_numbers = nbo_atom_numbers(line_data[3].strip())
             rows.append({
-                'nbo_num': int(line_data[0]),
+                'nbo_num': nbo_num,
                 'nbo_type': line_data[1],
                 'bond_index': int(line_data[2]),
                 'atoms': atom_numbers,
@@ -837,12 +947,14 @@ class NBOProps:
         # Split into individual bond entries
         # Each bond starts with a pattern like "   1. (2.00000) BD ( 1) H  1- H  2"
         # or "  87. (0.26397) LV ( 1)Ni  2            s( 99.10%)p 0.00(  0.31%)d 0.01(  0.59%)"
-        bond_entries = re.finditer(
-            r'\n\s+(\d+)\.\s+\(([\d.]+)\)\s+' + cls._NBO_TYPE + r'\s*\(\s*(\d+)\)\s*(.*?)(?=\n\s+\d+\.\s+\(|\Z)',
-            bond_detail_section, re.DOTALL)
+        # NBO 1000-9999 starts in column 1 ("1000. (0.00071) RY ( 3) C 54"); the entries are numbered 1..N in order.
+        bond_entries = list(re.finditer(
+            r'(?m)^\s*(' + _FORTRAN_INT + r')\.\s+\(([\d.]+)\)\s+' + cls._NBO_TYPE
+            + r'\s*\(\s*(\d+)\)\s*(.*?)(?=\n\s*' + _FORTRAN_INT + r'\.\s+\(|\Z)',
+            bond_detail_section, re.DOTALL))
+        bond_nums = _fill_numbering([_fortran_int(e.group(1)) for e in bond_entries])
 
-        for bond_entry in bond_entries:
-            bond_num = int(bond_entry.group(1))
+        for bond_entry, bond_num in zip(bond_entries, bond_nums):
             occupancy = float(bond_entry.group(2))
             bond_type = bond_entry.group(3)
             bond_index = int(bond_entry.group(4))
@@ -853,10 +965,7 @@ class NBOProps:
             atoms_line = atoms_line_match.group(1).strip() if atoms_line_match else ""
 
             # Parse atom numbers from atoms_line (e.g., "H  1- H  2" -> [1, 2])
-            atom_numbers = []
-            atom_num_matches = re.findall(r'([A-Z][a-z]?)\s+(\d+)', atoms_line)
-            for atom_match in atom_num_matches:
-                atom_numbers.append(int(atom_match[1]))
+            atom_numbers = nbo_atom_numbers(atoms_line)
 
             bond_info = {
                 'bond_num': bond_num,
@@ -871,7 +980,7 @@ class NBOProps:
             # Pattern: "               ( 50.00%)   0.7071* H  1 s( 99.91%)p 0.00(  0.09%)"
             #      or: "               ( 39.78%)   0.6307*Ni  2 s( 48.78%)p 0.01(  0.41%)d 1.04( 50.81%)"
             # (two-letter elements abut the "*", so no whitespace may be required there)
-            contrib_pattern = r'\(\s*([\d.]+)%\)\s+([-\d.]+)\*\s*([A-Z][a-z]?)\s+(\d+)\s+s\(\s*([\d.]+)%\)p\s*([\d.]+)\(\s*([\d.]+)%\)'
+            contrib_pattern = r'\(\s*([\d.]+)%\)\s+([-\d.]+)\*\s*([A-Z][a-z]?)\s*(\d+|\*{3,})\s+s\(\s*([\d.]+)%\)p\s*([\d.]+)\(\s*([\d.]+)%\)'
             contributions = re.finditer(contrib_pattern, atoms_and_contrib)
 
             for contrib in contributions:
@@ -879,7 +988,7 @@ class NBOProps:
                     'percentage': float(contrib.group(1)),
                     'coefficient': float(contrib.group(2)),
                     'atom': contrib.group(3),
-                    'atom_num': int(contrib.group(4)),
+                    'atom_num': _fortran_int(contrib.group(4)),
                     's_percent': float(contrib.group(5)),
                     'p_power': float(contrib.group(6)),
                     'p_percent': float(contrib.group(7))
@@ -921,7 +1030,7 @@ class NBOProps:
         # Match atoms as: one or more occurrences of (AtomSymbol  Number) with optional dash/space separator
         # "  32. BD ( 1) N  4- C  5   78.9   53.4    79.7   50.0   3.5   102.2  234.7   1.6"
         dir_lines = re.findall(
-            r'\n\s+(\d+)\.\s+' + cls._NBO_TYPE + r'\s*\(\s*(\d+)\)\s*' + cls._NBO_ATOMS
+            r'(?m)^\s*(' + _FORTRAN_INT + r')\.\s+' + cls._NBO_TYPE + r'\s*\(\s*(\d+)\)\s*' + cls._NBO_ATOMS
             + r'\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)',
             dir_section)
 
@@ -930,13 +1039,10 @@ class NBOProps:
             atoms_string = line_data[3].strip()
 
             # Parse atom numbers from atoms_string (e.g., "N  4- C  5" -> [4, 5] or "Ni  2" -> [2])
-            atom_numbers = []
-            atom_num_matches = re.findall(r'([A-Z][a-z]?)\s+(\d+)', atoms_string)
-            for atom_match in atom_num_matches:
-                atom_numbers.append(int(atom_match[1]))
+            atom_numbers = nbo_atom_numbers(atoms_string)
 
             rows.append({
-                'nbo_num': int(line_data[0]),
+                'nbo_num': _fortran_int(line_data[0]),
                 'nbo_type': line_data[1],
                 'bond_index': int(line_data[2]),
                 'atoms': atom_numbers,  # Now a list of atom numbers
@@ -954,11 +1060,11 @@ class NBOProps:
     #   legacy / NBO 3-6:  "BD ( 1) H  1- H  2   ->  BD*( 1) H  3- H  4      12.34     0.56     0.078"
     # i.e. an optional NBO number before each orbital, and an optional "->" between them.
     _SOP_TYPE = _NBO_TYPE
-    _SOP_ATOMS = r"([A-Z][a-z]?\s*\d+(?:\s*-\s*[A-Z][a-z]?\s*\d+)*)"
+    _SOP_ATOMS = _NBO_ATOMS
     _SOP_NUM = r"(-?\d+\.\d+)"
     _SOP_LINE_RE = re.compile(
-        r"^\s*(?:(\d+)\.\s*)?" + _SOP_TYPE + r"\s*\(\s*(\d+)\)\s*" + _SOP_ATOMS
-        + r"\s+(?:->\s+)?(?:(\d+)\.\s*)?" + _SOP_TYPE + r"\s*\(\s*(\d+)\)\s*" + _SOP_ATOMS
+        r"^\s*(?:(" + _FORTRAN_INT + r")\.\s*)?" + _SOP_TYPE + r"\s*\(\s*(\d+)\)\s*" + _SOP_ATOMS
+        + r"\s+(?:->\s+)?(?:(" + _FORTRAN_INT + r")\.\s*)?" + _SOP_TYPE + r"\s*\(\s*(\d+)\)\s*" + _SOP_ATOMS
         + r"\s+" + _SOP_NUM + r"\s+" + _SOP_NUM + r"\s+" + _SOP_NUM + r"\s*$"
     )
     _SOP_UNIT_RE = re.compile(r"^\s*(?:within unit\s+(\d+)|from unit\s+(\d+)\s+to unit\s+(\d+))\s*$")
@@ -1015,12 +1121,12 @@ class NBOProps:
                 continue
             g = m.groups()
             rows.append({
-                'donor_nbo_num': int(g[0]) if g[0] is not None else None,
+                'donor_nbo_num': _fortran_int(g[0]) if g[0] is not None else None,
                 'donor_type': g[1],
                 'donor_index': int(g[2]),
                 'donor_atoms': g[3].strip(),
                 'donor_unit': donor_unit,
-                'acceptor_nbo_num': int(g[4]) if g[4] is not None else None,
+                'acceptor_nbo_num': _fortran_int(g[4]) if g[4] is not None else None,
                 'acceptor_type': g[5],
                 'acceptor_index': int(g[6]),
                 'acceptor_atoms': g[7].strip(),

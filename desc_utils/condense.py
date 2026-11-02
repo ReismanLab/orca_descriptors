@@ -30,7 +30,9 @@ Schema version 1 (units in key names, ``null`` = not available)::
     states          singlepoint / oxidation / reduction / nmr -> scf_energy_eh, charge, multiplicity, electron counts,
                     atomic_numbers, charges{mulliken, loewdin, chelpg, hirshfeld}, dipole_au, dipole_magnitude_au,
                     polarizability, thermochemistry, nmr{nuc, elems, siso_ppm, saniso_ppm}, mo{energies_eh, occupations}
-    nbo             blocks[{index, state_guess, closed_shell, spin_stored, level: full|npa, results}], block_map
+    nbo             blocks[{index, state_guess, closed_shell, spin_stored, level: full|npa, results}], block_map;
+                    a block where NBO ran without an analysis (atom limit, cut-off FILE.47) has level ``failed``
+                    and its reason in ``error`` (block 0 failing is a CondenseError)
                     ``results`` is ``NBOProps.results`` of that block with its list tables packed as
                     {columns, rows}; open-shell rows carry a ``spin`` field (alpha rows before beta rows).
     notes           parser messages emitted while condensing
@@ -165,6 +167,12 @@ def _nbo_blocks(out_path, text, full_blocks):
     blocks = []
     for i in range(n):
         nb = first if i == 0 else NBOProps(out_path, block_index=i, spin="both", content=text)
+        if nb.error:
+            if i == 0:
+                raise CondenseError(f"{out_path.name}: NBO block 0: {nb.error}")
+            blocks.append({"index": i, "state_guess": next((s for s, b in DEFAULT_NBO_BLOCKS.items() if b == i), None),
+                           "level": "failed", "error": nb.error, "results": {"source_file": out_path.name}})
+            continue
         full = full_blocks == "all" or i in full_blocks
         nb.get_NPA()
         nb.get_cycle_info()
@@ -432,6 +440,8 @@ def check_condensed(path):
     if not blocks:
         problems.append("no NBO block")
     for b in blocks:
+        if b.get("level") == "failed":     # NBO ran without an analysis; its reason is in b["error"]
+            continue
         npa_atoms = ((b.get("results") or {}).get("natural_population_analysis") or {}).get("atoms") or {}
         if len(npa_atoms) != n:
             problems.append(f"NBO block {b.get('index')}: NPA table has {len(npa_atoms)} atoms")
@@ -636,6 +646,8 @@ def nbo_results(cond, block_index=0, spin="alpha", require_full=True):
         print(f"Requested NBO block index {block_index} out of range (found {len(blocks)} blocks). Using block 0.")
         block_index = 0
     blk = blocks[int(block_index)]
+    if blk.get("level") == "failed":
+        raise ValueError(f"NBO block {block_index}: {blk.get('error')}")
     if require_full and blk.get("level") != "full":
         raise ValueError(f"NBO block {block_index} is stored at level {blk.get('level')!r} (NPA only); "
                          f"re-run `python -m desc_utils.condense --nbo-full all --overwrite` for the full tables")
