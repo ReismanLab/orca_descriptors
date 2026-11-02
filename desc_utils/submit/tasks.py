@@ -94,7 +94,8 @@ def _registry_entry(ens: Ensemble, smiles_line: int | None = None) -> dict:
 
 def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool = False,
                      submit_jobs: bool = True) -> str:
-    """Prepare one molecule's ORCA jobs. Returns the molecule's ``orca_stage`` status."""
+    """Prepare one molecule's stage-6 jobs. Returns the molecule's ``orca_stage`` status."""
+    from desc_utils.submit import gxtb as gxtb_run  # imports this module back for the shared run helpers
     mol = InputMolecule.from_smiles(input_smiles)
     if mol.inchikey != inchikey:
         raise RuntimeError(f"{input_smiles}: InChIKey {mol.inchikey} != {inchikey} (RDKit version drift?)")
@@ -123,10 +124,7 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         raise ParamsMismatch(f"{inchikey}: {reason}")
 
     # --- DFT set-up, rendered once per molecule (every conformer gets an identical copy)
-    orca_prof = cfg.slurm["orca"]
-    nprocs = int(orca_prof.get("ntasks") or orca_prof.get("cpus_per_task") or 1)
-    maxcore = template.maxcore_mb(orca_prof.get("mem_per_cpu"), orca_prof.get("mem"), nprocs)
-    lot = cfg.dft["level_of_theory"]
+    gxtb_engine = cfg.dft_engine == "gxtb"
     # dft.constrained: the atoms the constraints name stay where stages 2 to 4 put them (same indices in
     # every conformer, so one rendering still serves them all)
     fixed = []
@@ -134,23 +132,36 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         if ens.structure is None:
             raise RuntimeError(f"{inchikey}: dft.constrained needs the ensemble's structure (the molecular graph)")
         fixed = held_atoms(cfg.search["constraints"], ens.structure.mol)
-    rendered = template.render(cfg.template_path, lot, ens.charge, ens.multiplicity, nprocs, maxcore, fixed)
     mol_dir.mkdir(parents=True, exist_ok=True)
-    (mol_dir / "calcParam.inp").write_text(rendered)
-    dft_record = {
-        "engine": "ORCA", "orca_module": _orca_module(), "charge": ens.charge, "multiplicity": ens.multiplicity,
-        "pruning": dict(cfg.pruning), "calc_param_template": str(cfg.template_path),
-        "calc_param_md5": template.md5(rendered), "nprocs": nprocs, "maxcore_mb": maxcore,
-        "level_of_theory": template.validate_level_of_theory(lot),
-        "compound_steps": template.compound_steps(lot, ens.charge, ens.multiplicity),
-    }
+    if gxtb_engine:
+        prof = cfg.slurm["gxtb"]
+        nprocs = int(prof.get("ntasks") or prof.get("cpus_per_task") or 1)
+        dft_record = {
+            "engine": gxtb_run.ENGINE_LABEL, "charge": ens.charge, "multiplicity": ens.multiplicity,
+            "pruning": dict(cfg.pruning), "nprocs": nprocs, "gxtb": dict(cfg.gxtb),
+            "compound_steps": gxtb_run.steps_to_run(cfg.gxtb),
+        }
+    else:
+        orca_prof = cfg.slurm["orca"]
+        nprocs = int(orca_prof.get("ntasks") or orca_prof.get("cpus_per_task") or 1)
+        maxcore = template.maxcore_mb(orca_prof.get("mem_per_cpu"), orca_prof.get("mem"), nprocs)
+        lot = cfg.dft["level_of_theory"]
+        rendered = template.render(cfg.template_path, lot, ens.charge, ens.multiplicity, nprocs, maxcore, fixed)
+        (mol_dir / "calcParam.inp").write_text(rendered)
+        dft_record = {
+            "engine": "ORCA", "orca_module": _orca_module(), "charge": ens.charge, "multiplicity": ens.multiplicity,
+            "pruning": dict(cfg.pruning), "calc_param_template": str(cfg.template_path),
+            "calc_param_md5": template.md5(rendered), "nprocs": nprocs, "maxcore_mb": maxcore,
+            "level_of_theory": template.validate_level_of_theory(lot),
+            "compound_steps": template.compound_steps(lot, ens.charge, ens.multiplicity),
+        }
+        previous_md5 = (meta.get("dft") or {}).get("calc_param_md5")
+        if previous_md5 and previous_md5 != dft_record["calc_param_md5"] and meta.get("conformers"):
+            # params.json at the library level should have refused this; record it anyway
+            dft_record["previous_calc_param_md5"] = previous_md5
+            dft_record["settings_changed_at"] = records.now()
     if fixed:
         dft_record["fixed_atoms"] = {str(i): f"{ens.elements[i]}{i}" for i in fixed}
-    previous_md5 = (meta.get("dft") or {}).get("calc_param_md5")
-    if previous_md5 and previous_md5 != dft_record["calc_param_md5"] and meta.get("conformers"):
-        # params.json at the library level should have refused this; record it anyway
-        dft_record["previous_calc_param_md5"] = previous_md5
-        dft_record["settings_changed_at"] = records.now()
 
     # --- prune (stage 5) and split the ensemble into conf_N/
     existing = meta.get("conformers") or {}
@@ -177,7 +188,8 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
             tags = {"energy": f"{conf.energy:.10f}", "units": "hartree", **tags}
         tagged = Conformer(conf.coords, conf.energy, tags)
         write_xyz(conf_dir / "input.xyz", ens.elements, [tagged])
-        shutil.copyfile(mol_dir / "calcParam.inp", conf_dir / "calcParam.inp")
+        if not gxtb_engine:  # g-xTB takes its options from the config, there is no input file to copy
+            shutil.copyfile(mol_dir / "calcParam.inp", conf_dir / "calcParam.inp")
         conformer_records[name] = rec | {"status": "prepared", "prepared_at": records.now()}
         if old in records.BAD_CONFORMER or old in records.PENDING_CONFORMER:
             conformer_records[name] |= {"resubmitted_from": old, "reason": None}
@@ -193,12 +205,13 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         print(f"{inchikey}: nothing to run ({len(conformer_records)} conformer(s) recorded)")
         return "prepared"
     if submit_jobs:
-        script, _ = slurm.write_orca_array(cfg, cfg.jobdir, inchikey, to_run)
+        writer = slurm.write_gxtb_array if gxtb_engine else slurm.write_orca_array
+        script, _ = writer(cfg, cfg.jobdir, inchikey, to_run)
         job_id = slurm.sbatch(script)
         records.update_metadata(lib, inchikey, {"conformers": {
             c: {"status": "submitted", "slurm_array_job_id": job_id, "slurm_array_index": i, "submitted_at": records.now()}
             for i, c in enumerate(to_run)}})
-        print(f"{inchikey}: {len(to_run)} ORCA job(s) submitted as array {job_id}")
+        print(f"{inchikey}: {len(to_run)} {'g-xTB' if gxtb_engine else 'ORCA'} job(s) submitted as array {job_id}")
     return "prepared"
 
 
@@ -230,6 +243,43 @@ def allocated_cpus(default: int | None = None) -> int:
     if env.get("SLURM_NTASKS") or env.get("SLURM_CPUS_PER_TASK"):
         return int(env.get("SLURM_NTASKS") or 1) * int(env.get("SLURM_CPUS_PER_TASK") or 1)
     return int(default or os.cpu_count() or 1)
+
+
+def run_watching_for_term(cmd: list[str], cwd: Path, log_path: Path,
+                          env: dict[str, str] | None = None) -> tuple[int, bool]:
+    """Run ``cmd`` in ``cwd``, appending its output to ``log_path``; returns ``(exit_code, timed_out)``.
+
+    SLURM sends the job SIGTERM 10 min before its time limit (``--signal=B:TERM@600``). Forwarding it
+    to the child lets the program stop on its own and the record be written, instead of the whole job
+    being killed with nothing to show for it. Shared by the ORCA and g-xTB engines so a time limit, a
+    ``scancel`` and a crash are told apart the same way whichever one ran.
+
+    ``env`` overrides entries of the environment the child gets (ORCA needs none; xtb needs its thread
+    settings, see :func:`desc_utils.submit.gxtb.thread_env`).
+    """
+    timed_out = {"flag": False}
+    child_env = {**os.environ, **env} if env else None
+    with open(log_path, "a") as out:
+        proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=out, stderr=subprocess.STDOUT, env=child_env)
+
+        def on_term(signum, frame):
+            timed_out["flag"] = True
+            proc.terminate()
+
+        previous = signal.signal(signal.SIGTERM, on_term)
+        try:
+            exit_code = proc.wait()
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+    return exit_code, timed_out["flag"]
+
+
+def terminated_outcome(lib: Path, job_env: dict) -> dict:
+    """What a SIGTERM meant: a ``orcadesc cancel`` (it lists the job ids it cancelled) is a failure,
+    anything else is the walltime running out."""
+    if was_cancelled(lib, [job_env.get("slurm_array_job_id"), job_env.get("slurm_job_id")]):
+        return {"status": "failed", "reason": REASON}
+    return {"status": "timeout"}
 
 
 def orca_outcome(out_path: Path, exit_code: int | None) -> dict:
@@ -271,27 +321,11 @@ def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str
 
     out_path = conf_dir / "calcParam.out"
     t0 = time.time()
-    timed_out = {"flag": False}
-    with open(out_path, "a") as out:
-        proc = subprocess.Popen([orca, "calcParam.inp"], cwd=str(conf_dir), stdout=out, stderr=subprocess.STDOUT)
-
-        def on_term(signum, frame):
-            timed_out["flag"] = True
-            proc.terminate()
-
-        previous = signal.signal(signal.SIGTERM, on_term)
-        try:
-            exit_code = proc.wait()
-        finally:
-            signal.signal(signal.SIGTERM, previous)
+    exit_code, timed_out = run_watching_for_term([orca, "calcParam.inp"], conf_dir, out_path)
 
     outcome = orca_outcome(out_path, exit_code)
-    if timed_out["flag"]:
-        # a TERM from `orcadesc cancel` (it lists the job ids it cancelled) is a failure, not a walltime timeout
-        if was_cancelled(lib, [job_env["slurm_array_job_id"], job_env["slurm_job_id"]]):
-            outcome |= {"status": "failed", "reason": REASON}
-        else:
-            outcome["status"] = "timeout"
+    if timed_out:
+        outcome |= terminated_outcome(lib, job_env)
     outcome["wall_time_s"] = round(time.time() - t0, 1)
     outcome["cpu_hours"] = round(outcome["wall_time_s"] / 3600 * cpus, 5)  # the allocation's cost, as in bceg's records
     outcome["finished_at"] = records.now()

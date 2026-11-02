@@ -58,6 +58,14 @@ pruning:
 # ---- 6. dft: the ORCA compound job (docs/stages/6_dft.md)
 orca: on                                         # off: stop after the ensembles; the same command later with on refines them
 dft:
+  # engine: orca                                 # or gxtb: one `xtb --gxtb` run per conformer instead of the ORCA
+                                                 # compound job (seconds, not hours). It gives charges, HOMO/LUMO,
+                                                 # dipole, the redox block and (opt-in) vibrations, but no NBO, NMR,
+                                                 # polarizability or solvation; the laptop side is unchanged.
+                                                 # Replace the level_of_theory block below with, e.g.:
+                                                 #   engine: gxtb
+                                                 #   gxtb: {opt_geom: false, vertical_redox: true, fukui: true}
+                                                 # and add a slurm.gxtb profile. See docs/stages/6_dft.md.
   # calc_param_template: calcParam.inp.tmpl      # default: desc_utils/submit/calcParam.inp.tmpl (structure of the compound job)
   level_of_theory:                               # charge and multiplicity are NOT here: they come from the ensemble
     opt_geom: true
@@ -74,7 +82,8 @@ dft:
 
 # ---- resources
 slurm:
-  setup:                                         # start of every job (bceg's, prepare, ORCA)
+  # gxtb: {time: "04:00:00", mem_per_cpu: 2G, ntasks: 8, nodes: 1}   # only with dft.engine: gxtb
+  setup:                                         # start of every job (bceg's, prepare, ORCA or g-xTB)
     - source /groups/ReismanLab/miniconda3/etc/profile.d/conda.sh
     - conda activate gp_env
     - export LD_LIBRARY_PATH=$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}   # pip wheels (torch) take the env's libstdc++, not the old system one

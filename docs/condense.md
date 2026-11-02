@@ -3,6 +3,13 @@
 What every conformer folder contains after ORCA, what the descriptors read from it, and how
 `orca_condensed.json` carries exactly that to the laptop.
 
+> The file has **two writers**. `desc_utils.condense` builds it from an ORCA compound job (this page);
+> `desc_utils.gxtb_condense` builds the same schema from a g-xTB run when the library uses
+> `dft.engine: gxtb` ([stages/6_dft.md](stages/6_dft.md#the-g-xtb-engine-dftengine-gxtb)). A g-xTB file
+> carries `producer.engine: g-xTB`, leaves `nbo.blocks` empty and `states.nmr` /
+> `properties.polarizability` null, and puts the g-xTB atomic charges in the `nbo` and `cm5` slots.
+> Everything on this page that describes the *reading* side applies to both.
+
 ## The ORCA compound job
 
 Every conformer is computed with an ORCA 6.1 compound job, `calcParam.inp`. `orcadesc` renders it per

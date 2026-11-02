@@ -281,7 +281,9 @@ def test_changed_stage_setting_is_refused(tree, fake_sbatch, capsys):
 # --------------------------------------------------------------------------- prepare
 def _frozen(tree, fake_sbatch) -> Config:
     assert main(["submit", str(tree["cfg"])]) == 0
-    jobdir = next((tree["lib"] / "_jobs").iterdir())
+    # the newest freeze, not an arbitrary one: iterdir() has no order, and a test that submits more than
+    # once (test_more_replicates_grow_the_library) would otherwise load a stale config at random
+    jobdir = sorted((tree["lib"] / "_jobs").iterdir())[-1]
     return Config.load(jobdir / "config.yaml")
 
 

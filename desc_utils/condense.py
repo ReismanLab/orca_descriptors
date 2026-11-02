@@ -71,6 +71,9 @@ from desc_utils.orca_parse import (  # noqa: F401  (re-exported)
 
 SCHEMA_VERSION = 1
 AU_TO_DEBYE = 2.541746
+#: ``producer.engine`` of a file written by ``desc_utils.gxtb_condense`` (which has no NBO section);
+#: defined here, not there, because :func:`check_condensed` needs it and that module imports this one
+GXTB_ENGINE = "g-xTB"
 STATES = ("singlepoint", "oxidation", "reduction", "nmr")
 #: state -> 0-based NBO block of the compound job (same order as ``DEFAULTS["orca_redox"]["nbo_block_map"]``)
 DEFAULT_NBO_BLOCKS = {"singlepoint": 0, "oxidation": 1, "reduction": 2}
@@ -429,7 +432,9 @@ def check_condensed(path):
     if (data["states"] or {}).get("singlepoint") is None:
         problems.append("states.singlepoint missing")
     blocks = data["nbo"].get("blocks") or []
-    if not blocks:
+    # a g-xTB file has no NBO section at all: the method has no natural-orbital analysis (gxtb_condense)
+    engine = (data.get("producer") or {}).get("engine")
+    if not blocks and engine != GXTB_ENGINE:
         problems.append("no NBO block")
     for b in blocks:
         npa_atoms = ((b.get("results") or {}).get("natural_population_analysis") or {}).get("atoms") or {}

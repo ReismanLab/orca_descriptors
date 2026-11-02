@@ -67,7 +67,7 @@ The config has one block per stage. Every block is documented with all its optio
 | 3 | `conformer_search` | the searcher (`crest`, `goat`, `molassembler`, `rdkit_etkdg`, `loqi`), its parameters, replicates, atoms frozen during the search (e.g. Ni and its first shell, by SMARTS), optionally imposed (a plane, I-Sm-I at 180 degrees) in stage 2 and kept fixed through stages 4 and 6 ([docs/stages/3_conformer_search.md](docs/stages/3_conformer_search.md)) |
 | 4 | `post_optimization` | the refiner every conformer goes through: `uma`, `gxtb`, `aimnet2` or none ([docs/stages/4_post_optimization.md](docs/stages/4_post_optimization.md)) |
 | 5 | `pruning` | which conformers go to ORCA: all, or an energy window ([docs/stages/5_pruning.md](docs/stages/5_pruning.md)) |
-| 6 | `dft` | the compound steps and their level of theory; `orca: off` stops after the ensembles ([docs/stages/6_dft.md](docs/stages/6_dft.md)) |
+| 6 | `dft` | the engine the electronic properties come from (`engine: orca`, the compound steps and their level of theory; or `engine: gxtb`, one g-xTB run per conformer: seconds instead of hours, no NBO/NMR/polarizability/solvation) and `orca: off` to stop after the ensembles ([docs/stages/6_dft.md](docs/stages/6_dft.md)) |
 |   | `slurm`, `condense` | job set-up lines and resource profiles; condense each ORCA output when its job ends |
 
 The six stage blocks define the results and are frozen in `$LIB/params.json`: a later submit with other

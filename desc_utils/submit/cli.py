@@ -1,4 +1,4 @@
-"""``python -m desc_utils.submit {submit,cancel,status,cost,fetch-weights,prepare-task,orca-task}``."""
+"""``python -m desc_utils.submit {submit,cancel,status,cost,fetch-weights,prepare-task,orca-task,gxtb-task}``."""
 
 from __future__ import annotations
 
@@ -278,6 +278,15 @@ def cmd_orca_task(args) -> int:
     return 0 if status == "completed" else 1
 
 
+def cmd_gxtb_task(args) -> int:
+    """The ``dft.engine: gxtb`` counterpart of ``orca-task``."""
+    from desc_utils.submit.gxtb import run_gxtb_conformer
+    cfg = Config.load(args.config)
+    task = slurm.read_task(Path(args.tasks), args.index)
+    status = run_gxtb_conformer(cfg, task["inchikey"], task["conformer"])
+    return 0 if status == "completed" else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m desc_utils.submit", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -319,6 +328,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tasks", required=True)
     p.add_argument("--index", type=int, required=True)
     p.set_defaults(func=cmd_orca_task)
+
+    p = sub.add_parser("gxtb-task", help="(cluster) run g-xTB for one conformer and record the outcome")
+    p.add_argument("config")
+    p.add_argument("--tasks", required=True)
+    p.add_argument("--index", type=int, required=True)
+    p.set_defaults(func=cmd_gxtb_task)
 
     args = parser.parse_args(argv)
     return args.func(args)

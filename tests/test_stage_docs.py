@@ -42,7 +42,10 @@ CASES = [
     ("5_pruning.md", config.PRUNING_KEYS | {"prepared", "skipped_energy_filter", "skipped_no_energy", "null"}),
     ("6_dft.md", template.ALL_KEYS | {"orca", "dft.calc_param_template", "dft.level_of_theory", "dft.constrained", "slurm.orca",
                                       "slurm.orca_cmd", "condense", "optimization", "frequency", "singlepoint",
-                                      "nmr", "oxidation", "reduction"}),
+                                      "nmr", "oxidation", "reduction",
+                                      # the g-xTB engine
+                                      "dft.engine", "slurm.gxtb", "slurm.gxtb_cmd"}
+     | {f"dft.gxtb.{k}" for k in config.GXTB_PARAMS}),
 ]
 
 

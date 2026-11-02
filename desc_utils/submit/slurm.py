@@ -67,18 +67,32 @@ def write_prepare_array(cfg: Config, jobdir: Path, molecules: list[dict], force:
 
 def write_orca_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[str]) -> tuple[Path, Path]:
     """``orca_<InChIKey>.sbatch`` + ``.jsonl``: one element per conformer folder name."""
+    return _write_stage6_array(cfg, jobdir, inchikey, conformers, "orca", "orca-task", "ORCA")
+
+
+def write_gxtb_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[str]) -> tuple[Path, Path]:
+    """``gxtb_<InChIKey>.sbatch`` + ``.jsonl``, the ``dft.engine: gxtb`` counterpart of the ORCA array.
+
+    Same shape, the ``slurm.gxtb`` profile instead of ``slurm.orca``: g-xTB jobs are far shorter, so
+    they are usually a few CPUs for a few hours rather than 16 CPUs for a week.
+    """
+    return _write_stage6_array(cfg, jobdir, inchikey, conformers, "gxtb", "gxtb-task", "g-xTB")
+
+
+def _write_stage6_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[str],
+                        profile: str, subcommand: str, label: str) -> tuple[Path, Path]:
     log_dir = jobdir / "slurm_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    name = f"orca_{inchikey}"
+    name = f"{profile}_{inchikey}"
     tasks_path = jobdir / f"{name}.jsonl"
     write_tasks(tasks_path, [{"inchikey": inchikey, "conformer": c} for c in conformers])
     throttle = cfg.slurm.get("array_throttle")
     array = f"0-{len(conformers) - 1}" + (f"%{throttle}" if throttle else "")
-    cmd = (f"python -m desc_utils.submit orca-task {shlex.quote(str(cfg.path))} "
+    cmd = (f"python -m desc_utils.submit {subcommand} {shlex.quote(str(cfg.path))} "
            f"--tasks {shlex.quote(str(tasks_path))} --index $SLURM_ARRAY_TASK_ID")
     body = [
-        "# ORCA in the background so the TERM trap (walltime - 10 min) reaches the Python task,",
-        "# which stops ORCA and records the conformer as timeout.",
+        f"# {label} in the background so the TERM trap (walltime - 10 min) reaches the Python task,",
+        f"# which stops {label} and records the conformer as timeout.",
         f"{cmd} &",
         "pid=$!",
         'trap \'kill -TERM "$pid" 2>/dev/null; wait "$pid"; exit 143\' TERM',
@@ -86,7 +100,7 @@ def write_orca_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[
         "exit $?",
     ]
     script = jobdir / f"{name}.sbatch"
-    script.write_text("\n".join([*_header(name, array, cfg.slurm["orca"], log_dir, ["#SBATCH --signal=B:TERM@600"]),
+    script.write_text("\n".join([*_header(name, array, cfg.slurm[profile], log_dir, ["#SBATCH --signal=B:TERM@600"]),
                                  *_setup(cfg), *body, ""]))
     return script, tasks_path
 

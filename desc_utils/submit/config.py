@@ -66,8 +66,26 @@ EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
 SEARCH_KEYS = {"name", "searcher", "params", "constraints", "slurm", "replicates"}
 POST_OPT_KEYS = {"refiner", "params", "slurm", "constrained"}
 PRUNING_KEYS = {"energy_window_kcal_mol"}
-DFT_KEYS = {"calc_param_template", "level_of_theory", "constrained"}
-SLURM_KEYS = {"setup", "ensembles", "prepare", "orca", "array_throttle", "orca_cmd"}
+DFT_KEYS = {"calc_param_template", "level_of_theory", "constrained", "engine", "gxtb"}
+#: stage-6 engines: the ORCA compound job, or one g-xTB run per conformer (desc_utils.submit.gxtb)
+DFT_ENGINES = ("orca", "gxtb")
+DEFAULT_DFT_ENGINE = "orca"
+#: ``dft.gxtb`` options and their defaults. Each step of the job is a flag; the whole block is hashed
+#: into params.json except the resource keys below, exactly as a bceg refiner treats its executable.
+GXTB_PARAMS = {
+    "opt_geom": False,        # xtb --gxtb --opt before the properties
+    "opt_level": "normal",    # --opt level (bceg.xtb.OPT_LEVELS)
+    "freq_calc": False,       # --hess: frequencies, IR intensities and thermochemistry
+    "vertical_redox": True,   # N±1 single points -> states.oxidation / states.reduction
+    "fukui": True,            # --vfukui: condensed Fukui indices
+    "accuracy": None,         # --acc; None: xtb's own default (1.0)
+    "etemp": None,            # --etemp in K; None: xtb's own default (300)
+    "executable": "xtb",      # the g-xTB build of xtb: a name on PATH or an absolute path
+}
+#: ``dft.gxtb`` keys that describe the machine, not the chemistry: excluded from the params hash so the
+#: same library can be continued with the binary in another place (bceg.refine.base.Refiner.resource_keys)
+GXTB_RESOURCE_KEYS = {"executable"}
+SLURM_KEYS = {"setup", "ensembles", "prepare", "orca", "gxtb", "array_throttle", "orca_cmd", "gxtb_cmd"}
 PROFILE_KEYS = {"partition", "account", "time", "mem", "mem_per_cpu", "ntasks", "cpus_per_task", "nodes",
                 "qos", "constraint", "gres", "extra"}
 
@@ -82,6 +100,9 @@ DEFAULTS: dict[str, Any] = {
         "ensembles": {},
         "prepare": {"time": "00:30:00", "mem": "2G", "cpus_per_task": 1},
         "orca": {"time": "160:00:00", "mem_per_cpu": "4G", "ntasks": 16, "nodes": 1},
+        # g-xTB is orders of magnitude cheaper than the ORCA compound job: a single point on a 35-atom
+        # complex takes well under a second. The Hessian is the only expensive step (minutes).
+        "gxtb": {"time": "04:00:00", "mem_per_cpu": "2G", "ntasks": 8, "nodes": 1},
         "array_throttle": 50,
     },
 }
@@ -241,6 +262,41 @@ def _pruning(block, where: str) -> dict:
     return block
 
 
+#: solvation keywords of the ORCA level_of_theory, named here only to explain why they are refused
+_SOLVENT_KEYS = ("solvent", "opt_solvent", "property_solvent", "alpb", "gbsa", "cosmo", "cpcmx")
+
+
+def _gxtb(block, where: str, post_opt_refiner: str | None) -> dict:
+    """Validate ``dft.gxtb`` (the stage-6 g-xTB engine's steps) and fill in the defaults."""
+    block = {**GXTB_PARAMS, **(block or {})}
+    for key in _SOLVENT_KEYS:
+        if key in block:
+            raise ValueError(f"{where}.{key}: g-xTB has no ALPB/GBSA/COSMO parameters, so a stage-6 "
+                             f"g-xTB run is gas phase only; remove the key or use dft.engine: orca")
+    _check_keys(block, set(GXTB_PARAMS), where)
+    for key in ("opt_geom", "freq_calc", "vertical_redox", "fukui"):
+        if not isinstance(block[key], bool):
+            raise ValueError(f"{where}.{key} must be true or false, got {block[key]!r}")
+    from bceg.xtb import OPT_LEVELS
+    if block["opt_level"] not in OPT_LEVELS:
+        raise ValueError(f"{where}.opt_level must be one of {OPT_LEVELS}, got {block['opt_level']!r}")
+    for key in ("accuracy", "etemp"):
+        value = block[key]
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+            raise ValueError(f"{where}.{key} must be a positive number or null, got {value!r}")
+    if not block["executable"]:
+        raise ValueError(f"{where}.executable must name the g-xTB build of xtb")
+    # xtb takes the numerical Hessian on the geometry it is given and aborts when that geometry is not a
+    # stationary point of *this* method ("Hessian on incompletely optimized geometry!"), so the frequency
+    # step only makes sense once the geometry has been optimised with g-xTB somewhere in the pipeline.
+    if block["freq_calc"] and not block["opt_geom"] and post_opt_refiner != "gxtb":
+        raise ValueError(
+            f"{where}.freq_calc: a g-xTB Hessian aborts on a geometry optimised at another level "
+            f"('Hessian on incompletely optimized geometry!'). Either set {where}.opt_geom: true, or "
+            f"optimise the ensemble with g-xTB in stage 4 (post_optimization.refiner: gxtb).")
+    return block
+
+
 # --------------------------------------------------------------------------- bceg's view of the stages
 def start_params(pre: dict) -> dict:
     """The bceg ``start_*`` searcher parameters that the pre_refinement block stands for."""
@@ -332,20 +388,34 @@ def read_raw(path: str | Path) -> dict:
         dft["constrained"] = True
     else:
         dft.pop("constrained", None)
-    if "level_of_theory" not in dft:
-        raise ValueError(f"{path}: dft.level_of_theory is required")
-    dft["calc_param_template"] = rel(dft.get("calc_param_template")) or str(DEFAULT_TEMPLATE)
+    engine = dft.pop("engine", DEFAULT_DFT_ENGINE)
+    if engine not in DFT_ENGINES:
+        raise ValueError(f"{path}: dft.engine must be one of {DFT_ENGINES}, got {engine!r}")
+    if engine == "gxtb":
+        # only stored when it is not the default, so an ORCA library's params.json hash is unchanged
+        dft["engine"] = engine
+        dft["gxtb"] = _gxtb(dft.get("gxtb"), f"{path}: dft.gxtb",
+                            (out["post_optimization"] or {}).get("refiner"))
+        if "level_of_theory" in dft:
+            raise ValueError(f"{path}: dft.level_of_theory belongs to the ORCA engine; with "
+                             f"dft.engine: gxtb the steps are chosen in the dft.gxtb block")
+        dft.pop("calc_param_template", None)
+    else:
+        dft.pop("gxtb", None)
+        if "level_of_theory" not in dft:
+            raise ValueError(f"{path}: dft.level_of_theory is required")
+        dft["calc_param_template"] = rel(dft.get("calc_param_template")) or str(DEFAULT_TEMPLATE)
     out["dft"] = dft
     _check_constrained(out, path)
 
     slurm = copy.deepcopy(DEFAULTS["slurm"])
     for key, value in (raw.get("slurm") or {}).items():
-        if key in ("prepare", "orca"):
+        if key in ("prepare", "orca", "gxtb"):
             slurm[key] = {**slurm[key], **(value or {})}
         else:
             slurm[key] = value if value is not None else slurm.get(key)
     _check_keys(slurm, SLURM_KEYS, f"{path}: slurm")
-    for prof in ("prepare", "orca"):
+    for prof in ("prepare", "orca", "gxtb"):
         _check_keys(slurm[prof], PROFILE_KEYS, f"{path}: slurm.{prof}")
     slurm["setup"] = list(slurm.get("setup") or [])
     slurm["ensembles"] = dict(slurm.get("ensembles") or {})
@@ -459,6 +529,17 @@ class Config:
         return self.raw["dft"]
 
     @property
+    def dft_engine(self) -> str:
+        """``orca`` (the compound job) or ``gxtb`` (one g-xTB run per conformer). The key is only
+        stored when it is not the default, so an older library's params.json hash is unchanged."""
+        return self.dft.get("engine", DEFAULT_DFT_ENGINE)
+
+    @property
+    def gxtb(self) -> dict:
+        """The resolved ``dft.gxtb`` block; empty with the ORCA engine."""
+        return self.dft.get("gxtb") or {}
+
+    @property
     def transformation_name(self) -> str:
         return self.transformation["name"]
 
@@ -522,7 +603,11 @@ class Config:
         if bcfg.refiner is not None:
             post = {"refiner": bcfg.refiner.name, "lot": bcfg.refiner.lot, "params": bcfg.refiner.compared_params()}
         dft = dict(self.dft)
-        dft["calc_param_template"] = {"path": str(self.template_path), "sha256": self.template_sha256()}
+        if self.dft_engine == "gxtb":
+            # the binary's location is a property of the machine, not of the results
+            dft["gxtb"] = {k: v for k, v in dft["gxtb"].items() if k not in GXTB_RESOURCE_KEYS}
+        else:
+            dft["calc_param_template"] = {"path": str(self.template_path), "sha256": self.template_sha256()}
         return {"transformation": transformation, "pre_refinement": copy.deepcopy(self.pre_refinement),
                 "conformer_search": search, "post_optimization": post, "pruning": dict(self.pruning), "dft": dft,
                 "replicates": self.replicates}
@@ -544,10 +629,12 @@ class Config:
         """Write the resolved config, the template and the git commit into ``jobdir``; return the frozen copy."""
         jobdir.mkdir(parents=True, exist_ok=True)
         raw = copy.deepcopy(self.raw)
-        template_copy = jobdir / "calcParam.inp.tmpl"
-        shutil.copyfile(self.template_path, template_copy)
-        raw["dft"]["calc_param_template"] = str(template_copy)
-        raw["_pipeline"] = git_info() | {"frozen_from": str(self.path), "template_sha256": self.template_sha256()}
+        raw["_pipeline"] = git_info() | {"frozen_from": str(self.path)}
+        if self.dft_engine != "gxtb":  # the g-xTB engine renders no input file: there is no template
+            template_copy = jobdir / "calcParam.inp.tmpl"
+            shutil.copyfile(self.template_path, template_copy)
+            raw["dft"]["calc_param_template"] = str(template_copy)
+            raw["_pipeline"]["template_sha256"] = self.template_sha256()
         frozen = jobdir / "config.yaml"
         write_raw(raw, frozen)
         return Config(frozen, raw)
