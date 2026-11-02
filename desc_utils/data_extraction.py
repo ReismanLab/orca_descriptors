@@ -3,7 +3,7 @@ import numpy as np
 import re
 from pathlib import Path
 from desc_utils import orca_descriptors as od
-from desc_utils.orca_parse import CONDENSED_FILENAME
+from desc_utils.orca_parse import CONDENSED_FILENAME, nbo_atom_numbers
 from tqdm import tqdm
 
 def _resolve_calc_path(raw_path, repo_root):
@@ -87,7 +87,8 @@ def _get_dict_value(data, key):
 
 
 def _extract_atom_numbers_from_text(text):
-    return [int(num) for _, num in re.findall(r"([A-Z][a-z]?)\s+(\d+)", str(text))]
+    # None for a label NBO could not print ("C***", atom > 999), so the row never counts as all-selected atoms
+    return nbo_atom_numbers(text)
 
 
 def _replace_atom_numbers_with_labels(text, atom_index_to_label):
@@ -96,7 +97,7 @@ def _replace_atom_numbers_with_labels(text, atom_index_to_label):
         atom_num = int(match.group(2))
         return atom_index_to_label.get(atom_num, f"{atom_symbol}{atom_num}")
 
-    return re.sub(r"([A-Z][a-z]?)\s+(\d+)", repl, str(text))
+    return re.sub(r"([A-Z][a-z]?)\s*(\d+)", repl, str(text))
 
 
 def _sanitize_descriptor_token(value):
@@ -149,6 +150,8 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
     for _e in nbo_results.get("natural_bond_orbitals", []):
         if _e.get("occupancy", 0.0) >= 0.1:
             _n = _e.get("nbo_num", 0)
+            if _n is None:      # NBO number printed as "****" and not recoverable
+                continue
             if _homo_nbo_num is None or _n > _homo_nbo_num:
                 _homo_nbo_num = _n
 
@@ -168,6 +171,8 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
         atoms_list = entry.get("atoms", [])
         if not atoms_list or not all(atom in selected_indices for atom in atoms_list):
             continue
+        if entry.get("nbo_num", 0) is None:
+            continue
         atom_labels = "_".join(atom_index_to_label[atom] for atom in atoms_list)
         rank_token = _homo_rank_token(entry.get("nbo_num", 0), _homo_nbo_num)
         dup_key = (atom_labels, rank_token)
@@ -183,6 +188,8 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
     for entry in nbo_results.get("bond_orbital_details", []):
         atoms_list = entry.get("atoms", [])
         if not atoms_list or not all(atom in selected_indices for atom in atoms_list):
+            continue
+        if entry.get("bond_num", 0) is None:
             continue
         atom_labels = "_".join(atom_index_to_label[atom] for atom in atoms_list)
         rank_token = _homo_rank_token(entry.get("bond_num", 0), _homo_nbo_num)
@@ -219,6 +226,8 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
     for entry in nbo_results.get("nho_directionality", []):
         atoms_list = entry.get("atoms", [])
         if not atoms_list or not all(atom in selected_indices for atom in atoms_list):
+            continue
+        if entry.get("nbo_num", 0) is None:
             continue
         atom_labels = "_".join(atom_index_to_label[atom] for atom in atoms_list)
         rank_token = _homo_rank_token(entry.get("nbo_num", 0), _homo_nbo_num)
