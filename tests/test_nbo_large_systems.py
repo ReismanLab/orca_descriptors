@@ -7,7 +7,8 @@ NBO 7 writes atom labels as Fortran (a2,i3) and NBO / NAO numbers as i4:
     whitespace and dropped them (and an entry before 1000 swallowed the text of the ones after it);
   * past the field width Fortran prints asterisks ("C***" from atom 1000, "****." from orbital 10000).
 The standard NBO 7 executables stop at 999 atoms (maxatm.fh) and analyse nothing beyond; that run
-must be reported, not parsed as an empty block. ORCA 6.1.0 and 6.1.1 close a block that has an
+must be reported, not parsed as an empty block (likewise its limits on basis functions, shells and
+exponents: 5000 / 2000 / 5000 in the manual). ORCA 6.1.0 and 6.1.1 close a block that has an
 analysis with "*** returned from  NBO  program ***"; a block closed only by NBO's own "Stopping NBO..."
 is accepted too, and a block never borrows the end line of the next one.
 """
@@ -277,6 +278,23 @@ def test_nbo_atom_limit_is_reported(tmp_path, capsys):
     assert "at most 999" in capsys.readouterr().out
     with pytest.raises(condense.CondenseError, match="at most 999"):
         condense._nbo_blocks(out, out.read_text(), (0,))
+
+
+# The other fixed dimensions of NBO 7, as its format statements print them
+DIM_LIMITS = {
+    "basis functions": " This calculation is attempting to analyze 6120 basis functions, although\n"
+                       " NBO is currently configured to handle up to only 5000 functions.\n",
+    "shells": " This calculation is attempting to analyze 2400 shells, although NBO is currently\n"
+              " configured to handle up to only 2000 shells.\n",
+    "exponents": " This calculation is attempting to analyze 5300 exponents, although NBO is\n"
+                 " currently configured to handle up to only 5000 exponents.\n",
+}
+
+
+@pytest.mark.parametrize("what", DIM_LIMITS)
+def test_other_nbo_dimension_limits_are_reported(tmp_path, what):
+    reader = od.NBOProps(_write(tmp_path, START + BANNER + DIM_LIMITS[what] + "Stopping NBO...\n"))
+    assert f" {what}, this NBO build handles at most" in reader.error
 
 
 def test_failed_later_block_is_stored_as_failed(tmp_path):

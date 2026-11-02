@@ -69,18 +69,25 @@ def _fill_numbering(nums, trailing=True):
 
 NBO_STOP_MARKER = "Stopping NBO"
 NBO_ANALYSIS_MARKER = "Summary of Natural Population Analysis"   # NPA is part of every NBO analysis
-_NBO_ATOM_LIMIT_RE = re.compile(r"attempting to analyze\s+(\d+)\s+atoms, although NBO is currently\s+"
-                                r"configured to handle up to only\s+(\d+)\s+atoms")
+# NBO 7's fixed dimensions (manual: 999 atoms, 5000 basis functions, 2000 shells, 5000 exponents; maxatm.fh,
+# maxbas.fh, maxshl.fh, maxexp.fh): past one, NBO prints this notice, analyses nothing, and ORCA still ends normally.
+_NBO_DIM_LIMIT_RE = re.compile(r"attempting to analyze\s+(\d+)\s+(atoms|basis functions|shells|exponents),\s+although\s+"
+                               r"NBO\s+is\s+currently\s+configured\s+to\s+handle\s+up\s+to\s+only\s+(\d+)")
+_NBO_MEMORY_LIMIT_RE = re.compile(r"configured\s+with\s+only\s+(\d+)\s+words")
+_NBO_DIM_FILE = {"atoms": "maxatm.fh", "basis functions": "maxbas.fh", "shells": "maxshl.fh", "exponents": "maxexp.fh"}
 
 
 def nbo_skipped_reason(text):
-    """Why an NBO block holds no analysis when NBO says so, else None. The standard NBO 7 executables handle at
-    most 999 atoms (maxatm.fh, the width of the i3 atom field): with more, NBO prints a notice, analyses nothing
-    and ORCA still terminates normally."""
-    m = _NBO_ATOM_LIMIT_RE.search(text or "")
+    """Why an NBO block holds no analysis when NBO says so, else None: one of the fixed dimensions of the NBO build
+    (atoms, basis functions, shells, exponents) or its memory was exceeded."""
+    m = _NBO_DIM_LIMIT_RE.search(text or "")
     if m:
-        return (f"NBO skipped the analysis: {m.group(1)} atoms, this NBO build handles at most {m.group(2)} "
-                f"(maxatm.fh; rebuild NBO from source to raise it)")
+        n, what, limit = m.groups()
+        return (f"NBO skipped the analysis: {n} {what}, this NBO build handles at most {limit} "
+                f"({_NBO_DIM_FILE[what]}; rebuild NBO from source to raise it)")
+    m = _NBO_MEMORY_LIMIT_RE.search(text or "")
+    if m:
+        return f"NBO stopped: its build is configured with only {m.group(1)} words of memory (maxmem.fh)"
     return None
 
 
