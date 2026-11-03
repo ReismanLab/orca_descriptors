@@ -101,6 +101,8 @@ constraints the parameter is left out of `params_<lot>.json`, so unconstrained e
 | `fmax` | `0.05` | convergence criterion on the forces, eV/Angstrom |
 | `max_steps` | `500` | optimiser steps per conformer |
 | `keep_unconverged` | `true` | keep conformers that did not reach `fmax` (flagged `converged: false` on their comment line); `false` drops them |
+| `stall_steps` | `null` (off) | stop a conformer whose lowest energy went down by less than `stall_energy` over the last `stall_steps` steps (an optimiser oscillating between two geometries); it is then unconverged (`keep_unconverged` keeps or drops it) and flagged `stalled: true`; `details.n_stalled` counts them. Hashed only when set. `100` stopped the one oscillating SmI2 conformer at step 437 and none of 2359 converged ones |
+| `stall_energy` | `0.001` | eV; the energy drop below which `stall_steps` counts as no progress (hashed only with `stall_steps`) |
 | `lot` | model name | label used in the file names (`raw_1_<lot>.xyz`) |
 | `device` | `cpu` | resource: `cpu` or `cuda`; `cuda` sends the step (and, chained, its whole job) to `slurm.ensembles.gpu` |
 | `workers` | allocation's CPUs | resource: worker processes the conformers are shared out over (`cpu`: one per CPU of the allocation, at most 8 outside SLURM; `cuda`: 1), see [CPU parallelism](#cpu-parallelism-workers-and-threads) |
@@ -253,6 +255,8 @@ one (`aimnet2-nse`).
 | `fmax` | `0.05` | convergence criterion on the forces, eV/Angstrom |
 | `max_steps` | `500` | optimiser steps per conformer |
 | `keep_unconverged` | `true` | keep conformers that did not reach `fmax` (flagged `converged: false`); `false` drops them |
+| `stall_steps` | `null` (off) | stop a conformer whose lowest energy went down by less than `stall_energy` over the last `stall_steps` steps (an optimiser oscillating between two geometries); it is then unconverged (`keep_unconverged` keeps or drops it) and flagged `stalled: true`; `details.n_stalled` counts them. Hashed only when set. `100` stopped the one oscillating SmI2 conformer at step 437 and none of 2359 converged ones |
+| `stall_energy` | `0.001` | eV; the energy drop below which `stall_steps` counts as no progress (hashed only with `stall_steps`) |
 | `lot` | model name | label used in the file names (`raw_1_<lot>.xyz`) |
 | `device` | `cpu` | resource: `cpu` or `cuda`; `cuda` sends the step (and, chained, its whole job) to `slurm.ensembles.gpu` |
 | `workers` | allocation's CPUs | resource: worker processes, as for `uma` ([CPU parallelism](#cpu-parallelism-workers-and-threads)) |

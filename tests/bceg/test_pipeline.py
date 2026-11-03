@@ -231,6 +231,15 @@ def test_slurm_config_checks_and_chain_overrides(project):
     jobdir = write_jobs(cfg, expand(cfg)[0], root / "jobs")
     sbatch = (jobdir / "chain_etkdg.sbatch").read_text()
     assert "--time=48:00:00" in sbatch and "--mem=64G" in sbatch
+    assert "--nodes" not in sbatch                                          # one task: nothing to keep together
+
+    # several tasks (GOAT's MPI ranks) stay on one node unless the profile says otherwise
+    cfg = Config.load(write(method_slurm="{ntasks: 4, cpus_per_task: 1}"))
+    sbatch = (write_jobs(cfg, expand(cfg)[0], root / "jobs4") / "chain_etkdg.sbatch").read_text()
+    assert "--ntasks=4" in sbatch and "--nodes=1" in sbatch
+    cfg = Config.load(write(method_slurm="{ntasks: 4, nodes: 2}"))
+    sbatch = (write_jobs(cfg, expand(cfg)[0], root / "jobs2") / "chain_etkdg.sbatch").read_text()
+    assert "--nodes=2" in sbatch and "--nodes=1" not in sbatch
 
 
 def test_search_record_phases(project, fake_xtb, monkeypatch):

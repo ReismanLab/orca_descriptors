@@ -20,24 +20,37 @@ class RefineResult:
 #: name (bceg.constraints.held_atoms) stay fixed in Cartesian coordinates during the optimisation
 REFINER_CONSTRAINT_DEFAULTS = {"constraints": {}}
 
+#: the ASE refiners' stop for an optimisation that no longer goes down (bceg.refine.ase_opt): off by default,
+#: and then left out of the hash, so the refinements written before it existed keep theirs
+STALL_DEFAULTS = {"stall_steps": None, "stall_energy": 0.001}
+
 POOL_RESERVE_GB = 2.0  # the job's own process besides its model copy: search results, CREST's leftovers, slack
 
 
 class Refiner(Configurable):
     worker_mem_gb: float | None = None  # memory of one process holding the model; None: no estimate
-    resumable = False  # run() takes ``checkpoint=(path, key)`` and resumes from it (the ASE refiners)
+    resumable = False  # run() takes ``checkpoint=(path, key)`` and resumes from it (bceg.refine.checkpoint)
 
     def __init__(self, **params) -> None:
         super().__init__(**params)
+        steps = self.params.get("stall_steps")
+        if steps is not None and (isinstance(steps, bool) or not isinstance(steps, int) or steps < 1):
+            raise ValueError(f"{self.name}.stall_steps must be a positive number of steps or null, got {steps!r}")
+        if "stall_energy" in self.params and not self.params["stall_energy"] > 0:
+            raise ValueError(f"{self.name}.stall_energy must be > 0 eV, got {self.params['stall_energy']!r}")
         if self.params.get("constraints"):  # RDKit only then: the pool's workers start faster without it
             from bceg import constraints as cons
             cons.validate(self.params["constraints"], f"{self.name}.constraints")
 
     def compared_params(self) -> dict:
-        """No ``constraints`` key when there are none, so the hash of an unconstrained refinement is unchanged."""
+        """No ``constraints`` key when there are none, and no ``stall_*`` keys while ``stall_steps`` is off, so
+        the hash of a refinement that does not use them is unchanged."""
         out = super().compared_params()
         if "constraints" in out and not out["constraints"]:
             del out["constraints"]
+        if out.get("stall_steps") is None:
+            out.pop("stall_steps", None)
+            out.pop("stall_energy", None)
         return out
 
     def fixed_atoms(self, structure: Structure) -> list[int]:

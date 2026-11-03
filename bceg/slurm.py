@@ -18,6 +18,10 @@ Config (``slurm:`` block)::
 Methods and ``post_optimization`` may override the profile with their own ``slurm:`` mapping
 (in chained mode both apply, the method's taking precedence).
 
+A profile with ``ntasks`` above 1 (GOAT's MPI ranks) gets ``nodes: 1`` unless it sets ``nodes``: SLURM may
+otherwise spread the tasks over several nodes, and the job's own process (the post-optimisation's worker
+pool in chained mode) then sees only the CPUs of the first one.
+
 Every job asks for SIGTERM 10 min before its time limit (``--signal=B:TERM@600``) and ``exec``s the task,
 so the signal reaches Python: the running step records that it was interrupted, and a post-optimisation
 keeps what it had finished for the next submission (bceg.refine.ase_opt).
@@ -113,6 +117,8 @@ def write_jobs(cfg: Config, tasks: list[Task], jobdir: Path | None = None) -> Pa
             overrides = cfg.methods[label].slurm
         resource = "gpu" if any(t.resource == "gpu" for t in group) else "cpu"
         profile = {**s.get(resource, {}), **overrides}
+        if int(profile.get("ntasks") or 1) > 1 and profile.get("nodes") is None:
+            profile["nodes"] = 1
         if kind in ("refine", "chain"):
             profile = with_pool_mem(profile, cfg.refiner, name)
         array = f"0-{n_jobs - 1}" + (f"%{throttle}" if throttle else "")

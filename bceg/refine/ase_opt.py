@@ -15,6 +15,14 @@ With a ``checkpoint`` every optimised conformer is appended to a JSON-lines file
 back, so a job killed by its time limit (or anything else) loses only the conformers in flight: the
 next run reads the file and optimises only the others. Its first line is a key (the caller's hash of
 the input ensemble and the parameters); a file with another key is from other inputs and is ignored.
+
+``stall_steps`` stops an optimisation whose lowest energy went down by less than ``stall_energy`` (eV)
+over the last ``stall_steps`` steps: one oscillating between two geometries without reaching ``fmax``
+would otherwise run to ``max_steps``. The conformer is then unconverged (kept or dropped after
+``keep_unconverged``) and flagged ``stalled=True``. On 2359 converged uma-s-1p2 optimisations (SmI2
+complexes, fmax 0.01) the lowest energy always went down by more than 7.8 meV in any 100 steps; the one
+oscillating went down by less than 1 meV, so ``stall_steps: 100, stall_energy: 0.001`` stopped it at step
+437 and no converged one.
 """
 
 from __future__ import annotations
@@ -114,11 +122,12 @@ def ase_constraints(fixed=(), holds: dict | None = None) -> list:
 # ---------------------------------------------------------------------------------------- one conformer
 def _optimize(calc, structure: Structure, i: int, coords: np.ndarray, workdir: Path, *,
               optimizer: str, fmax: float, max_steps: int, fixed: list[int] = (),
-              holds: dict | None = None) -> dict[str, Any]:
+              holds: dict | None = None, stall_steps: int | None = None,
+              stall_energy: float = 0.001) -> dict[str, Any]:
     """Optimise one conformer with ``calc``, the atoms ``fixed`` held in place and the ``holds`` of an
     imposed geometry kept (see :func:`ase_constraints`); returns the geometry, the energy in eV, the
-    residual force (with the constraints applied) and the number of steps. ``converged`` is decided by
-    the caller."""
+    residual force (with the constraints applied), the number of steps and whether the stall stop ended it
+    (module docstring). ``converged`` is decided by the caller."""
     from ase import Atoms, optimize
 
     atoms = Atoms(symbols=structure.elements, positions=coords)
@@ -127,10 +136,20 @@ def _optimize(calc, structure: Structure, i: int, coords: np.ndarray, workdir: P
         atoms.set_constraint(ase_constraints(fixed, holds))
     atoms.calc = calc
     opt = getattr(optimize, optimizer)(atoms, logfile=str(workdir / f"opt_{i}.log"))
-    opt.run(fmax=fmax, steps=max_steps)
+    stalled = False
+    if stall_steps:
+        best = []   # the lowest energy so far, after each step
+        for converged in opt.irun(fmax=fmax, steps=max_steps):
+            e = float(atoms.get_potential_energy())
+            best.append(min(e, best[-1]) if best else e)
+            if not converged and len(best) > stall_steps and best[-1 - stall_steps] - best[-1] < stall_energy:
+                stalled = True
+                break
+    else:
+        opt.run(fmax=fmax, steps=max_steps)
     residual = float(np.sqrt((atoms.get_forces() ** 2).sum(axis=1)).max())
     return {"index": i, "coords": atoms.get_positions(), "energy_ev": float(atoms.get_potential_energy()),
-            "residual": residual, "steps": opt.nsteps}
+            "residual": residual, "steps": opt.nsteps, "stalled": stalled}
 
 
 # ---------------------------------------------------------------------------------------- the worker pool
@@ -273,7 +292,7 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
     p = refiner.params
     fixed = refiner.fixed_atoms(structure)
     settings = {"optimizer": p["optimizer"], "fmax": p["fmax"], "max_steps": p["max_steps"], "fixed": fixed,
-                "holds": holds}
+                "holds": holds, "stall_steps": p.get("stall_steps"), "stall_energy": p.get("stall_energy", 0.001)}
     done = load_checkpoint(*checkpoint) if checkpoint else {}
     todo = [(i, c.coords) for i, c in enumerate(conformers) if i not in done]
     on_result = _CheckpointWriter(checkpoint[0], checkpoint[1], resumed=bool(done)) if checkpoint else (lambda r: None)
@@ -296,16 +315,18 @@ def optimize_conformers(refiner, structure: Structure, conformers: list[Conforme
             on_result.close()
     raw = sorted([*done.values(), *new], key=lambda r: r["index"])
 
-    out, n_unconverged = [], 0
+    out, n_unconverged, n_stalled = [], 0, 0
     for r in raw:
         converged = r["residual"] <= p["fmax"]
         n_unconverged += not converged
+        n_stalled += bool(r.get("stalled"))
         if not converged and not p["keep_unconverged"]:
             continue
+        info = {"converged": converged, "steps": r["steps"], "fmax": round(r["residual"], 5), "source_index": r["index"]}
         out.append(Conformer(r["coords"], r["energy_ev"] / HARTREE_TO_EV,
-                             {"converged": converged, "steps": r["steps"], "fmax": round(r["residual"], 5),
-                              "source_index": r["index"]}))
+                             info | ({"stalled": True} if r.get("stalled") else {})))
     return RefineResult(out, versions=versions,
                         details={"n_input": len(conformers), "n_unconverged": n_unconverged,
                                  "workers": workers, "threads": threads} | ({"fixed_atoms": fixed} if fixed else {})
-                        | ({"n_resumed": len(done)} if done else {}))
+                        | ({"n_resumed": len(done)} if done else {})
+                        | ({"n_stalled": n_stalled} if p.get("stall_steps") else {}))

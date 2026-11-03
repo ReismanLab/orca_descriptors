@@ -393,6 +393,45 @@ def test_a_checkpoint_keeps_finished_conformers_and_a_rerun_resumes(fake_aimnet,
     assert "n_resumed" not in other.details and len(ckpt.read_text().splitlines()) == 5
 
 
+def test_stall_stop_ends_an_oscillating_optimisation(fake_aimnet, tmp_path, monkeypatch):
+    """stall_steps: an optimisation whose lowest energy no longer goes down by stall_energy in that many steps
+    stops, unconverged and flagged stalled; one still going down runs on to max_steps."""
+    class Oscillating:      # conformer 0 jumps back and forth, conformer 1 keeps going down
+        def __init__(self, atoms, logfile=None):
+            self.atoms, self.nsteps = atoms, 0
+            Path(logfile).write_text("fake optimiser log\n")
+
+        def irun(self, fmax, steps):
+            osc = self.atoms.positions[0, 0] < 0.5
+            for k in range(steps + 1):
+                self.nsteps = k
+                yield False
+                self.atoms.positions[0, 0] += (0.1 if k % 2 == 0 else -0.1) if osc else -0.001
+
+    monkeypatch.setattr(sys.modules["ase.optimize"], "LBFGS", Oscillating)
+    fake_aimnet["force"] = 1.0
+    structure = Structure("CCO")
+    result = REFINERS["aimnet2"](max_steps=50, stall_steps=5, workers=1, threads=1).run(
+        structure, _conformers(structure), tmp_path)
+    osc, down = result.conformers
+    assert osc.info["stalled"] is True and osc.info["converged"] is False and osc.info["steps"] == 5
+    assert "stalled" not in down.info and down.info["steps"] == 50
+    assert result.details["n_stalled"] == 1 and result.details["n_unconverged"] == 2
+
+    dropped = REFINERS["aimnet2"](max_steps=50, stall_steps=5, keep_unconverged=False, workers=1, threads=1).run(
+        structure, _conformers(structure), tmp_path)
+    assert dropped.conformers == [] and dropped.details["n_stalled"] == 1
+
+
+def test_stall_settings_are_hashed_only_when_on():
+    assert not {"stall_steps", "stall_energy"} & set(REFINERS["uma"]().compared_params())
+    on = REFINERS["uma"](stall_steps=100).compared_params()
+    assert on["stall_steps"] == 100 and on["stall_energy"] == 0.001
+    for bad in ({"stall_steps": 0}, {"stall_steps": True}, {"stall_steps": 100, "stall_energy": 0}):
+        with pytest.raises((ValueError, TypeError)):
+            REFINERS["uma"](**bad)
+
+
 def test_aimnet2_unconverged_conformers_are_flagged_or_dropped(fake_aimnet, tmp_path):
     fake_aimnet["force"] = 1.0
     structure = Structure("CCO")

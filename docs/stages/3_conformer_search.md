@@ -241,7 +241,9 @@ conformer_search:
 ## `goat`: ORCA GOAT (metals and organics)
 
 `! GOAT <method>` in ORCA 6; starts from the pre-refined geometry. ORCA wants MPI ranks: give the
-step `slurm: {ntasks: N, cpus_per_task: 1, nodes: 1}` and `nprocs: N`.
+step `slurm: {ntasks: N, cpus_per_task: 1}` and `nprocs: N`. A step with `ntasks` above 1 gets `nodes: 1`
+unless it sets `nodes`: spread over several nodes, the chained post-optimisation would see only the
+first node's CPUs (one UMA worker where `ntasks` were asked for).
 
 | `params` | Default | Meaning |
 |---|---|---|

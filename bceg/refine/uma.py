@@ -7,7 +7,7 @@ from pathlib import Path
 from bceg.external import resolve_threads
 from bceg.layout import check_name
 from bceg.refine.ase_opt import optimize_conformers, package_version
-from bceg.refine.base import REFINER_CONSTRAINT_DEFAULTS, RefineResult, Refiner
+from bceg.refine.base import REFINER_CONSTRAINT_DEFAULTS, STALL_DEFAULTS, RefineResult, Refiner
 from bceg.structure import Structure
 from bceg.xyz import Conformer
 
@@ -60,6 +60,7 @@ class UMA(Refiner):
         "fmax": 0.05,  # eV/Angstrom
         "max_steps": 500,
         "keep_unconverged": True,  # unconverged conformers are kept and flagged converged=False
+        **STALL_DEFAULTS,  # stall_steps: stop when the energy went down by < stall_energy eV in that many steps
         "lot": None,  # label override; defaults to the model name
         "device": "cpu",  # "cuda" sends the step (and, chained, its whole job) to the gpu profile
         "workers": None,  # None/0: one process per CPU of the allocation on cpu (at most 8 outside SLURM), 1 on cuda
