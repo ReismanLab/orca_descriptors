@@ -23,6 +23,7 @@ from bceg.config import Config
 from bceg.external import ProgramNotFound
 from bceg.refine import REFINERS, ase_opt
 from bceg.refine.gxtb import GXTB
+from bceg.refine.xtb import XTB
 from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_EV, Conformer
 
@@ -32,27 +33,26 @@ def _conformers(structure: Structure, n: int = 2) -> list[Conformer]:
     return [Conformer(np.arange(n_atoms * 3, dtype=float).reshape(n_atoms, 3) * 0.1 + k) for k in range(n)]
 
 
-# --------------------------------------------------------------------------- g-xTB
-@pytest.fixture
-def fake_gxtb(tmp_path, monkeypatch):
-    """A g-xTB build of ``xtb`` on PATH: shifts x by 0.1, energy = -42 - x of the first atom.
+# --------------------------------------------------------------------------- xtb-driven refiners
+def _install_fake_xtb(tmp_path, monkeypatch, version: str, mode_env: str, unknown_gxtb: bool):
+    """Put an ``xtb`` on PATH that shifts x by 0.1 and reports energy = -42 - x of the first atom.
 
-    ``GXTB_FAKE_MODE``: ``ok`` (default), ``plain`` (a standard xtb: warns about --gxtb and runs GFN2)
-    or ``unconverged`` (writes xtblast.xyz, no TOTAL ENERGY line, exit 1).
+    ``mode_env``: ``ok`` (default), ``unconverged`` (writes xtblast.xyz, no TOTAL ENERGY line, exit 1)
+    or, with ``unknown_gxtb``, ``plain`` -- a standard xtb that warns about --gxtb and runs GFN2 anyway.
     """
     bindir = tmp_path / "bin"
-    bindir.mkdir()
+    bindir.mkdir(exist_ok=True)
     exe = bindir / "xtb"
+    complain = f'if mode == "plain": print("Unknown option \'--gxtb\' provided")' if unknown_gxtb else "pass"
     exe.write_text(textwrap.dedent(f"""\
         #!{sys.executable}
         import os, sys
         if "--version" in sys.argv:
-            print("* xtb version 6.7.1 (g-xTB fake) compiled for tests")
+            print({version!r})
             raise SystemExit(0)
-        mode = os.environ.get("GXTB_FAKE_MODE", "ok")
+        mode = os.environ.get({mode_env!r}, "ok")
         open("args.txt", "w").write(" ".join(sys.argv[1:]))
-        if mode == "plain":
-            print("Unknown option '--gxtb' provided")
+        {complain}
         lines = open(sys.argv[1]).read().splitlines()
         n = int(lines[0]); atoms = [l.split() for l in lines[2:2 + n]]
         energy = -42.0 - float(atoms[0][1])
@@ -68,8 +68,23 @@ def fake_gxtb(tmp_path, monkeypatch):
     """))
     exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.delenv("GXTB_FAKE_MODE", raising=False)
+    monkeypatch.delenv(mode_env, raising=False)
     return exe
+
+
+# --------------------------------------------------------------------------- g-xTB
+@pytest.fixture
+def fake_gxtb(tmp_path, monkeypatch):
+    """A g-xTB build of ``xtb`` on PATH (``GXTB_FAKE_MODE``: ok | plain | unconverged)."""
+    return _install_fake_xtb(tmp_path, monkeypatch, "* xtb version 6.7.1 (g-xTB fake) compiled for tests",
+                             "GXTB_FAKE_MODE", unknown_gxtb=True)
+
+
+@pytest.fixture
+def fake_xtb_bin(tmp_path, monkeypatch):
+    """A standard ``xtb`` on PATH for the GFN-n refiner (``XTB_FAKE_MODE``: ok | unconverged)."""
+    return _install_fake_xtb(tmp_path, monkeypatch, "* xtb version 6.7.1 (fake) compiled for tests",
+                             "XTB_FAKE_MODE", unknown_gxtb=False)
 
 
 def test_gxtb_parameters_and_resources():
@@ -81,7 +96,7 @@ def test_gxtb_parameters_and_resources():
     with pytest.raises(ValueError, match="unknown parameter"):   # g-xTB runs on CPUs: no device to route
         GXTB(device="cuda")
     with pytest.raises(ValueError, match="--opt level"):
-        GXTB(level="superb").run(Structure("CCO"), [], Path("."))
+        GXTB(level="superb")
 
 
 def test_gxtb_runs_one_xtb_per_conformer_and_parses_the_output(fake_gxtb, tmp_path):
@@ -145,6 +160,90 @@ def test_gxtb_needs_the_executable(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(ProgramNotFound, match="no-such-xtb"):
         GXTB(executable="no-such-xtb").run(Structure("CCO"), [], tmp_path)
+
+
+# --------------------------------------------------------------------------- xtb (GFN-n)
+def test_xtb_parameters_and_resources():
+    r = REFINERS["xtb"]()
+    assert r.lot == "gfn2" and r.resource_class() == "cpu" and r.resumable is False
+    assert set(r.compared_params()) == {"gfn", "level", "cycles", "keep_unconverged", "lot"}
+    assert set(r.recorded_params()) == {"executable", "threads"}
+    # the lot follows the method, so gfn2 and gfn1 land in different files without being told to
+    assert XTB(gfn="gfn1").lot == "gfn1" and XTB(gfn="gfnff").lot == "gfnff"
+    assert XTB(lot="gfn2-tight", level="tight").lot == "gfn2-tight"
+    with pytest.raises(ValueError, match="unknown parameter"):   # xtb runs on CPUs: no device to route
+        XTB(device="cuda")
+    # a bad value fails when the config is read, not on the compute node that would have used it
+    with pytest.raises(ValueError, match="unknown method"):
+        XTB(gfn="gfn9")
+    with pytest.raises(ValueError, match="--opt level"):
+        XTB(level="superb")
+
+
+def test_xtb_runs_one_run_per_conformer_and_parses_the_output(fake_xtb_bin, tmp_path):
+    structure = Structure("CCO")
+    confs = _conformers(structure)
+    result = XTB(threads=2).run(structure, confs, tmp_path)
+    assert [c.energy for c in result.conformers] == [-42.0 - confs[0].coords[0, 0], -42.0 - confs[1].coords[0, 0]]
+    for i, (c, start) in enumerate(zip(result.conformers, confs)):
+        np.testing.assert_allclose(c.coords[:, 0], start.coords[:, 0] + 0.1)   # the optimised geometry, not the input
+        np.testing.assert_allclose(c.coords[:, 1:], start.coords[:, 1:])
+        assert c.info == {"converged": True, "source_index": i, "cycles": 7}
+        sub = tmp_path / f"conf_{i}"
+        assert (sub / "xtb.out").exists() and (sub / "start.xyz").exists()
+        # --uhf is passed even for a singlet, unlike g-xTB
+        assert (sub / "args.txt").read_text() == "start.xyz --gfn 2 --opt normal --chrg 0 --uhf 0"
+    assert result.versions == {"xtb": "* xtb version 6.7.1 (fake) compiled for tests"}
+    assert result.details == {"executable": str(fake_xtb_bin), "n_input": 2, "n_unconverged": 0}
+
+
+@pytest.mark.parametrize("gfn, flags", [("gfn2", "--gfn 2"), ("gfn1", "--gfn 1"),
+                                        ("gfn0", "--gfn 0"), ("gfnff", "--gfnff")])
+def test_xtb_method_flags(fake_xtb_bin, tmp_path, gfn, flags):
+    structure = Structure("CCO")
+    XTB(gfn=gfn).run(structure, _conformers(structure, 1), tmp_path)
+    assert (tmp_path / "conf_0" / "args.txt").read_text() == f"start.xyz {flags} --opt normal --chrg 0 --uhf 0"
+
+
+def test_xtb_open_shell_charge_and_cycles_flags(fake_xtb_bin, tmp_path):
+    structure = Structure("C[NH3+]", multiplicity=3)
+    XTB(level="tight", cycles=300).run(structure, _conformers(structure, 1), tmp_path)
+    assert (tmp_path / "conf_0" / "args.txt").read_text() == \
+        "start.xyz --gfn 2 --opt tight --chrg 1 --uhf 2 --cycles 300"
+
+
+def test_xtb_holds_the_constrained_atoms_fixed(fake_xtb_bin, tmp_path):
+    structure = Structure("CCO")
+    spec = {"freeze": ["[#8]"], "bonds": [{"smarts": "[#6:1]-[#6:2]", "value": 1.5}]}
+    refiner = XTB(constraints=spec)
+    assert refiner.compared_params()["constraints"] == spec and "constraints" not in XTB().compared_params()
+    result = refiner.run(structure, _conformers(structure, 1), tmp_path)
+    assert result.details["fixed_atoms"] == [0, 1, 2]
+    assert (tmp_path / "conf_0" / "xcontrol").read_text() == "$fix\n   atoms: 1,2,3\n$opt\n   engine=lbfgs\n$end\n"
+    assert (tmp_path / "conf_0" / "args.txt").read_text().endswith("--input xcontrol")
+
+
+def test_xtb_unconverged_conformers_are_flagged_or_dropped(fake_xtb_bin, tmp_path, monkeypatch):
+    monkeypatch.setenv("XTB_FAKE_MODE", "unconverged")
+    structure = Structure("CCO")
+    confs = _conformers(structure)
+    result = XTB().run(structure, confs, tmp_path / "keep")
+    assert [c.info["converged"] for c in result.conformers] == [False, False]
+    assert result.conformers[0].energy == pytest.approx(-42.0 - confs[0].coords[0, 0])   # from the xtblast.xyz comment
+    assert result.details["n_unconverged"] == 2
+    dropped = XTB(keep_unconverged=False).run(structure, confs, tmp_path / "drop")
+    assert dropped.conformers == [] and dropped.details["n_unconverged"] == 2
+
+
+def test_xtb_needs_the_executable(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(ProgramNotFound, match="no-such-xtb"):
+        XTB(executable="no-such-xtb").run(Structure("CCO"), [], tmp_path)
+
+
+def test_xtb_and_gxtb_are_distinct_lots_in_one_folder():
+    """The cascade relies on this: a gfn2 lot and a gxtb lot never write the same files."""
+    assert REFINERS["xtb"]().lot != REFINERS["gxtb"]().lot
 
 
 # --------------------------------------------------------------------------- AIMNet2

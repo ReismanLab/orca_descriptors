@@ -11,7 +11,7 @@ search, right after it.
 
 | Key | Default | Meaning | Hashed |
 |---|---|---|---|
-| `refiner` | `uma` | `uma` (fairchem UMA through ASE), `gxtb` (g-xTB, one `xtb --gxtb` run per conformer, CPU) or `aimnet2` (AIMNet2 through ASE); a refiner is a class in `bceg/refine/` registered in `REFINERS`, see the end of this page | yes |
+| `refiner` | `uma` | `uma` (fairchem UMA through ASE), `xtb` (GFN-n, one `xtb --opt` run per conformer, CPU), `gxtb` (g-xTB, the same driver with `--gxtb`, CPU) or `aimnet2` (AIMNet2 through ASE); a refiner is a class in `bceg/refine/` registered in `REFINERS`, see the end of this page | yes |
 | `params` | `{}` | the refiner's parameters, below | yes, except the resource keys |
 | `slurm` | `{}` | overrides of `slurm.ensembles.cpu`/`.gpu` for this step (split mode) or merged under the search's overrides (chained mode) | no |
 | `continue_from` | — | the lot of an existing refinement in the same method folder: this step starts from `raw_<i>_<lot>.xyz` instead of the search output, so a library can be refined further without recomputing stages 1-3, see [below](#refining-further-continue_from) | yes, when set |
@@ -156,6 +156,53 @@ post_optimization:
   params: {model: uma-s-1p2, workers: 1}        # serial reference; drop `workers` for the pool
 ```
 
+## `xtb`: GFN-n xtb, CPU
+
+The cheap refiner, and the usual first half of a cascade. The searchers that embed rather than
+optimise (`rdkit_etkdg`, `loqi`, `molassembler`) hand on geometries that GFN2-xTB tidies for a small
+fraction of what the better method costs; the better method then continues from that lot with
+[`continue_from`](#refining-further-continue_from) instead of starting from the raw search output.
+
+Each conformer is optimised by its own `xtb start.xyz --gfn <n> --opt <level> --chrg <charge> --uhf <uhf>`
+run in a subfolder `conf_<i>/` of the job's scratch (`xtb.out` kept there until the job ends), exactly
+as for `gxtb` above — same program, different method flags. `--uhf` is always passed (unlike g-xTB,
+xtb reads it for closed shells too). The energy is the `TOTAL ENERGY` of the output; a conformer whose
+optimisation stops before convergence is taken from `xtblast.xyz`.
+
+This is the same method as `pre_refinement.method: xtb` ([2_pre_refinement.md](2_pre_refinement.md)),
+which pre-optimises the single start geometry a search begins from; here every conformer the search
+produced is optimised instead.
+
+| `params` | Default | Meaning |
+|---|---|---|
+| `gfn` | `gfn2` | method: `gfn2`, `gfn1`, `gfn0` or `gfnff` (the force field) |
+| `level` | `normal` | xtb `--opt` level: `crude`, `sloppy`, `loose`, `lax`, `normal`, `tight`, `vtight`, `extreme` |
+| `cycles` | xtb's default | optimiser cycles per conformer (xtb `--cycles`) |
+| `keep_unconverged` | `true` | keep conformers that did not converge within the cycles (flagged `converged: false`); `false` drops them |
+| `lot` | the `gfn` value | label used in the file names (`raw_1_gfn2.xyz`), so two GFN levels never collide |
+| `executable` | `xtb` | resource: a name on PATH or an absolute path |
+| `threads` | job's CPUs | resource: OpenMP threads of each xtb run (`SLURM_CPUS_PER_TASK`); the conformers run one after the other |
+
+`versions`: `xtb` (the `--version` line); `details.executable` is the resolved path. Per conformer:
+`cycles` when the optimisation converged. The refiner has no `device`: xtb runs on CPUs only, and it
+has no checkpoint — an interrupted step starts again from the first conformer.
+
+The cascade, as two library configs over one `ensembles_dir`
+([library_workflow.md](../library_workflow.md#5-a-second-library-on-an-existing-ensembles-tree)):
+
+```yaml
+post_optimization:                              # first config: clean up the embedded geometries
+  refiner: xtb
+  params: {gfn: gfn2, level: normal}            # -> raw_<i>_gfn2.xyz
+```
+
+```yaml
+post_optimization:                              # second config: pay for UMA only from there on
+  refiner: uma
+  continue_from: gfn2
+  params: {model: uma-s-1p2, lot: uma-s-1p2, fmax: 0.01}
+```
+
 ## `gxtb`: g-xTB (Grimme group), CPU
 
 [g-xTB](https://github.com/grimme-lab/g-xTB) approximates ωB97M-V/def2-TZVPPD for Z = 1–103. It is
@@ -167,8 +214,9 @@ does not know `--gxtb`: the refiner recognises its "unknown option" warning and 
 of accepting a GFN2-xTB result.
 
 Each conformer is optimised by its own `xtb start.xyz --gxtb --opt <level> --chrg <charge>` run in a
-subfolder `conf_<i>/` of the job's scratch (`xtb.out` kept there until the job ends); `--uhf` is passed
-only for open shells (with the flag g-xTB always runs unrestricted). The energy is the `TOTAL ENERGY`
+subfolder `conf_<i>/` of the job's scratch (`xtb.out` kept there until the job ends), through the same
+driver as `xtb` above; `--uhf` is passed only for open shells (with the flag g-xTB always runs
+unrestricted). The energy is the `TOTAL ENERGY`
 of the output; a conformer whose optimisation stops before convergence is taken from `xtblast.xyz`.
 
 | `params` | Default | Meaning |
@@ -253,9 +301,15 @@ parameter with its default), `resource_keys` (the ones not hashed: device, threa
 `RefineResult` with the conformers, their energies in Hartree and the program versions. Registering the
 class in `REFINERS` (`bceg/refine/__init__.py`) makes it a valid `post_optimization.refiner`; the
 config, hashing and status need no change. Add its parameter table to this page (the test suite
-checks that every default of every registered refiner is documented). `gxtb` is the model for a
-program called per conformer, `uma` and `aimnet2` (both through `bceg/refine/ase_opt.py`) for an ASE
-calculator whose `device` is routed to the gpu profile. An ASE refiner gives the shared loop a
+checks that every default of every registered refiner is documented).
+
+There are two shared loops to build on rather than a bare `run()`. `xtb` and `gxtb` go through
+`bceg/refine/xtb_opt.py`: subclass `XtbRefiner`, take `XTB_REFINER_DEFAULTS` into `defaults` and define
+`command(structure, exe)` (plus `check_output(stdout, exe)` to reject the wrong binary, and `validate()`
+for a parameter the command line would otherwise hand to xtb unchecked) — the per-conformer subfolder,
+the `xtbopt.xyz`/`xtblast.xyz` fallback, the energy and cycle parsing and the `$fix` constraints come
+for free. `uma` and `aimnet2` go through `bceg/refine/ase_opt.py` for an ASE calculator whose `device`
+is routed to the gpu profile. An ASE refiner gives the shared loop a
 `make_calculator(structure)` method and the `optimizer`, `fmax`, `max_steps`, `keep_unconverged`,
 `device`, `workers` and `threads` parameters; the loop rebuilds the refiner from its parameters inside
 every worker process (spawned, so the refiner must be picklable before its model is loaded).

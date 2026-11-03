@@ -4,7 +4,8 @@ from bceg.refine.aimnet2 import AIMNet2
 from bceg.refine.base import RefineResult, Refiner
 from bceg.refine.gxtb import GXTB
 from bceg.refine.uma import UMA
+from bceg.refine.xtb import XTB
 
-REFINERS: dict[str, type[Refiner]] = {cls.name: cls for cls in (UMA, GXTB, AIMNet2)}
+REFINERS: dict[str, type[Refiner]] = {cls.name: cls for cls in (UMA, XTB, GXTB, AIMNet2)}
 
 __all__ = ["REFINERS", "RefineResult", "Refiner"]

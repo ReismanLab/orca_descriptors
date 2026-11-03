@@ -490,3 +490,24 @@ def test_a_checkpoint_of_the_source_lot_is_not_reused_by_the_continued_one(proje
     # every conformer was recomputed: conformer 0 was NOT taken from the stale checkpoint
     assert ResumableFake.computed[partial] == [0, 1, 2, 3]
     assert not partial.exists()                                  # removed once raw_1_tight.xyz is written
+
+
+def test_a_gfn2_lot_then_a_better_one_continues_from_it(project, fake_xtb):
+    """The cascade the xtb refiner exists for: an embedding searcher's geometries are cleaned up with
+    GFN2-xTB, and the expensive refiner continues from that lot instead of from the raw search output."""
+    root, write = project
+    cheap = Config.load(write(refiner="xtb", refiner_params="{gfn: gfn2}"))
+    assert cheap.refiner.lot == "gfn2"                       # the lot follows the method, unasked
+    assert run_local(cheap) == {"done": 9}
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    assert (md / "raw_1_gfn2.xyz").exists() and (md / "params_gfn2.json").exists()
+
+    better = Config.load(write(name="cascade.yaml", refiner_params="{label: tight}", continue_from="gfn2"))
+    assert run_local(better) == {"done": 9}
+
+    rec = json.loads((md / "run_1_tight.json").read_text())
+    assert rec["continued_from"]["lot"] == "gfn2" and rec["continued_from"]["file"] == "raw_1_gfn2.xyz"
+    chain = json.loads((md / "params_tight.json").read_text())["compared"]
+    assert chain["continue_from"]["params_sha256"] == json.loads((md / "params_gfn2.json").read_text())["sha256"]
+    # three files, three stages: search output, the cheap lot, the better one
+    assert {p.name for p in md.glob("raw_1*.xyz")} == {"raw_1.xyz", "raw_1_gfn2.xyz", "raw_1_tight.xyz"}

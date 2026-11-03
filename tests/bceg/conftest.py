@@ -91,7 +91,7 @@ def project(tmp_path: Path):
     def write(params: str = "{n_confs: 4}", refiner_params: str = "{}", mode: str = "chained",
               searcher: str = "rdkit_etkdg", transformations: str = "{none: null, H: protonate.py}",
               method_slurm: str = "{}", refiner_slurm: str = "{}", continue_from: str | None = None,
-              name: str = "config.yaml") -> Path:
+              name: str = "config.yaml", refiner: str = "fake") -> Path:
         cfg = tmp_path / name
         cfg.write_text(textwrap.dedent(f"""
             inputs: inputs.csv
@@ -104,7 +104,7 @@ def project(tmp_path: Path):
                 params: {params}
                 slurm: {method_slurm}
             post_optimization:
-              refiner: fake
+              refiner: {refiner}
               params: {refiner_params}
               slurm: {refiner_slurm}
               {"continue_from: " + continue_from if continue_from else ""}
