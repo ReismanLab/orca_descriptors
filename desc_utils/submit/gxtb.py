@@ -28,11 +28,13 @@ import json
 import os
 import shutil
 import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from desc_utils.submit import records
 from desc_utils.submit.config import Config
-from desc_utils.submit.tasks import allocated_cpus, run_watching_for_term, terminated_outcome
+from desc_utils.submit.tasks import TermWatch, allocated_cpus, run_watching_for_term, terminated_outcome
 
 #: the steps of a g-xTB conformer job, in run order. ``singlepoint`` is the only one that must succeed:
 #: without it there is nothing to condense.
@@ -99,8 +101,81 @@ def steps_to_run(opts: dict) -> list[str]:
     return [s for s in STEPS if s in wanted]
 
 
-def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str | None = None) -> str:
-    """Run the g-xTB steps for one conformer folder and record the outcome. Returns its status."""
+#: what :func:`run_gxtb_conformer` returns for a conformer it never started because the job was
+#: already being stopped; :func:`run_gxtb_chunk` then records it as ``timeout`` (or ``failed``)
+NOT_STARTED = "not_started"
+
+
+def resolve_workers(workers: int | None, cpus: int, n_conformers: int) -> tuple[int, int]:
+    """``(workers, threads per worker)`` for a chunk of ``n_conformers`` on ``cpus`` CPUs.
+
+    ``workers`` None: one per CPU. Never more workers than conformers, so a chunk of one (``batch_size:
+    1``, the default) runs exactly as before the batching: one xtb with every CPU of the allocation.
+    """
+    workers = max(1, min(int(workers or cpus), n_conformers))
+    return workers, max(1, cpus // workers)
+
+
+def run_gxtb_chunk(cfg: Config, inchikey: str, conformers: list[str], gxtb_cmd: str | None = None) -> dict[str, str]:
+    """Run a chunk of one molecule's conformers in one array element; returns {conformer: status}.
+
+    ``dft.gxtb.workers`` conformers run at once, each with ``allocated CPUs // workers`` OpenMP
+    threads. The xtb runs are subprocesses, so threads are enough to keep them going in parallel; the
+    one SIGTERM handler (:class:`desc_utils.submit.tasks.TermWatch`) lives in this, the main, thread.
+
+    On SIGTERM (walltime or ``orcadesc cancel``) the running conformers are recorded like a lone
+    conformer would be (``timeout``, or ``failed`` for a cancel), and so are the ones not started yet,
+    with ``reason`` saying so: left at ``submitted`` they would look in progress and need ``--force``,
+    while a ``timeout`` is rerun by the next plain ``submit``. A conformer whose run raises (no binary, a plain xtb, ...) is recorded as
+    ``failed`` with the error and the others carry on: one bad folder does not cost the rest of the chunk.
+    """
+    lib = cfg.library_dir
+    nprocs = (records.load_metadata(lib, inchikey).get("dft") or {}).get("nprocs")
+    workers, threads = resolve_workers(cfg.gxtb.get("workers"), allocated_cpus(nprocs), len(conformers))
+    print(f"{inchikey}: {len(conformers)} conformer(s), {workers} worker(s) x {threads} thread(s)")
+    statuses: dict[str, str] = {}
+
+    def one(conformer: str) -> str:
+        try:
+            return run_gxtb_conformer(cfg, inchikey, conformer, gxtb_cmd=gxtb_cmd, cpus=threads, watch=watch)
+        except Exception as exc:  # noqa: BLE001 -- recorded, then the next conformer runs
+            traceback.print_exc()
+            records.update_metadata(lib, inchikey, {"conformers": {conformer: {
+                "status": "failed", "reason": f"{type(exc).__name__}: {exc}", "finished_at": records.now()}}})
+            return "failed"
+
+    with TermWatch() as watch:
+        if workers == 1:
+            for conformer in conformers:
+                statuses[conformer] = one(conformer)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for conformer, status in zip(conformers, pool.map(one, conformers)):
+                    statuses[conformer] = status
+
+    not_started = [c for c, st in statuses.items() if st == NOT_STARTED]
+    if not_started:
+        job_env = {"slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+                   "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID")}
+        outcome = terminated_outcome(lib, job_env)
+        reason = "not started: the job was stopped before reaching it"
+        if outcome.get("reason"):
+            reason = f"{outcome['reason']}; {reason}"
+        records.update_metadata(lib, inchikey, {"conformers": {
+            c: {**outcome, "reason": reason, "finished_at": records.now()} for c in not_started}})
+        for c in not_started:
+            statuses[c] = outcome["status"]
+        print(f"{inchikey}: {len(not_started)} conformer(s) not started, recorded as {outcome['status']}")
+    return statuses
+
+
+def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str | None = None,
+                       cpus: int | None = None, watch: TermWatch | None = None) -> str:
+    """Run the g-xTB steps for one conformer folder and record the outcome. Returns its status.
+
+    ``cpus``: the OpenMP threads xtb gets and the conformer's cost is counted on; default the whole
+    allocation. ``watch``: the SIGTERM handler of a batched element (:func:`run_gxtb_chunk`); a conformer
+    reached after it fired is not started and :data:`NOT_STARTED` is returned."""
     from desc_utils import gxtb_condense as gc
     from desc_utils import gxtb_parse as gp
 
@@ -124,7 +199,9 @@ def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str
     fixed = sorted(int(i) for i in (dft_meta.get("fixed_atoms") or {}))
     charge = dft_meta.get("charge") or 0
     multiplicity = dft_meta.get("multiplicity")
-    cpus = allocated_cpus(dft_meta.get("nprocs"))
+    if watch is not None and watch.terminated:
+        return NOT_STARTED                # the job is being stopped: leave the record at submitted
+    cpus = cpus or allocated_cpus(dft_meta.get("nprocs"))
     job_env = {"slurm_job_id": os.environ.get("SLURM_JOB_ID"),
                "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
                "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
@@ -159,7 +236,7 @@ def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str
         if step == "optimization" and fixed:
             from bceg.xtb import fix_input      # writes xcontrol and selects the L-BFGS optimiser
             cmd += fix_input(sub, fixed)
-        exit_code, timed_out = run_watching_for_term(cmd, sub, log, env=thread_env(cpus))
+        exit_code, timed_out = run_watching_for_term(cmd, sub, log, env=thread_env(cpus), watch=watch)
         text = log.read_text(errors="replace") if log.is_file() else ""
         gp.check_is_gxtb(text, resolved)  # a standard xtb would silently have run GFN2
         version = version or gp.version(text)

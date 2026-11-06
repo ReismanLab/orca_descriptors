@@ -15,6 +15,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -208,10 +209,15 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         writer = slurm.write_gxtb_array if gxtb_engine else slurm.write_orca_array
         script, _ = writer(cfg, cfg.jobdir, inchikey, to_run)
         job_id = slurm.sbatch(script)
+        # with g-xTB batching, element i runs the i-th chunk of dft.gxtb.batch_size conformers
+        per_element = (cfg.gxtb.get("batch_size") or 1) if gxtb_engine else 1
         records.update_metadata(lib, inchikey, {"conformers": {
-            c: {"status": "submitted", "slurm_array_job_id": job_id, "slurm_array_index": i, "submitted_at": records.now()}
+            c: {"status": "submitted", "slurm_array_job_id": job_id, "slurm_array_index": i // per_element,
+                "submitted_at": records.now()}
             for i, c in enumerate(to_run)}})
-        print(f"{inchikey}: {len(to_run)} {'g-xTB' if gxtb_engine else 'ORCA'} job(s) submitted as array {job_id}")
+        n_elements = -(-len(to_run) // per_element)
+        print(f"{inchikey}: {len(to_run)} {'g-xTB' if gxtb_engine else 'ORCA'} job(s) submitted as array {job_id}"
+              + (f" ({n_elements} element(s) of up to {per_element})" if per_element > 1 else ""))
     return "prepared"
 
 
@@ -245,8 +251,50 @@ def allocated_cpus(default: int | None = None) -> int:
     return int(default or os.cpu_count() or 1)
 
 
+class TermWatch:
+    """One SIGTERM handler for several child programs run at once from worker threads.
+
+    ``signal.signal`` only works in the main thread, so a pool of threads that each run a program
+    (the batched g-xTB engine) cannot install a handler per call the way :func:`run_watching_for_term`
+    does on its own. Install one of these in the main thread (``with TermWatch() as watch``) and pass it
+    to every call: a SIGTERM then sets :attr:`terminated` and terminates every child still running, and
+    a child started afterwards is terminated as soon as it is registered.
+    """
+
+    def __init__(self) -> None:
+        self.terminated = False
+        self._procs: set[subprocess.Popen] = set()
+        self._lock = threading.Lock()
+        self._previous = None
+
+    def __enter__(self) -> "TermWatch":
+        self._previous = signal.signal(signal.SIGTERM, self._on_term)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        signal.signal(signal.SIGTERM, self._previous)
+
+    def _on_term(self, signum, frame) -> None:
+        self.terminated = True
+        with self._lock:
+            procs = list(self._procs)
+        for proc in procs:
+            proc.terminate()
+
+    def register(self, proc: subprocess.Popen) -> None:
+        with self._lock:
+            self._procs.add(proc)
+        if self.terminated:
+            proc.terminate()
+
+    def unregister(self, proc: subprocess.Popen) -> None:
+        with self._lock:
+            self._procs.discard(proc)
+
+
 def run_watching_for_term(cmd: list[str], cwd: Path, log_path: Path,
-                          env: dict[str, str] | None = None) -> tuple[int, bool]:
+                          env: dict[str, str] | None = None,
+                          watch: TermWatch | None = None) -> tuple[int, bool]:
     """Run ``cmd`` in ``cwd``, appending its output to ``log_path``; returns ``(exit_code, timed_out)``.
 
     SLURM sends the job SIGTERM 10 min before its time limit (``--signal=B:TERM@600``). Forwarding it
@@ -255,12 +303,21 @@ def run_watching_for_term(cmd: list[str], cwd: Path, log_path: Path,
     ``scancel`` and a crash are told apart the same way whichever one ran.
 
     ``env`` overrides entries of the environment the child gets (ORCA needs none; xtb needs its thread
-    settings, see :func:`desc_utils.submit.gxtb.thread_env`).
+    settings, see :func:`desc_utils.submit.gxtb.thread_env`). ``watch`` is the handler a pool of worker
+    threads shares (:class:`TermWatch`); without it this call installs its own, which needs the main thread.
     """
-    timed_out = {"flag": False}
     child_env = {**os.environ, **env} if env else None
     with open(log_path, "a") as out:
         proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=out, stderr=subprocess.STDOUT, env=child_env)
+        if watch is not None:
+            watch.register(proc)
+            try:
+                exit_code = proc.wait()
+            finally:
+                watch.unregister(proc)
+            return exit_code, watch.terminated
+
+        timed_out = {"flag": False}
 
         def on_term(signum, frame):
             timed_out["flag"] = True
