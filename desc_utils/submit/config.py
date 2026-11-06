@@ -81,10 +81,13 @@ GXTB_PARAMS = {
     "accuracy": None,         # --acc; None: xtb's own default (1.0)
     "etemp": None,            # --etemp in K; None: xtb's own default (300)
     "executable": "xtb",      # the g-xTB build of xtb: a name on PATH or an absolute path
+    "batch_size": 1,          # conformers per array element (desc_utils.submit.gxtb.run_gxtb_chunk)
+    "workers": None,          # conformers run at once in an element; None: one per allocated CPU
 }
 #: ``dft.gxtb`` keys that describe the machine, not the chemistry: excluded from the params hash so the
-#: same library can be continued with the binary in another place (bceg.refine.base.Refiner.resource_keys)
-GXTB_RESOURCE_KEYS = {"executable"}
+#: same library can be continued with the binary in another place (bceg.refine.base.Refiner.resource_keys),
+#: or with the conformers packed differently into SLURM jobs
+GXTB_RESOURCE_KEYS = {"executable", "batch_size", "workers"}
 SLURM_KEYS = {"setup", "ensembles", "prepare", "orca", "gxtb", "array_throttle", "orca_cmd", "gxtb_cmd"}
 PROFILE_KEYS = {"partition", "account", "time", "mem", "mem_per_cpu", "ntasks", "cpus_per_task", "nodes",
                 "qos", "constraint", "gres", "extra"}
@@ -299,6 +302,11 @@ def _gxtb(block, where: str, post_opt_refiner: str | None) -> dict:
             raise ValueError(f"{where}.{key} must be a positive number or null, got {value!r}")
     if not block["executable"]:
         raise ValueError(f"{where}.executable must name the g-xTB build of xtb")
+    if isinstance(block["batch_size"], bool) or not isinstance(block["batch_size"], int) or block["batch_size"] < 1:
+        raise ValueError(f"{where}.batch_size must be a positive integer, got {block['batch_size']!r}")
+    workers = block["workers"]
+    if workers is not None and (isinstance(workers, bool) or not isinstance(workers, int) or workers < 1):
+        raise ValueError(f"{where}.workers must be a positive integer or null, got {workers!r}")
     # xtb takes the numerical Hessian on the geometry it is given and aborts when that geometry is not a
     # stationary point of *this* method ("Hessian on incompletely optimized geometry!"), so the frequency
     # step only makes sense once the geometry has been optimised with g-xTB somewhere in the pipeline.

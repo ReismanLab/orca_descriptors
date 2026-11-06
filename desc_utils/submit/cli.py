@@ -280,11 +280,13 @@ def cmd_orca_task(args) -> int:
 
 def cmd_gxtb_task(args) -> int:
     """The ``dft.engine: gxtb`` counterpart of ``orca-task``."""
-    from desc_utils.submit.gxtb import run_gxtb_conformer
+    from desc_utils.submit.gxtb import run_gxtb_chunk
     cfg = Config.load(args.config)
     task = slurm.read_task(Path(args.tasks), args.index)
-    status = run_gxtb_conformer(cfg, task["inchikey"], task["conformer"])
-    return 0 if status == "completed" else 1
+    # {"conformers": [...]} since dft.gxtb.batch_size; {"conformer": ...} in arrays queued before it
+    conformers = task.get("conformers") or [task["conformer"]]
+    statuses = run_gxtb_chunk(cfg, task["inchikey"], conformers)
+    return 0 if all(s == "completed" for s in statuses.values()) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -329,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--index", type=int, required=True)
     p.set_defaults(func=cmd_orca_task)
 
-    p = sub.add_parser("gxtb-task", help="(cluster) run g-xTB for one conformer and record the outcome")
+    p = sub.add_parser("gxtb-task", help="(cluster) run g-xTB for one chunk of conformers and record the outcomes")
     p.add_argument("config")
     p.add_argument("--tasks", required=True)
     p.add_argument("--index", type=int, required=True)

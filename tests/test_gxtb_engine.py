@@ -562,3 +562,134 @@ def test_a_failed_optimisation_skips_the_hessian(tree, fake_sbatch, tmp_path):
     assert rec["gxtb_failed_steps"] == ["optimization", "frequency"]
     assert "frequency" not in rec["orca_steps_s"], "it was skipped, not run and billed"
     assert rec["orca_steps_s"]["singlepoint"] >= 0, "the properties were still computed"
+
+
+# --------------------------------------------------------------------------- batching (dft.gxtb.batch_size)
+
+def test_batching_keys_are_not_part_of_the_hash(tree):
+    a = Config.load(_gxtb_cfg(tree)).params()["sha256"]
+    b = Config.load(_gxtb_cfg(tree, gxtb={"batch_size": 50, "workers": 4})).params()["sha256"]
+    assert a == b, "how conformers are packed into jobs does not change the results"
+
+
+@pytest.mark.parametrize("gxtb, message", [
+    ({"batch_size": 0}, "batch_size must be a positive integer"),
+    ({"batch_size": 2.5}, "batch_size must be a positive integer"),
+    ({"workers": 0}, "workers must be a positive integer or null"),
+    ({"workers": True}, "workers must be a positive integer or null"),
+])
+def test_batching_guards(tree, gxtb, message):
+    with pytest.raises(ValueError, match=message):
+        Config.load(_gxtb_cfg(tree, gxtb=gxtb))
+
+
+def test_resolve_workers():
+    from desc_utils.submit.gxtb import resolve_workers
+    assert resolve_workers(None, 8, 1) == (1, 8), "a chunk of one keeps every CPU, as before batching"
+    assert resolve_workers(None, 8, 50) == (8, 1)
+    assert resolve_workers(4, 8, 50) == (4, 2)
+    assert resolve_workers(16, 8, 50) == (16, 1)
+    assert resolve_workers(None, 8, 3) == (3, 2)
+
+
+def test_chunks():
+    assert slurm.chunks(["a", "b", "c", "d", "e"], 2) == [["a", "b"], ["c", "d"], ["e"]]
+    assert slurm.chunks(["a", "b"], 1) == [["a"], ["b"]]
+
+
+def test_prepare_packs_conformers_into_chunks(tree, fake_sbatch):
+    from desc_utils.submit import records
+    from desc_utils.submit.cli import main
+    _gxtb_cfg(tree, gxtb={"batch_size": 2}, condense=True)
+    main(["submit", str(tree["cfg"])])
+    cfg = Config.load(sorted((tree["lib"] / "_jobs").iterdir())[-1] / "config.yaml")
+    key = tree["keys"]["CCO"]
+    prepare_molecule(cfg, key, "CCO")
+
+    confs = records.load_metadata(tree["lib"], key)["conformers"]
+    to_run = sorted((c for c, r in confs.items() if r["status"] == "submitted"), key=lambda c: int(c.split("_")[1]))
+    assert len(to_run) >= 2, "the fixture ensemble needs several conformers for this test"
+    script = fake_sbatch[-1]["script"]
+    tasks = [json.loads(ln) for ln in script.with_suffix(".jsonl").read_text().splitlines()]
+    assert [t["conformers"] for t in tasks] == slurm.chunks(to_run, 2)
+    assert all(t["inchikey"] == key for t in tasks), "a chunk never spans molecules"
+    assert f"#SBATCH --array=0-{len(tasks) - 1}" in script.read_text()
+    for i, c in enumerate(to_run):
+        assert confs[c]["slurm_array_index"] == i // 2
+
+
+def _all_methanol(tree, key):
+    for conf in (tree["lib"] / key).glob("conf_*"):
+        shutil.copyfile(REF / "input.xyz", conf / "input.xyz")
+    return sorted(p.name for p in (tree["lib"] / key).glob("conf_*"))
+
+
+def test_a_chunk_runs_its_conformers_in_parallel(tree, fake_sbatch, fake_xtb, monkeypatch):
+    from desc_utils.submit import records
+    from desc_utils.submit.gxtb import run_gxtb_chunk
+    monkeypatch.setenv("SLURM_CPUS_ON_NODE", "4")
+    cfg, key = _prepared(tree, fake_sbatch, gxtb={"batch_size": 10, "workers": 2})
+    confs = _all_methanol(tree, key)
+    assert run_gxtb_chunk(cfg, key, confs, gxtb_cmd=fake_xtb) == {c: "completed" for c in confs}
+    recs = records.load_metadata(tree["lib"], key)["conformers"]
+    for c in confs:
+        assert recs[c]["status"] == "completed" and recs[c]["condensed"]["ok"] is True
+        assert recs[c]["cpus"] == 2, "cost counts the threads this xtb had, not the whole allocation"
+    env = (tree["lib"] / key / confs[0] / gc.RUN_DIRNAME / "singlepoint" / "args.txt")
+    assert env.is_file()
+
+
+def test_one_broken_conformer_does_not_stop_the_chunk(tree, fake_sbatch, fake_xtb):
+    from desc_utils.submit import records
+    from desc_utils.submit.gxtb import run_gxtb_chunk
+    cfg, key = _prepared(tree, fake_sbatch, gxtb={"batch_size": 10, "workers": 2})
+    confs = _all_methanol(tree, key)
+    (tree["lib"] / key / confs[0] / "input.xyz").unlink()
+    statuses = run_gxtb_chunk(cfg, key, confs, gxtb_cmd=fake_xtb)
+    assert statuses[confs[0]] == "failed"
+    assert all(statuses[c] == "completed" for c in confs[1:])
+    rec = records.load_metadata(tree["lib"], key)["conformers"][confs[0]]
+    assert rec["status"] == "failed" and "no input.xyz" in rec["reason"]
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_sigterm_stops_the_chunk_and_records_every_conformer(tree, fake_sbatch, tmp_path, monkeypatch, workers):
+    """Walltime: the running conformers become timeout, and so do the ones never started (so a plain
+    resubmit reruns them instead of their staying at submitted)."""
+    import signal
+    import threading
+    from desc_utils.submit import records
+    from desc_utils.submit.gxtb import run_gxtb_chunk
+    exe = tmp_path / "slow_xtb"
+    exe.write_text("#!/bin/sh\nexec sleep 30\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("SLURM_CPUS_ON_NODE", "2")
+    cfg, key = _prepared(tree, fake_sbatch, gxtb={"batch_size": 10, "workers": workers, "vertical_redox": False})
+    for i in (3, 4):                   # the fixture ensemble has two conformers; a chunk needs more than workers
+        (tree["lib"] / key / f"conf_{i}").mkdir(exist_ok=True)
+    confs = _all_methanol(tree, key)
+    assert len(confs) > workers
+    threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    statuses = run_gxtb_chunk(cfg, key, confs, gxtb_cmd=str(exe))
+    assert set(statuses.values()) == {"timeout"}
+    recs = records.load_metadata(tree["lib"], key)["conformers"]
+    for c in confs[:workers]:          # the ones running when the signal came
+        assert recs[c]["status"] == "timeout" and not recs[c].get("reason")
+    for c in confs[workers:]:
+        assert recs[c]["status"] == "timeout" and recs[c]["reason"].startswith("not started")
+
+
+def test_gxtb_task_reads_old_and_new_task_lines(tree, fake_sbatch, monkeypatch):
+    """Arrays queued before batching have one {"conformer"} per line; they must still run."""
+    from desc_utils.submit import cli
+    from desc_utils.submit import gxtb as gxtb_mod
+    seen = []
+    monkeypatch.setattr(gxtb_mod, "run_gxtb_chunk",
+                        lambda cfg, key, confs: seen.append(confs) or {c: "completed" for c in confs})
+    cfg, key = _prepared(tree, fake_sbatch)
+    jsonl = tree["root"] / "t.jsonl"
+    slurm.write_tasks(jsonl, [{"inchikey": key, "conformer": "conf_1"},
+                              {"inchikey": key, "conformers": ["conf_1", "conf_2"]}])
+    for i in (0, 1):
+        assert cli.main(["gxtb-task", str(cfg.path), "--tasks", str(jsonl), "--index", str(i)]) == 0
+    assert seen == [["conf_1"], ["conf_1", "conf_2"]]

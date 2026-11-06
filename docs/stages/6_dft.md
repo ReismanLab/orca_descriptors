@@ -178,6 +178,8 @@ column in a g-xTB library holds a Mulliken-type charge, not an NPA one**. `charg
 | `dft.gxtb.accuracy` | `null` | `--acc`; `null` is xtb's own default (1.0), lower is tighter |
 | `dft.gxtb.etemp` | `null` | `--etemp` in K; `null` is xtb's own default (300) |
 | `dft.gxtb.executable` | `xtb` | the g-xTB build of xtb: a name on PATH or an absolute path. **Not hashed** — where the binary lives is a property of the machine, not of the results |
+| `dft.gxtb.batch_size` | `1` | conformers per array element ([batching](#batching-several-conformers-per-job)). **Not hashed** |
+| `dft.gxtb.workers` | `null` | conformers of an element run at once, each on `CPUs // workers` threads; `null` is one per CPU. **Not hashed** |
 | `slurm.gxtb` | `{time: "04:00:00", mem_per_cpu: 2G, ntasks: 8, nodes: 1}` | the job profile, the `slurm.orca` counterpart |
 | `slurm.gxtb_cmd` | `dft.gxtb.executable` | overrides the binary without touching the hashed block |
 
@@ -201,6 +203,37 @@ condense: true
 Put the g-xTB `bin/` first on PATH in `slurm.setup`, or point `dft.gxtb.executable` at it. A standard
 `xtb` warns about the flag it does not know and quietly runs GFN2 instead; both the runner and the
 parsers refuse such output rather than passing a GFN2 result off as g-xTB.
+
+### Batching several conformers per job
+
+A g-xTB single point plus both redox states takes seconds, less than a job's start-up (queue, conda
+activation, Python imports), and gains little from 8 threads. With `dft.gxtb.batch_size: N` each array
+element takes N conformers of one molecule and runs `workers` of them at once, the way the UMA refiner's
+`workers` pool does in stage 4:
+
+```yaml
+dft:
+  engine: gxtb
+  gxtb:
+    batch_size: 50     # 50 conformers per array element
+    workers: 8         # 8 xtb at once, 1 thread each on the 8 CPUs of slurm.gxtb
+```
+
+- **Chunks never span molecules**: every array still belongs to one molecule, so `orcadesc cost` and
+  `status` stay per molecule. A molecule with 120 conformers and `batch_size: 50` is one array of 3
+  elements; each conformer records the element it is in as `slurm_array_index`.
+- **Cost**: a conformer's `cpus` is the threads its xtb had (`CPUs // workers`) and `cpu_hours` is its
+  wall time times that, so the molecule's cost adds up the work, not the allocation x conformers. CPUs
+  left idle at the end of a chunk, while the last conformers finish, are not counted.
+- **Walltime**: on the SIGTERM 10 min before the limit, the conformers running are recorded `timeout`
+  (or `failed` after `orcadesc cancel`) as for a lone conformer, and so are the ones not started yet,
+  with `reason: not started: ...`; the next plain `submit` reruns both. Size `batch_size` so that a chunk fits:
+  with `freq_calc: true` the Hessian can take 10+ min per conformer on a metal complex.
+- **Errors**: a conformer whose run raises (wrong binary, missing input) is recorded `failed` with the
+  error as `reason`, and the rest of the chunk carries on. The element exits 1 if any conformer did not
+  complete.
+- `batch_size: 1` (the default) is one conformer per element on every CPU, exactly the behaviour
+  before the key existed. Changing either key does not change the library hash.
 
 ### `freq_calc`: expensive, and unreliable on metal complexes
 

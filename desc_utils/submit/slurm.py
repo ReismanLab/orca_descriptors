@@ -70,22 +70,35 @@ def write_orca_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[
     return _write_stage6_array(cfg, jobdir, inchikey, conformers, "orca", "orca-task", "ORCA")
 
 
+def chunks(conformers: list[str], size: int) -> list[list[str]]:
+    """``conformers`` in consecutive groups of ``size`` (the last one shorter): one array element each."""
+    size = max(1, int(size))
+    return [conformers[i:i + size] for i in range(0, len(conformers), size)]
+
+
 def write_gxtb_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[str]) -> tuple[Path, Path]:
     """``gxtb_<InChIKey>.sbatch`` + ``.jsonl``, the ``dft.engine: gxtb`` counterpart of the ORCA array.
 
     Same shape, the ``slurm.gxtb`` profile instead of ``slurm.orca``: g-xTB jobs are far shorter, so
-    they are usually a few CPUs for a few hours rather than 16 CPUs for a week.
+    they are usually a few CPUs for a few hours rather than 16 CPUs for a week. A g-xTB single point
+    takes seconds, less than a job's start-up, so ``dft.gxtb.batch_size`` conformers share one element
+    (task line ``{"inchikey", "conformers": [...]}``); element ``i`` runs ``chunks(conformers, size)[i]``.
+    Chunks never span molecules, so every array (and its cost) still belongs to one molecule.
     """
-    return _write_stage6_array(cfg, jobdir, inchikey, conformers, "gxtb", "gxtb-task", "g-xTB")
+    groups = chunks(conformers, cfg.gxtb.get("batch_size") or 1)
+    return _write_stage6_array(cfg, jobdir, inchikey, [{"inchikey": inchikey, "conformers": g} for g in groups],
+                               "gxtb", "gxtb-task", "g-xTB")
 
 
-def _write_stage6_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[str],
+def _write_stage6_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list,
                         profile: str, subcommand: str, label: str) -> tuple[Path, Path]:
+    """``conformers``: folder names (one task each), or ready-made task dicts (the g-xTB chunks)."""
     log_dir = jobdir / "slurm_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     name = f"{profile}_{inchikey}"
     tasks_path = jobdir / f"{name}.jsonl"
-    write_tasks(tasks_path, [{"inchikey": inchikey, "conformer": c} for c in conformers])
+    write_tasks(tasks_path, [c if isinstance(c, dict) else {"inchikey": inchikey, "conformer": c}
+                             for c in conformers])
     throttle = cfg.slurm.get("array_throttle")
     array = f"0-{len(conformers) - 1}" + (f"%{throttle}" if throttle else "")
     cmd = (f"python -m desc_utils.submit {subcommand} {shlex.quote(str(cfg.path))} "
