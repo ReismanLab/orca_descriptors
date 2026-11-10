@@ -112,3 +112,41 @@ def test_load_mol_clean_sdf_has_no_note(tmp_path):
     mol = load_mol(sdf, notes=notes)
     assert notes == []
     assert mol.GetSubstructMatches(Chem.MolFromSmarts("[H][#6]#[#6]-[#6;a]"))
+
+
+def test_numbering_topology_flags_a_rearranged_geometry(spec, tmp_path):
+    """numbering.topology: conf_2 has lost its terminal alkyne H (C-H 3 A): topology_changed, so usable_rows
+    drops it; conf_1 stays ok and both carry the topology_changes column."""
+    import copy
+
+    import numpy as np
+    from rdkit import Chem
+
+    from bceg.chem import embed, mol_from_smiles
+    from bceg.topology import check_params
+    from bceg.xyz import Conformer, write_xyz
+    from desc_utils.numbering import build_numbering_table
+
+    mol = mol_from_smiles("C#Cc1ccccc1")
+    coords = embed(mol, 1)
+    elements = [a.GetSymbol() for a in mol.GetAtoms()]
+    mol_dir = tmp_path / "DATA" / "PHENYLACETYLENE"
+    mol_dir.mkdir(parents=True)
+    Chem.MolToMolFile(mol, str(mol_dir / "structure.mol"))
+    h = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == "H" and a.GetNeighbors()[0].GetDegree() == 2)
+    c = mol.GetAtomWithIdx(h).GetNeighbors()[0].GetIdx()
+    broken = coords.copy()
+    broken[h] = coords[c] + 3.0 * (coords[h] - coords[c]) / np.linalg.norm(coords[h] - coords[c])
+    for name, xyz in (("conf_1", coords), ("conf_2", broken)):
+        (mol_dir / name).mkdir()
+        write_xyz(mol_dir / name / "optimization.xyz", elements, [Conformer(xyz, None)])
+
+    topo_spec = copy.deepcopy(spec)
+    topo_spec.numbering["topology"] = check_params(True, "numbering.topology")
+    topo_spec.numbering["consistency"] = "none"
+    df = build_numbering_table(topo_spec, repo_root=tmp_path, data_root=tmp_path / "DATA", progress=False)
+    status = dict(zip(df["path"].str.extract(r"(conf_\d)")[0], df["numbering_status"]))
+    assert status == {"conf_1": "ok", "conf_2": "topology_changed"}
+    assert "bond broken" in df.loc[df["numbering_status"] == "topology_changed", "numbering_notes"].iloc[0]
+    assert "topology_changes" in df.columns
+    assert len(usable_rows(df, topo_spec, quiet=True)) == 1

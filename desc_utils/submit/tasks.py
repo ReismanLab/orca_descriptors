@@ -2,7 +2,7 @@
 
 ``prepare_molecule``  (prepare array, one element per molecule, runs after bceg)
     read the ensemble (the search's replicates pooled in order), check its hyper-parameter hash against
-    the library, prune it (stage 5: the energy window, or nothing), split it into conf_N/ folders, render
+    the library, prune it (stage 5: the connectivity check and the energy window, or nothing), split it into conf_N/ folders, render
     calcParam.inp, record everything, submit the ORCA array.
 ``run_orca_conformer``  (ORCA array, one element per conformer)
     run ORCA in conf_N/, record the outcome (exit code AND the termination banner), condense.
@@ -22,6 +22,7 @@ from pathlib import Path
 
 from rdkit import Chem
 
+from bceg import topology
 from bceg.constraints import held_atoms
 from bceg.inputs import InputMolecule
 from bceg.provenance import ParamsMismatch
@@ -66,22 +67,39 @@ def write_structure(mol_dir: Path, structure: Structure) -> dict:
 
 
 # --------------------------------------------------------------------------- prepare
-def energy_window(conformers: list[Conformer], ewin_kcal_mol: float | None) -> list[tuple[str, Conformer, float | None, str]]:
-    """Stage 5, pruning: (name, conformer, E - Emin in kcal/mol or None, status) for every conformer, in
-    the order of the pooled ensemble (N = 1-based position in it). ``ewin_kcal_mol`` None (the default) keeps every conformer; with a window, a conformer
-    above it is ``skipped_energy_filter`` and one without an energy ``skipped_no_energy``."""
-    energies = [c.energy for c in conformers if c.energy is not None]
+def energy_window(conformers: list[Conformer], ewin_kcal_mol: float | None, mol: Chem.Mol | None = None,
+                  topology_params: dict | None = None) -> list[tuple[str, Conformer, float | None, str, list[str]]]:
+    """Stage 5, pruning: (name, conformer, E - Emin in kcal/mol or None, status, topology changes) for every
+    conformer, in the order of the pooled ensemble (N = 1-based position in it).
+
+    With ``topology_params`` (``pruning.topology``, bceg.topology.check_params) each geometry is first
+    compared with the graph ``mol``: one with a change the block does not allow is ``skipped_topology`` and
+    takes no part in Emin, so a rearranged structure lower in energy cannot set the window. The changes of
+    every conformer are returned as messages (the allowed ones, e.g. agostic contacts, included).
+    ``ewin_kcal_mol`` None (the default) keeps every remaining conformer; with a window, a conformer above it
+    is ``skipped_energy_filter`` and one without an energy ``skipped_no_energy``."""
+    changes: list[list[str]] = [[] for _ in conformers]
+    rejected = [False] * len(conformers)
+    if topology_params is not None:
+        if mol is None:
+            raise ValueError("pruning.topology needs the molecular graph")
+        for k, c in enumerate(conformers):
+            found, bad = topology.check(mol, c.coords, topology_params)
+            changes[k], rejected[k] = [str(x) for x in found], bool(bad)
+    energies = [c.energy for c, r in zip(conformers, rejected) if c.energy is not None and not r]
     e_min = min(energies) if energies else None
     out = []
-    for i, c in enumerate(conformers, start=1):
+    for i, (c, r) in enumerate(zip(conformers, rejected), start=1):
         rel = None if (c.energy is None or e_min is None) else (c.energy - e_min) * HARTREE_TO_KCAL
-        if ewin_kcal_mol is None:
+        if r:
+            status = "skipped_topology"
+        elif ewin_kcal_mol is None:
             status = "prepared"
         elif rel is None:
             status = "skipped_no_energy"
         else:
             status = "skipped_energy_filter" if rel > ewin_kcal_mol else "prepared"
-        out.append((conformer_name(i), c, rel, status))
+        out.append((conformer_name(i), c, rel, status, changes[i - 1]))
     return out
 
 
@@ -168,8 +186,17 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
     existing = meta.get("conformers") or {}
     conformer_records: dict = {}
     to_run: list[str] = []
-    for name, conf, rel, status in energy_window(ens.conformers, cfg.ewin):
+    topo = cfg.topology
+    if topo is not None and ens.structure is None:
+        raise RuntimeError(f"{inchikey}: pruning.topology needs the ensemble's structure (the molecular graph)")
+    pruned = energy_window(ens.conformers, cfg.ewin, None if ens.structure is None else ens.structure.mol, topo)
+    n_topo = sum(1 for p in pruned if p[3] == "skipped_topology")
+    if topo is not None:
+        print(f"{inchikey}: {n_topo}/{len(pruned)} conformer(s) skipped_topology")
+    for name, conf, rel, status, changes in pruned:
         rec = {"energy_hartree": conf.energy, "energy_above_min_kcal_mol": rel}
+        if changes:
+            rec["topology_changes"] = changes
         if "replicate" in conf.info:
             rec |= {"replicate": conf.info["replicate"], "index_in_replicate": conf.info["index"]}
         old = (existing.get(name) or {}).get("status")
@@ -200,6 +227,7 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         "dft": dft_record, "conformers": conformer_records,
         "orca_stage": {"status": "prepared", "reason": "", "prepared_at": records.now(),
                        "n_conformers_in_ensemble": len(ens.conformers), "n_replicates": cfg.replicates,
+                       "n_skipped_topology": n_topo,
                        "n_to_run": len(to_run)},
     })
     if not to_run:

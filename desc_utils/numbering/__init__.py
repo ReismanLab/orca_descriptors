@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from desc_utils.numbering.base import (
-    STATUS_ELEMENT_MISMATCH, STATUS_FAILED, STATUS_INCOMPLETE, STATUS_INCONSISTENT, STATUS_OK,
+    STATUS_ELEMENT_MISMATCH, STATUS_FAILED, STATUS_INCOMPLETE, STATUS_INCONSISTENT, STATUS_OK, STATUS_TOPOLOGY,
     ConformerContext, NoMatch, NumberingBackend, NumberingRow, make_backend, validate_elements,
 )
 from desc_utils.numbering.io import (
@@ -99,14 +99,26 @@ def _number_one(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, re
     except Exception as exc:
         row.status, row.notes = STATUS_FAILED, [f"read: {type(exc).__name__}: {exc}"]
         return row, extra
+    # numbering.topology first: a rearranged geometry often fails the numbering too, and then the
+    # topology change is the reason to report
+    topo_status, topo_notes = (_check_topology(mol, ctx, spec.numbering["topology"], extra)
+                               if spec.numbering.get("topology") else (None, []))
+    _number_mol(mol, ctx, spec, backend, row, extra)
+    if topo_status:
+        row.status = topo_status
+        row.notes = topo_notes + row.notes
+    return row, extra
+
+
+def _number_mol(mol, ctx: ConformerContext, spec: Spec, backend: NumberingBackend, row: NumberingRow, extra: dict) -> None:
     try:
         indices = backend.number(mol, ctx)
     except NoMatch as exc:
-        row.status, row.notes = STATUS_FAILED, [str(exc)]
-        return row, extra
+        row.status, row.notes[:] = STATUS_FAILED, [str(exc)]
+        return
     except Exception as exc:
-        row.status, row.notes = STATUS_FAILED, [f"{backend.name}: {type(exc).__name__}: {exc}"]
-        return row, extra
+        row.status, row.notes[:] = STATUS_FAILED, [f"{backend.name}: {type(exc).__name__}: {exc}"]
+        return
     indices = apply_orient(mol, indices, spec.numbering.get("orient"))
     row.indices = indices
     missing = [l for l in spec.labels if l not in indices]
@@ -136,7 +148,36 @@ def _number_one(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, re
             extra.update(fn(mol, indices))
         except Exception as exc:
             row.notes.append(f"annotator {name}: {type(exc).__name__}: {exc}")
-    return row, extra
+
+
+#: the molecular graph written by `orcadesc submit` next to metadata.json (desc_utils.submit.tasks)
+STRUCTURE_MOL = "structure.mol"
+
+
+def _check_topology(mol, ctx: ConformerContext, params: dict, extra: dict) -> tuple[str | None, list[str]]:
+    """numbering.topology: compare the numbered geometry with ``<molecule>/structure.mol``. Every change goes
+    to the ``topology_changes`` column. Returns (status overriding the numbering's or None, notes):
+    ``topology_changed`` with the changes the block does not allow, ``failed`` if the atoms differ from the
+    graph's. Without a structure.mol (data from before orcadesc) nothing is checked."""
+    from rdkit import Chem
+
+    from bceg.topology import check
+
+    ref_path = ctx.conf_dir.parent / STRUCTURE_MOL
+    extra["topology_changes"] = None
+    if not ref_path.exists():
+        extra["topology_changes"] = f"not checked: no {STRUCTURE_MOL}"
+        return None, []
+    ref = Chem.MolFromMolFile(str(ref_path), removeHs=False, sanitize=False)
+    if ref is None:
+        return STATUS_FAILED, [f"topology: {STRUCTURE_MOL} unreadable"]
+    ref_el = [a.GetSymbol() for a in ref.GetAtoms()]
+    geo_el = [a.GetSymbol() for a in mol.GetAtoms()]
+    if ref_el != geo_el:
+        return STATUS_FAILED, [f"topology: the geometry's atoms ({len(geo_el)}) are not those of {STRUCTURE_MOL} ({len(ref_el)}) in order"]
+    changes, bad = check(ref, mol.GetConformer().GetPositions(), params)
+    extra["topology_changes"] = "; ".join(str(c) for c in changes)
+    return (STATUS_TOPOLOGY if bad else None), [f"topology: {c}" for c in bad]
 
 
 def _record(ctx: ConformerContext, spec: Spec, backend: NumberingBackend, regenerate_sdf: bool) -> dict:
