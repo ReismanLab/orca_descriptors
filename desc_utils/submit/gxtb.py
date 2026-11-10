@@ -213,7 +213,13 @@ def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str
         "status": "running", "started_at": records.now(), "gxtb_cmd": resolved, **job_env}}})
 
     run_dir = conf_dir / gc.RUN_DIRNAME
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # A rerun (a failed conformer, or a completed one with --rerun-completed) starts from nothing. xtb writes
+    # charges, wbo, g98.out and molden.input under fixed names, so a step that fails or is skipped this time
+    # would otherwise leave the previous run's files to be condensed; and if the single point fails there is
+    # no new condensed file to replace the old one.
+    shutil.rmtree(run_dir, ignore_errors=True)
+    (conf_dir / gc.CONDENSED_FILENAME).unlink(missing_ok=True)
+    run_dir.mkdir(parents=True)
     geometry = start                      # the geometry each step runs on; the optimisation replaces it
     t0 = time.time()
     step_times: dict[str, dict] = {}
@@ -233,9 +239,6 @@ def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str
         sub.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(geometry, sub / "start.xyz")
         log = sub / "xtb.out"
-        log.unlink(missing_ok=True)       # a rerun must not append to the previous attempt's output
-        for stale in (gc.MOLDEN_RAW, gc.MOLDEN_FILENAME):
-            (sub / stale).unlink(missing_ok=True)   # nor leave the previous attempt's orbitals behind
         s0 = time.time()
         cmd = step_command(step, resolved, opts, charge, multiplicity)
         if step == "optimization" and fixed:

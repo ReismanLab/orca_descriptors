@@ -754,3 +754,65 @@ def test_gxtb_task_reads_old_and_new_task_lines(tree, fake_sbatch, monkeypatch):
     for i in (0, 1):
         assert cli.main(["gxtb-task", str(cfg.path), "--tasks", str(jsonl), "--index", str(i)]) == 0
     assert seen == [["conf_1"], ["conf_1", "conf_2"]]
+
+
+# --------------------------------------------------------------------------- --rerun-completed
+
+def _completed(tree, fake_sbatch, fake_xtb):
+    cfg, key = _prepared(tree, fake_sbatch)
+    confs = sorted(p.name for p in (tree["lib"] / key).glob("conf_*"))
+    for conf in confs:
+        shutil.copyfile(REF / "input.xyz", tree["lib"] / key / conf / "input.xyz")
+        assert run_gxtb_conformer(cfg, key, conf, gxtb_cmd=fake_xtb) == "completed"
+    return cfg, key, confs
+
+
+def test_rerun_completed_prepares_completed_conformers_again(tree, fake_sbatch, fake_xtb):
+    """Without the flag a completed conformer is never touched, --force or not; with it, it runs again."""
+    from desc_utils.submit import records
+    cfg, key, confs = _completed(tree, fake_sbatch, fake_xtb)
+    prepare_molecule(cfg, key, "CCO", force=True, submit_jobs=False)
+    meta = records.load_metadata(tree["lib"], key)["conformers"]
+    assert {meta[c]["status"] for c in confs} == {"completed"}, "--force alone leaves completed conformers"
+
+    prepare_molecule(cfg, key, "CCO", rerun_completed=True, submit_jobs=False)
+    meta = records.load_metadata(tree["lib"], key)["conformers"]
+    assert {meta[c]["status"] for c in confs} == {"prepared"}
+    assert {meta[c]["resubmitted_from"] for c in confs} == {"completed"}
+
+
+def test_a_rerun_starts_from_an_empty_run_folder(tree, fake_sbatch, fake_xtb, tmp_path):
+    """Files of the previous run must not be condensed into the new one, nor survive a failed rerun."""
+    cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    conf = tree["lib"] / key / "conf_1"
+    stale = conf / gc.RUN_DIRNAME / "oxidation" / "stale_from_last_run"
+    stale.write_text("x")
+    assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=fake_xtb) == "completed"
+    assert not stale.exists()
+    assert (conf / gc.RUN_DIRNAME / "singlepoint" / gc.MOLDEN_FILENAME).is_file()
+
+    broken = tmp_path / "broken_xtb"
+    broken.write_text("#!/bin/sh\necho 'SCF did not converge'\nexit 1\n")
+    broken.chmod(broken.stat().st_mode | stat.S_IEXEC)
+    assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=str(broken)) == "failed"
+    assert not (conf / "orca_condensed.json").exists(), "a failed rerun must not keep the old condensed file"
+
+
+def test_submit_rerun_completed_selects_complete_molecules(tree, fake_sbatch, fake_xtb, capsys):
+    from desc_utils.submit.cli import main
+    _, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    main(["submit", str(tree["cfg"])])
+    assert f"skip  {key}  complete" in capsys.readouterr().out
+
+    n = len(fake_sbatch)
+    assert main(["submit", str(tree["cfg"]), "--rerun-completed"]) == 0
+    assert key in capsys.readouterr().out
+    script = fake_sbatch[n]["script"]
+    assert script.name == "prepare.sbatch" and "--rerun-completed" in script.read_text()
+    assert key in (script.parent / "prepare.jsonl").read_text()
+
+
+def test_rerun_completed_is_refused_for_orca(tree, capsys):
+    from desc_utils.submit.cli import main
+    assert main(["submit", str(tree["cfg"]), "--rerun-completed"]) == 2
+    assert "dft.engine: gxtb only" in capsys.readouterr().err

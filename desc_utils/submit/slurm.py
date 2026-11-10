@@ -50,7 +50,8 @@ def read_task(path: Path, index: int) -> dict:
     return json.loads(lines[index])
 
 
-def write_prepare_array(cfg: Config, jobdir: Path, molecules: list[dict], force: bool = False) -> tuple[Path, Path]:
+def write_prepare_array(cfg: Config, jobdir: Path, molecules: list[dict], force: bool = False,
+                        rerun_completed: bool = False) -> tuple[Path, Path]:
     """``prepare.sbatch`` + ``prepare.jsonl``: one element per molecule ({inchikey, input_smiles})."""
     log_dir = jobdir / "slurm_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -59,7 +60,8 @@ def write_prepare_array(cfg: Config, jobdir: Path, molecules: list[dict], force:
     throttle = cfg.slurm.get("array_throttle")
     array = f"0-{len(molecules) - 1}" + (f"%{throttle}" if throttle else "")
     cmd = (f"python -m desc_utils.submit prepare-task {shlex.quote(str(cfg.path))} "
-           f"--tasks {shlex.quote(str(tasks_path))} --index $SLURM_ARRAY_TASK_ID" + (" --force" if force else ""))
+           f"--tasks {shlex.quote(str(tasks_path))} --index $SLURM_ARRAY_TASK_ID" + (" --force" if force else "")
+           + (" --rerun-completed" if rerun_completed else ""))
     script = jobdir / "prepare.sbatch"
     script.write_text("\n".join([*_header("orca_prepare", array, cfg.slurm["prepare"], log_dir), *_setup(cfg), cmd, ""]))
     return script, tasks_path

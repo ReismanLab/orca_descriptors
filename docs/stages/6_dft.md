@@ -266,6 +266,30 @@ A failed frequency step therefore **does not fail the conformer**. It is recorde
 `gxtb_failed_steps`, the vibration descriptors come out empty, and the charges, orbitals, dipole and
 redox states that did come out are condensed and used as normal.
 
+### Running completed conformers again
+
+`orcadesc submit` never resubmits a `completed` conformer, `--force` or not. To run the completed
+conformers of a g-xTB library again, for example to add the molden files of `dft.gxtb.molden` to a
+library computed before it existed:
+
+```bash
+orcadesc submit <LIB>.yaml --rerun-completed --dry-run   # which molecules it takes
+orcadesc submit <LIB>.yaml --rerun-completed
+```
+
+It takes the molecules recorded `complete` along with the ones a plain submit takes, and prepares every
+completed conformer again (its record gets `resubmitted_from: completed`). Conformers still submitted
+or running are left alone unless `--force` is given too. bceg is not run again, and since
+`dft.gxtb.molden` is not hashed, turning it on does not change the library's `params.json`.
+
+**The rerun overwrites.** Each conformer's `gxtb/` folder and `orca_condensed.json` are deleted when its
+job starts, so the previous run's files can never be condensed into the new one. A conformer whose rerun
+fails ends `failed` with no condensed file, even though it had one before. Values can also move
+slightly, because the multi-threaded xtb SCF is not bit-for-bit reproducible: re-extract the descriptor
+table afterwards rather than mixing old and new rows. Every array element counts against the cluster's
+limit on submitted jobs (10 000 per user on QOS `normal`), so set `batch_size` before rerunning a large
+library: one element then runs several conformers. ORCA libraries refuse the flag.
+
 ### Layout, records and status
 
 Each step runs in its own folder, because xtb always writes `charges`, `wbo` and `g98.out` under fixed

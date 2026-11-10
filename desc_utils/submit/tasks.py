@@ -112,8 +112,11 @@ def _registry_entry(ens: Ensemble, smiles_line: int | None = None) -> dict:
 
 
 def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool = False,
-                     submit_jobs: bool = True) -> str:
-    """Prepare one molecule's stage-6 jobs. Returns the molecule's ``orca_stage`` status."""
+                     submit_jobs: bool = True, rerun_completed: bool = False) -> str:
+    """Prepare one molecule's stage-6 jobs. Returns the molecule's ``orca_stage`` status.
+
+    A completed conformer is left alone unless ``rerun_completed`` (g-xTB only, see ``orcadesc submit
+    --rerun-completed``); one submitted or running is left alone unless ``force``."""
     from desc_utils.submit import gxtb as gxtb_run  # imports this module back for the shared run helpers
     mol = InputMolecule.from_smiles(input_smiles)
     if mol.inchikey != inchikey:
@@ -144,6 +147,8 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
 
     # --- DFT set-up, rendered once per molecule (every conformer gets an identical copy)
     gxtb_engine = cfg.dft_engine == "gxtb"
+    if rerun_completed and not gxtb_engine:
+        raise RuntimeError("rerun_completed is for dft.engine: gxtb only")
     # dft.constrained: the atoms the constraints name stay where stages 2 to 4 put them (same indices in
     # every conformer, so one rendering still serves them all)
     fixed = []
@@ -203,7 +208,7 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         if status != "prepared":
             conformer_records[name] = rec | {"status": status}
             continue
-        if old == "completed" or (old in records.PENDING_CONFORMER and not force):
+        if (old == "completed" and not rerun_completed) or (old in records.PENDING_CONFORMER and not force):
             continue  # leave the record as it is
         conf_dir = mol_dir / name
         conf_dir.mkdir(exist_ok=True)
@@ -219,7 +224,7 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         if not gxtb_engine:  # g-xTB takes its options from the config, there is no input file to copy
             shutil.copyfile(mol_dir / "calcParam.inp", conf_dir / "calcParam.inp")
         conformer_records[name] = rec | {"status": "prepared", "prepared_at": records.now()}
-        if old in records.BAD_CONFORMER or old in records.PENDING_CONFORMER:
+        if old in records.BAD_CONFORMER or old in records.PENDING_CONFORMER or old == "completed":
             conformer_records[name] |= {"resubmitted_from": old, "reason": None}
         to_run.append(name)
 
