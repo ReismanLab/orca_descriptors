@@ -159,6 +159,16 @@ the same library line up column-for-column wherever both engines have data.
 Extras ORCA does not give, stored under the condensed file's `gxtb` section: Wiberg/Mayer bond orders,
 condensed Fukui indices and shell populations.
 
+**The orbitals.** With `dft.gxtb.molden` (on by default) the single point also writes a molden file
+(`--molden`): the basis and every MO with its coefficients, alpha and beta for an open shell. The runner
+gzips it to `conf_N/gxtb/singlepoint/molden.input.gz`, and `gxtb.molden.path` in the condensed file
+points to it (relative to the conformer folder). The coefficients stay in that file; the condensed file
+takes only the orbital energies and occupations. With the molden file those are complete
+(`states.singlepoint.mo.source: molden`, `truncated: false`); without it they come from the table in
+`xtb.out`, which drops the middle of any list longer than about 40 orbitals. HOMO and LUMO are the same
+either way. Size: 0.3 MB uncompressed for a 35-atom Ni complex (0.12 MB gzipped), and it grows with the
+square of the basis size. Occupations count valence electrons only, as g-xTB does.
+
 **The charges.** g-xTB computes one set of atomic charges and has no NPA, Hirshfeld or CM5 analysis.
 Those charges are written to the `nbo` and `cm5` slots of the condensed file (and to `mulliken` inside
 `states.*`), because those are the slots the descriptor families read. The columns are therefore still
@@ -175,6 +185,7 @@ column in a g-xTB library holds a Mulliken-type charge, not an NPA one**. `charg
 | `dft.gxtb.freq_calc` | `false` | `--hess`: frequencies, IR intensities and thermochemistry (see the caveat) |
 | `dft.gxtb.vertical_redox` | `true` | N±1 single points, filling `states.oxidation` / `states.reduction` |
 | `dft.gxtb.fukui` | `true` | `--vfukui`: condensed Fukui indices into the `gxtb` section |
+| `dft.gxtb.molden` | `true` | `--molden` on the single point: every MO with its coefficients, gzipped next to `xtb.out` ([the orbitals](#what-you-get-and-what-you-lose)). **Not hashed**: it changes no number, so an existing library can be rerun with it |
 | `dft.gxtb.accuracy` | `null` | `--acc`; `null` is xtb's own default (1.0), lower is tighter |
 | `dft.gxtb.etemp` | `null` | `--etemp` in K; `null` is xtb's own default (300) |
 | `dft.gxtb.executable` | `xtb` | the g-xTB build of xtb: a name on PATH or an absolute path. **Not hashed** — where the binary lives is a property of the machine, not of the results |
@@ -195,6 +206,7 @@ dft:
     opt_geom: false
     vertical_redox: true
     fukui: true
+    molden: true
 slurm:
   gxtb: {time: "04:00:00", mem_per_cpu: 2G, ntasks: 8, nodes: 1}
 condense: true

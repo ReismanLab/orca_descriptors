@@ -79,6 +79,7 @@ GXTB_PARAMS = {
     "freq_calc": False,       # --hess: frequencies, IR intensities and thermochemistry
     "vertical_redox": True,   # N±1 single points -> states.oxidation / states.reduction
     "fukui": True,            # --vfukui: condensed Fukui indices
+    "molden": True,           # --molden on the single point: every MO with its coefficients, gzipped
     "accuracy": None,         # --acc; None: xtb's own default (1.0)
     "etemp": None,            # --etemp in K; None: xtb's own default (300)
     "executable": "xtb",      # the g-xTB build of xtb: a name on PATH or an absolute path
@@ -89,6 +90,9 @@ GXTB_PARAMS = {
 #: same library can be continued with the binary in another place (bceg.refine.base.Refiner.resource_keys),
 #: or with the conformers packed differently into SLURM jobs
 GXTB_RESOURCE_KEYS = {"executable", "batch_size", "workers"}
+#: ``dft.gxtb`` keys that only add an output file and change no number in the results: also excluded from
+#: the hash, so an existing library can be rerun with the orbitals written out
+GXTB_OUTPUT_KEYS = {"molden"}
 SLURM_KEYS = {"setup", "ensembles", "prepare", "orca", "gxtb", "array_throttle", "orca_cmd", "gxtb_cmd"}
 PROFILE_KEYS = {"partition", "account", "time", "mem", "mem_per_cpu", "ntasks", "cpus_per_task", "nodes",
                 "qos", "constraint", "gres", "extra"}
@@ -297,7 +301,7 @@ def _gxtb(block, where: str, post_opt_refiner: str | None) -> dict:
             raise ValueError(f"{where}.{key}: g-xTB has no ALPB/GBSA/COSMO parameters, so a stage-6 "
                              f"g-xTB run is gas phase only; remove the key or use dft.engine: orca")
     _check_keys(block, set(GXTB_PARAMS), where)
-    for key in ("opt_geom", "freq_calc", "vertical_redox", "fukui"):
+    for key in ("opt_geom", "freq_calc", "vertical_redox", "fukui", "molden"):
         if not isinstance(block[key], bool):
             raise ValueError(f"{where}.{key} must be true or false, got {block[key]!r}")
     from bceg.xtb import OPT_LEVELS
@@ -640,7 +644,9 @@ class Config:
         dft = dict(self.dft)
         if self.dft_engine == "gxtb":
             # the binary's location is a property of the machine, not of the results
-            dft["gxtb"] = {k: v for k, v in dft["gxtb"].items() if k not in GXTB_RESOURCE_KEYS}
+            # nor is whether the orbitals were written out
+            dft["gxtb"] = {k: v for k, v in dft["gxtb"].items()
+                           if k not in GXTB_RESOURCE_KEYS | GXTB_OUTPUT_KEYS}
         else:
             dft["calc_param_template"] = {"path": str(self.template_path), "sha256": self.template_sha256()}
         return {"transformation": transformation, "pre_refinement": copy.deepcopy(self.pre_refinement),

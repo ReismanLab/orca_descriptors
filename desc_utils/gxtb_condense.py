@@ -8,7 +8,7 @@ A g-xTB conformer folder looks like this, one subfolder per step the config aske
         gxtb/
             run.json           the resolved options and the wall time of every step
             optimization/      xtb.out, xtbopt.xyz          (only with opt_geom)
-            singlepoint/       xtb.out, charges, wbo
+            singlepoint/       xtb.out, charges, wbo, molden.input.gz  (the last with molden)
             frequency/         xtb.out, g98.out             (only with freq_calc)
             oxidation/         xtb.out, charges             (only with vertical_redox)
             reduction/         xtb.out, charges             (only with vertical_redox)
@@ -35,12 +35,19 @@ What differs from an ORCA file, and why:
 ``gxtb``
     an extra section with the data g-xTB offers and ORCA does not: Wiberg/Mayer bond orders, Fukui
     indices and shell populations. Every consumer reads with ``.get()``, so an extra key is inert.
+``states.singlepoint.mo`` and ``gxtb.molden``
+    with ``dft.gxtb.molden`` the single point writes every MO with its coefficients. The orbital
+    energies and occupations then come from that file and are complete (``mo.truncated`` false,
+    ``mo.source: molden``), where the table printed in ``xtb.out`` drops the middle of a long list. The
+    coefficients are not copied into the JSON: ``gxtb.molden.path`` points to the gzipped file, relative
+    to the conformer folder.
 """
 
 from __future__ import annotations
 
 import json
 import platform
+import shutil
 import socket
 from pathlib import Path
 from typing import Optional
@@ -59,6 +66,10 @@ RUN_RECORD = "run.json"
 STATES = ("singlepoint", "oxidation", "reduction", "nmr")
 #: every step a g-xTB conformer job can run, in the order ``desc_utils.submit.cost`` expects them
 STEPS = ("optimization", "singlepoint", "frequency", "oxidation", "reduction")
+
+#: what ``xtb --molden`` writes, and what the runner compresses it to
+MOLDEN_RAW = "molden.input"
+MOLDEN_FILENAME = "molden.input.gz"
 
 CHARGES_NOTE = ("nbo/cm5: g-xTB atomic charges (Mulliken-type q from the shell populations); g-xTB has "
                 "no NPA, Hirshfeld or CM5 analysis, and these are the slots the descriptor families read")
@@ -83,6 +94,47 @@ def read_run_record(conf_dir: Path) -> dict:
         return json.loads(p.read_text()) or {}
     except Exception:
         return {}
+
+
+def compress_molden(step_dir: Path | str) -> Optional[Path]:
+    """Gzip ``<step_dir>/molden.input`` in place (``molden.input.gz``); None when there is none.
+
+    A molden file grows with the square of the basis: 0.3 MB for a 35-atom Ni complex, a few MB at
+    100 atoms, about 2.7x smaller compressed. Written to a temporary name first so a job killed mid-way
+    never leaves a truncated ``.gz`` that looks complete.
+    """
+    import gzip
+    step_dir = Path(step_dir)
+    raw = step_dir / MOLDEN_RAW
+    if not raw.is_file():
+        return None
+    out = step_dir / MOLDEN_FILENAME
+    tmp = out.with_name(out.name + ".tmp")
+    with raw.open("rb") as src, gzip.open(tmp, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    tmp.replace(out)
+    raw.unlink()
+    return out
+
+
+def molden_path(conf_dir: Path | str, step: str = "singlepoint") -> Optional[Path]:
+    """The step's molden file, compressed or (for a folder run by hand) not; None without one."""
+    for name in (MOLDEN_FILENAME, MOLDEN_RAW):
+        p = _step_dir(Path(conf_dir), step) / name
+        if p.is_file():
+            return p
+    return None
+
+
+def molden_entry(conf_dir: Path | str, mo: Optional[dict]) -> Optional[dict]:
+    """``gxtb.molden``: where the single point's molden file is and what it holds."""
+    p = molden_path(conf_dir)
+    if p is None:
+        return None
+    entry = {"path": str(p.relative_to(Path(conf_dir))), "gzip": p.suffix == ".gz", "step": "singlepoint"}
+    if mo and mo.get("source") == "molden":
+        entry |= {"n_basis": mo.get("n_basis"), "n_mo": len(mo["energies_eh"]), "spin": mo.get("spin")}
+    return entry
 
 
 # --------------------------------------------------------------------------- one state
@@ -117,7 +169,8 @@ def state_from_step(conf_dir: Path, step: str, basename: str) -> Optional[dict]:
         "polarizability": None,     # --alpha is silently ignored under --gxtb
         "thermochemistry": gp.thermochemistry(text),
         "nmr": None,                # g-xTB has no GIAO shieldings
-        "mo": gp.orbitals(text),
+        # the complete table from the molden file when the step wrote one, else the printed one
+        "mo": (gp.molden_orbitals(m) if (m := molden_path(conf_dir, step)) else None) or gp.orbitals(text),
     }
 
 
@@ -217,6 +270,7 @@ def build_condensed(conf_dir: Path | str) -> dict:
             "fukui": gp.fukui(sp_text),
             "shell_populations": gp.shell_populations(sp_text),
             "options": record.get("options"),
+            "molden": molden_entry(conf_dir, sp.get("mo") if sp else None),
         },
         "notes": notes,
         "job": _job_entry(conf_dir, record),

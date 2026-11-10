@@ -77,8 +77,11 @@ def step_command(step: str, exe: str, opts: dict, charge: int, multiplicity: int
         charge += 1 if step == "oxidation" else -1
         # removing or adding one electron turns a closed shell into a doublet and vice versa
         n_unpaired = n_unpaired + 1 if n_unpaired == 0 else n_unpaired - 1
-    elif step == "singlepoint" and opts.get("fukui"):
-        cmd += ["--vfukui"]
+    elif step == "singlepoint":
+        if opts.get("fukui"):
+            cmd += ["--vfukui"]
+        if opts.get("molden"):
+            cmd += ["--molden"]       # writes molden.input; the runner gzips it (gxtb_condense.compress_molden)
     cmd += ["--chrg", str(charge)]
     if n_unpaired:
         cmd += ["--uhf", str(n_unpaired)]
@@ -231,6 +234,8 @@ def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str
         shutil.copyfile(geometry, sub / "start.xyz")
         log = sub / "xtb.out"
         log.unlink(missing_ok=True)       # a rerun must not append to the previous attempt's output
+        for stale in (gc.MOLDEN_RAW, gc.MOLDEN_FILENAME):
+            (sub / stale).unlink(missing_ok=True)   # nor leave the previous attempt's orbitals behind
         s0 = time.time()
         cmd = step_command(step, resolved, opts, charge, multiplicity)
         if step == "optimization" and fixed:
@@ -252,6 +257,8 @@ def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str
                 terminated = False
                 break
             continue                      # an optional step that failed costs its descriptors, not the run
+        if step == "singlepoint":
+            gc.compress_molden(sub)
         if step == "optimization":
             optimized = sub / "xtbopt.xyz"
             if optimized.is_file():
