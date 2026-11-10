@@ -31,6 +31,10 @@ def cmd_submit(args) -> int:
     if problems:
         print("CONFIG ERROR:\n  " + "\n  ".join(problems), file=sys.stderr)
         return 2
+    if args.rerun_completed and cfg.dft_engine != "gxtb":
+        print("CONFIG ERROR: --rerun-completed is for dft.engine: gxtb only (an ORCA rerun is hours per "
+              "conformer and its runner appends to the previous output)", file=sys.stderr)
+        return 2
     lib = cfg.library_dir
     lib.mkdir(parents=True, exist_ok=True)
 
@@ -68,7 +72,9 @@ def cmd_submit(args) -> int:
         # the new replicates' conformers after the existing conf_N and leaves the completed ones alone.
         n_prepared = (meta.get("orca_stage") or {}).get("n_replicates")
         fewer_replicates = bool(meta.get("conformers")) and (n_prepared or 1) < cfg.replicates
-        if state in SKIP_STATES and not args.force and not waiting_on_bceg and not fewer_replicates:
+        # --rerun-completed takes the complete molecules again; one still in progress needs --force as always
+        rerun = args.rerun_completed and state == "complete"
+        if state in SKIP_STATES and not args.force and not waiting_on_bceg and not fewer_replicates and not rerun:
             skipped.append((mol, state, reason))
             continue
         # A molecule bceg makes no task for and has no ensemble of: the transformation does not apply to
@@ -81,6 +87,8 @@ def cmd_submit(args) -> int:
                 continue
         if waiting_on_bceg:
             reason = "prepare re-queued behind the new bceg job(s)"
+        elif rerun and not args.force:
+            reason = "--rerun-completed: its completed conformers run again"
         elif fewer_replicates and not args.force:
             reason = f"prepared with {n_prepared or 1} replicate(s), the library now has {cfg.replicates}"
         selected.append({"inchikey": mol.inchikey, "input_smiles": mol.input_smiles, "name": mol.name,
@@ -136,7 +144,8 @@ def cmd_submit(args) -> int:
         records.register_molecule(lib, m["inchikey"], {"smiles": m["input_smiles"], "smiles_line": m["smiles_line"],
                                                        "name": m["name"]})
     script, _ = slurm.write_prepare_array(frozen, jobdir, [{"inchikey": m["inchikey"], "input_smiles": m["input_smiles"]}
-                                                           for m in selected], force=args.force)
+                                                           for m in selected], force=args.force,
+                                       rerun_completed=args.rerun_completed)
     if args.no_sbatch:
         print(f"prepare array written, not submitted: sbatch {script}")
         return 0
@@ -264,7 +273,8 @@ def cmd_prepare_task(args) -> int:
     cfg = Config.load(args.config)
     task = slurm.read_task(Path(args.tasks), args.index)
     try:
-        status = prepare_molecule(cfg, task["inchikey"], task["input_smiles"], force=args.force)
+        status = prepare_molecule(cfg, task["inchikey"], task["input_smiles"], force=args.force,
+                                  rerun_completed=args.rerun_completed)
     except ParamsMismatch as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 2
@@ -297,6 +307,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("config")
     p.add_argument("--dry-run", action="store_true", help="report what would be submitted; writes nothing")
     p.add_argument("--force", action="store_true", help="also resubmit molecules recorded complete or in progress")
+    p.add_argument("--rerun-completed", action="store_true",
+                   help="(g-xTB) run completed conformers again, overwriting their outputs, e.g. to add the molden "
+                        "files of dft.gxtb.molden; conformers still in progress need --force as well")
     p.add_argument("--no-sbatch", action="store_true", help="write the job scripts but do not call sbatch")
     p.set_defaults(func=cmd_submit)
 
@@ -323,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tasks", required=True)
     p.add_argument("--index", type=int, required=True)
     p.add_argument("--force", action="store_true")
+    p.add_argument("--rerun-completed", action="store_true")
     p.set_defaults(func=cmd_prepare_task)
 
     p = sub.add_parser("orca-task", help="(cluster) run ORCA for one conformer and record the outcome")

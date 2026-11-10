@@ -17,6 +17,7 @@ atomic charges               yes, Mulliken-type ``q`` (plus shell populations)
 dipole                       yes, in atomic units and Debye
 Wiberg/Mayer bond orders     yes (``wbo`` file)
 Fukui indices                yes, with ``--vfukui``
+MO coefficients              yes, with ``--molden`` (``molden.input``: basis, every MO, alpha and beta)
 frequencies, IR intensities  yes, with ``--hess`` (Gaussian-98 format in ``g98.out``)
 thermochemistry              yes, with ``--hess``
 NBO / NPA, NMR shieldings    no
@@ -28,6 +29,7 @@ solvation                    no (ALPB/GBSA/COSMO are not parameterised for g-xTB
 
 from __future__ import annotations
 
+import gzip
 import re
 from pathlib import Path
 from typing import Optional
@@ -200,6 +202,69 @@ def orbitals(text: str) -> Optional[dict]:
 
 
 # --------------------------------------------------------------------------- per-atom tables
+
+
+_MOLDEN_KEY = re.compile(r"^\s*(Sym|Ene|Spin|Occup)\s*=\s*(.*?)\s*$")
+
+
+def molden_orbitals(path: Path | str) -> Optional[dict]:
+    """The complete orbital table of a ``--molden`` file (plain or gzipped), shaped like :func:`orbitals`.
+
+    The printed table in ``xtb.out`` drops the middle of a long orbital list; ``molden.input`` holds every
+    MO, so ``truncated`` is always False here and ``indices`` runs 1..n within each spin. Measured on the
+    g-xTB build: the energies agree with the printed ones to every printed digit. The coefficients are not
+    returned — they stay in the file, which the condensed file points to — only ``n_basis``, the number
+    of coefficients per MO.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return None
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", errors="replace") as fh:
+        lines = fh.read().splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip().upper() == "[MO]")
+    except StopIteration:
+        return None
+    tables: dict[str, dict] = {}
+    current: dict = {}
+    n_basis = 0
+    n_coef = 0
+
+    def flush():
+        nonlocal n_basis
+        if "Ene" in current:
+            spin = current.get("Spin", "alpha").lower()
+            t = tables.setdefault(spin, {"energies_eh": [], "occupations": [], "indices": []})
+            t["energies_eh"].append(float(current["Ene"]))
+            t["occupations"].append(float(current.get("Occup", 0.0)))
+            t["indices"].append(len(t["indices"]) + 1)
+            n_basis = max(n_basis, n_coef)
+
+    for line in lines[start + 1:]:
+        if line.lstrip().startswith("["):
+            break
+        key = _MOLDEN_KEY.match(line)
+        if key:
+            if key.group(1) == "Sym" or (key.group(1) == "Ene" and "Ene" in current):
+                flush()
+                current, n_coef = {}, 0
+            current[key.group(1)] = key.group(2)
+        elif line.strip():
+            n_coef += 1
+    flush()
+    if not tables:
+        return None
+    unrestricted = "beta" in tables
+    main = tables.get("alpha")
+    for t in tables.values():
+        t["truncated"] = False
+    out = {**main, "energy_unit": "Eh", "spin": "alpha" if unrestricted else "restricted",
+           "n_basis": n_basis, "source": "molden"}
+    if unrestricted:
+        out["beta"] = tables["beta"]
+    return out
+
 
 def atomic_charges(text: str) -> Optional[list[float]]:
     """Mulliken-type ``q`` per atom from the ``Atomic charges and shell populations`` table."""

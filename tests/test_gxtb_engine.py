@@ -2,7 +2,9 @@
 
 The fixtures under ``tests/reference/gxtb/`` are real output of the g-xTB build of xtb 6.7.1
 (``gxtb-2.0.1``) on methanol: a single point with ``--vfukui``, an ``--ohess`` run and a cation single
-point. They are what the parsers are pinned against, and what the fake binary replays.
+point. They are what the parsers are pinned against, and what the fake binary replays. The
+``molden.input`` files next to them (``--molden``) come from rerunning the same inputs with the same build;
+their orbital energies agree with the recorded ``xtb.out`` tables to every printed digit.
 """
 
 from __future__ import annotations
@@ -127,6 +129,35 @@ def test_homo_lumo_survive_the_round_trip_through_the_condensed_file(tmp_path: P
     assert row["SCF_energy"] == pytest.approx(-2253.330385978738)
 
 
+def test_the_molden_file_has_every_orbital():
+    """``--molden`` holds the whole table, so the middle the printed one drops is there too."""
+    printed = gp.orbitals((REF / "metal_singlepoint" / "xtb.out").read_text())
+    full = gp.molden_orbitals(REF / "metal_singlepoint" / gc.MOLDEN_FILENAME)    # read through gzip
+    assert full["truncated"] is False and full["source"] == "molden"
+    assert full["indices"] == list(range(1, 95)) and full["spin"] == "restricted"
+    assert full["n_basis"] == 95, "one more basis function than MOs: xtb drops one, and says so nowhere"
+    assert sum(full["occupations"]) == 100.0                      # valence electrons, closed shell
+    for i, e in zip(printed["indices"], printed["energies_eh"]):
+        assert full["energies_eh"][i - 1] == pytest.approx(e, abs=5e-7), f"MO {i}"
+
+
+def test_an_open_shell_molden_file_keeps_both_spins():
+    full = gp.molden_orbitals(REF / "oxidation" / gc.MOLDEN_RAW)
+    printed = gp.orbitals(_text("oxidation"))
+    assert full["spin"] == "alpha" and "beta" in full
+    assert sum(full["occupations"]) == 7 and sum(full["beta"]["occupations"]) == 6   # valence electrons of CH3OH+
+    assert full["beta"]["energies_eh"] == pytest.approx(printed["beta"]["energies_eh"], abs=5e-7)
+    assert gp.molden_orbitals(REF / "oxidation" / "missing") is None
+
+
+def test_compress_molden_replaces_the_plain_file(tmp_path: Path):
+    shutil.copyfile(REF / "singlepoint" / gc.MOLDEN_RAW, tmp_path / gc.MOLDEN_RAW)
+    out = gc.compress_molden(tmp_path)
+    assert out == tmp_path / gc.MOLDEN_FILENAME and not (tmp_path / gc.MOLDEN_RAW).exists()
+    assert gp.molden_orbitals(out) == gp.molden_orbitals(REF / "singlepoint" / gc.MOLDEN_RAW)
+    assert gc.compress_molden(tmp_path) is None                   # nothing left to compress
+
+
 def test_a_standard_xtb_that_ignored_the_flag_is_refused():
     """A plain xtb warns about --gxtb and runs GFN2; that must never pass as a g-xTB result."""
     with pytest.raises(gp.GxtbParseError, match="does not know --gxtb"):
@@ -190,6 +221,18 @@ def test_condensed_sections_hold_what_gxtb_can_and_cannot_produce(conf_dir: Path
     assert data["states"]["singlepoint"]["thermochemistry"]["gibbs_eh"] == pytest.approx(-115.6934262)
     assert data["states"]["singlepoint"]["mo"]["energies_eh"]           # HOMO/LUMO come from here
     assert len(data["gxtb"]["fukui"]) == N_ATOMS and data["gxtb"]["wiberg"]
+    # the fixture's single point has a molden file: the orbitals come from it, and the file is pointed to
+    assert data["states"]["singlepoint"]["mo"]["source"] == "molden"
+    assert data["gxtb"]["molden"] == {"path": "gxtb/singlepoint/molden.input", "gzip": False,
+                                      "step": "singlepoint", "n_basis": 12, "n_mo": 12, "spin": "restricted"}
+
+
+def test_without_a_molden_file_the_printed_table_is_used(conf_dir: Path):
+    (conf_dir / gc.RUN_DIRNAME / "singlepoint" / gc.MOLDEN_RAW).unlink()
+    data = gc.build_condensed(conf_dir)
+    assert data["gxtb"]["molden"] is None
+    mo = data["states"]["singlepoint"]["mo"]
+    assert "source" not in mo and mo["energies_eh"] == gp.orbitals(_text("singlepoint"))["energies_eh"]
 
 
 def test_condensing_needs_a_single_point(tmp_path: Path):
@@ -255,6 +298,11 @@ def test_step_commands():
     # a doublet oxidises back to a closed shell
     assert "--uhf" not in step_command("oxidation", "xtb", opts, 0, 2)
     assert uhf(None) == 0 and uhf(1) == 0 and uhf(3) == 2
+    # --molden belongs to the single point only: that is the geometry and state the orbitals describe
+    with_molden = {**opts, "molden": True}
+    assert "--molden" in step_command("singlepoint", "xtb", with_molden, 0, 1)
+    assert all("--molden" not in step_command(s, "xtb", with_molden, 0, 1)
+               for s in ("optimization", "frequency", "oxidation", "reduction"))
 
 
 # --------------------------------------------------------------------------- config
@@ -288,6 +336,8 @@ def test_the_executable_is_not_part_of_the_hash(tree):
     c = Config.load(_gxtb_cfg(tree, gxtb={"executable": "xtb", "fukui": False})).params()["sha256"]
     assert a == b, "where the binary lives is a property of the machine, not of the results"
     assert a != c, "a step that changes the results must change the hash"
+    d = Config.load(_gxtb_cfg(tree, gxtb={"executable": "xtb", "molden": False})).params()["sha256"]
+    assert a == d, "writing the orbitals out changes no number, so an existing library can be rerun with it"
 
 
 @pytest.mark.parametrize("gxtb, message", [
@@ -295,6 +345,7 @@ def test_the_executable_is_not_part_of_the_hash(tree):
     ({"opt_level": "nonsense"}, "opt_level must be one of"),
     ({"accuracy": -1}, "accuracy must be a positive number"),
     ({"opt_geom": "yes"}, "opt_geom must be true or false"),
+    ({"molden": "yes"}, "molden must be true or false"),
     ({"solvent": "water"}, "gas phase only"),
     ({"nonsense": 1}, "unknown key"),
 ])
@@ -341,6 +392,7 @@ cp "{ref}/singlepoint/charges" charges 2>/dev/null
 cp "{ref}/singlepoint/wbo" wbo 2>/dev/null
 if [ "$step" = frequency ]; then cp "{ref}/frequency/g98.out" g98.out; fi
 if [ "$step" = optimization ]; then cp "{ref}/frequency/xtbopt.xyz" xtbopt.xyz; fi
+case " $@ " in *" --molden "*) cp "{ref}/singlepoint/molden.input" molden.input ;; esac
 exit 0
 """
 
@@ -431,6 +483,14 @@ def test_run_records_the_same_keys_as_the_orca_engine(tree, fake_sbatch, fake_xt
     # each step ran in its own folder so their fixed output names cannot collide
     assert sorted(p.name for p in (conf / gc.RUN_DIRNAME).iterdir() if p.is_dir()) == [
         "oxidation", "reduction", "singlepoint"]
+    # molden is on by default: the single point's file is gzipped in place and the condensed file points to it
+    sp = conf / gc.RUN_DIRNAME / "singlepoint"
+    assert "--molden" in (sp / "args.txt").read_text()
+    assert (sp / gc.MOLDEN_FILENAME).is_file() and not (sp / gc.MOLDEN_RAW).exists()
+    assert not (conf / gc.RUN_DIRNAME / "oxidation" / gc.MOLDEN_FILENAME).exists()
+    data = load_condensed(conf / "orca_condensed.json")
+    assert data["gxtb"]["molden"]["path"] == "gxtb/singlepoint/molden.input.gz"
+    assert data["states"]["singlepoint"]["mo"]["source"] == "molden"
 
     assert status_table(cfg).set_index("inchikey").loc[key]["dft"] == "done"
     assert cost_table(cfg).set_index("inchikey").loc[key]["dft_cpu_h"] >= 0
@@ -540,6 +600,7 @@ def test_the_real_binary_produces_usable_descriptors(tree, fake_sbatch):
     assert len(data["charges"]["nbo"]) == N_ATOMS
     assert data["states"]["oxidation"]["scf_energy_eh"] > data["states"]["singlepoint"]["scf_energy_eh"]
     assert data["states"]["reduction"] is not None
+    assert data["gxtb"]["molden"]["gzip"] is True and data["states"]["singlepoint"]["mo"]["truncated"] is False
 
     row = extract_charges(pd.DataFrame([{"path": str(conf), "C": 1, "O": 2}]),
                           {"atoms": ["C", "O"], "basename": "singlepoint"}, repo_root=conf.parent).iloc[0]
@@ -693,3 +754,113 @@ def test_gxtb_task_reads_old_and_new_task_lines(tree, fake_sbatch, monkeypatch):
     for i in (0, 1):
         assert cli.main(["gxtb-task", str(cfg.path), "--tasks", str(jsonl), "--index", str(i)]) == 0
     assert seen == [["conf_1"], ["conf_1", "conf_2"]]
+
+
+# --------------------------------------------------------------------------- --rerun-completed
+
+def _completed(tree, fake_sbatch, fake_xtb):
+    cfg, key = _prepared(tree, fake_sbatch)
+    confs = sorted(p.name for p in (tree["lib"] / key).glob("conf_*"))
+    for conf in confs:
+        shutil.copyfile(REF / "input.xyz", tree["lib"] / key / conf / "input.xyz")
+        assert run_gxtb_conformer(cfg, key, conf, gxtb_cmd=fake_xtb) == "completed"
+    return cfg, key, confs
+
+
+def test_rerun_completed_prepares_completed_conformers_again(tree, fake_sbatch, fake_xtb):
+    """Without the flag a completed conformer is never touched, --force or not; with it, it runs again."""
+    from desc_utils.submit import records
+    cfg, key, confs = _completed(tree, fake_sbatch, fake_xtb)
+    prepare_molecule(cfg, key, "CCO", force=True, submit_jobs=False)
+    meta = records.load_metadata(tree["lib"], key)["conformers"]
+    assert {meta[c]["status"] for c in confs} == {"completed"}, "--force alone leaves completed conformers"
+
+    prepare_molecule(cfg, key, "CCO", rerun_completed=True, submit_jobs=False)
+    meta = records.load_metadata(tree["lib"], key)["conformers"]
+    assert {meta[c]["status"] for c in confs} == {"prepared"}
+    assert {meta[c]["resubmitted_from"] for c in confs} == {"completed"}
+
+
+def _broken(tmp_path: Path) -> str:
+    exe = tmp_path / "broken_xtb"
+    exe.write_text("#!/bin/sh\necho 'SCF did not converge'\nexit 1\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    return str(exe)
+
+
+def test_a_successful_rerun_replaces_the_previous_outputs(tree, fake_sbatch, fake_xtb):
+    """Nothing of the previous run is condensed into the new one, and nothing of it is left behind."""
+    from desc_utils.submit.gxtb import PREVIOUS_DIRNAME
+    cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    conf = tree["lib"] / key / "conf_1"
+    stale = conf / gc.RUN_DIRNAME / "oxidation" / "stale_from_last_run"
+    stale.write_text("x")
+    assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=fake_xtb) == "completed"
+    assert not stale.exists() and not (conf / PREVIOUS_DIRNAME).exists()
+    assert (conf / gc.RUN_DIRNAME / "singlepoint" / gc.MOLDEN_FILENAME).is_file()
+
+
+def test_a_failed_rerun_keeps_the_previous_outputs(tree, fake_sbatch, fake_xtb, tmp_path):
+    """Until a rerun has a condensed file of its own, the last good one and the files it came from stay."""
+    from desc_utils.submit import records
+    from desc_utils.submit.gxtb import PREVIOUS_DIRNAME
+    cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    conf = tree["lib"] / key / "conf_1"
+    before = {p.relative_to(conf): p.read_bytes() for p in conf.rglob("*") if p.is_file()}
+
+    assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=_broken(tmp_path)) == "failed"
+    after = {p.relative_to(conf): p.read_bytes() for p in conf.rglob("*") if p.is_file()}
+    assert after == before, "condensed file, gxtb/ and optimization.xyz exactly as the last good run left them"
+    rec = records.load_metadata(tree["lib"], key)["conformers"]["conf_1"]
+    assert rec["status"] == "failed" and rec["previous_outputs_kept"] is True
+    assert not (conf / PREVIOUS_DIRNAME).exists()
+
+
+def test_a_killed_rerun_is_recovered_by_the_next_one(tree, fake_sbatch, fake_xtb, tmp_path):
+    """A job killed outright (node failure, SIGKILL) leaves gxtb.previous/ next to a half-written gxtb/:
+    the next run must treat gxtb.previous/ as the last good run, not set the half-written one aside."""
+    from desc_utils.submit.gxtb import PREVIOUS_DIRNAME, set_aside_previous
+    cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    conf = tree["lib"] / key / "conf_1"
+    good = (conf / gc.RUN_DIRNAME / "singlepoint" / "xtb.out").read_bytes()
+    assert set_aside_previous(conf)
+    (conf / gc.RUN_DIRNAME / "singlepoint").mkdir(parents=True)
+    (conf / gc.RUN_DIRNAME / "singlepoint" / "xtb.out").write_text("half written")   # then the node died
+
+    assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=_broken(tmp_path)) == "failed"
+    assert (conf / gc.RUN_DIRNAME / "singlepoint" / "xtb.out").read_bytes() == good
+    assert not (conf / PREVIOUS_DIRNAME).exists() and (conf / "orca_condensed.json").is_file()
+
+
+def test_a_crash_in_the_runner_restores_the_previous_outputs(tree, fake_sbatch, fake_xtb, tmp_path):
+    from desc_utils.submit.gxtb import PREVIOUS_DIRNAME
+    cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    conf = tree["lib"] / key / "conf_1"
+    good = (conf / "orca_condensed.json").read_bytes()
+    plain = tmp_path / "plain_xtb"
+    plain.write_text("#!/bin/sh\necho \"unknown option '--gxtb' ignored\"\nexit 0\n")
+    plain.chmod(plain.stat().st_mode | stat.S_IEXEC)
+    with pytest.raises(gp.GxtbParseError):
+        run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=str(plain))
+    assert (conf / "orca_condensed.json").read_bytes() == good
+    assert (conf / gc.RUN_DIRNAME / "singlepoint" / "xtb.out").is_file() and not (conf / PREVIOUS_DIRNAME).exists()
+
+
+def test_submit_rerun_completed_selects_complete_molecules(tree, fake_sbatch, fake_xtb, capsys):
+    from desc_utils.submit.cli import main
+    _, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    main(["submit", str(tree["cfg"])])
+    assert f"skip  {key}  complete" in capsys.readouterr().out
+
+    n = len(fake_sbatch)
+    assert main(["submit", str(tree["cfg"]), "--rerun-completed"]) == 0
+    assert key in capsys.readouterr().out
+    script = fake_sbatch[n]["script"]
+    assert script.name == "prepare.sbatch" and "--rerun-completed" in script.read_text()
+    assert key in (script.parent / "prepare.jsonl").read_text()
+
+
+def test_rerun_completed_is_refused_for_orca(tree, capsys):
+    from desc_utils.submit.cli import main
+    assert main(["submit", str(tree["cfg"]), "--rerun-completed"]) == 2
+    assert "dft.engine: gxtb only" in capsys.readouterr().err

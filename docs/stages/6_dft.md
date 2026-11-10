@@ -159,6 +159,16 @@ the same library line up column-for-column wherever both engines have data.
 Extras ORCA does not give, stored under the condensed file's `gxtb` section: Wiberg/Mayer bond orders,
 condensed Fukui indices and shell populations.
 
+**The orbitals.** With `dft.gxtb.molden` (on by default) the single point also writes a molden file
+(`--molden`): the basis and every MO with its coefficients, alpha and beta for an open shell. The runner
+gzips it to `conf_N/gxtb/singlepoint/molden.input.gz`, and `gxtb.molden.path` in the condensed file
+points to it (relative to the conformer folder). The coefficients stay in that file; the condensed file
+takes only the orbital energies and occupations. With the molden file those are complete
+(`states.singlepoint.mo.source: molden`, `truncated: false`); without it they come from the table in
+`xtb.out`, which drops the middle of any list longer than about 40 orbitals. HOMO and LUMO are the same
+either way. Size: 0.3 MB uncompressed for a 35-atom Ni complex (0.12 MB gzipped), and it grows with the
+square of the basis size. Occupations count valence electrons only, as g-xTB does.
+
 **The charges.** g-xTB computes one set of atomic charges and has no NPA, Hirshfeld or CM5 analysis.
 Those charges are written to the `nbo` and `cm5` slots of the condensed file (and to `mulliken` inside
 `states.*`), because those are the slots the descriptor families read. The columns are therefore still
@@ -175,6 +185,7 @@ column in a g-xTB library holds a Mulliken-type charge, not an NPA one**. `charg
 | `dft.gxtb.freq_calc` | `false` | `--hess`: frequencies, IR intensities and thermochemistry (see the caveat) |
 | `dft.gxtb.vertical_redox` | `true` | N±1 single points, filling `states.oxidation` / `states.reduction` |
 | `dft.gxtb.fukui` | `true` | `--vfukui`: condensed Fukui indices into the `gxtb` section |
+| `dft.gxtb.molden` | `true` | `--molden` on the single point: every MO with its coefficients, gzipped next to `xtb.out` ([the orbitals](#what-you-get-and-what-you-lose)). **Not hashed**: it changes no number, so an existing library can be rerun with it |
 | `dft.gxtb.accuracy` | `null` | `--acc`; `null` is xtb's own default (1.0), lower is tighter |
 | `dft.gxtb.etemp` | `null` | `--etemp` in K; `null` is xtb's own default (300) |
 | `dft.gxtb.executable` | `xtb` | the g-xTB build of xtb: a name on PATH or an absolute path. **Not hashed** — where the binary lives is a property of the machine, not of the results |
@@ -195,6 +206,7 @@ dft:
     opt_geom: false
     vertical_redox: true
     fukui: true
+    molden: true
 slurm:
   gxtb: {time: "04:00:00", mem_per_cpu: 2G, ntasks: 8, nodes: 1}
 condense: true
@@ -253,6 +265,37 @@ Two separate failure modes, both worth knowing before you turn the flag on:
 A failed frequency step therefore **does not fail the conformer**. It is recorded in the conformer's
 `gxtb_failed_steps`, the vibration descriptors come out empty, and the charges, orbitals, dipole and
 redox states that did come out are condensed and used as normal.
+
+### Running completed conformers again
+
+`orcadesc submit` never resubmits a `completed` conformer, `--force` or not. To run the completed
+conformers of a g-xTB library again, for example to add the molden files of `dft.gxtb.molden` to a
+library computed before it existed:
+
+```bash
+orcadesc submit <LIB>.yaml --rerun-completed --dry-run   # which molecules it takes
+orcadesc submit <LIB>.yaml --rerun-completed
+```
+
+It takes the molecules recorded `complete` along with the ones a plain submit takes, and prepares every
+completed conformer again (its record gets `resubmitted_from: completed`). Conformers still submitted
+or running are left alone unless `--force` is given too. bceg is not run again, and since
+`dft.gxtb.molden` is not hashed, turning it on does not change the library's `params.json`.
+
+**The previous outputs stay until they are replaced.** When a conformer's job starts, its `gxtb/` folder
+is moved to `gxtb.previous/` (with a copy of `optimization.xyz`), so the new run starts empty and none of
+the previous run's files can be condensed into it. `orca_condensed.json` is not touched. If the new run
+completes and condenses, it overwrites the condensed file and `gxtb.previous/` is deleted. If it fails,
+or the runner itself raises, `gxtb.previous/` is moved back: the conformer is recorded `failed` with
+`previous_outputs_kept: true`, and its condensed file, `gxtb/` and `optimization.xyz` are exactly as the
+last good run left them. A job killed outright (node failure) leaves `gxtb.previous/` beside a
+half-written `gxtb/`; the next run of that conformer takes `gxtb.previous/` as the last good run. An
+interrupted rerun therefore loses no data, and a plain `orcadesc submit` resubmits what it did not
+finish. Values can still move slightly between runs, because the multi-threaded xtb SCF is not
+bit-for-bit reproducible: re-extract the descriptor table once the rerun is done rather than mixing old
+and new rows, and try one molecule first. Every array element counts against the cluster's
+limit on submitted jobs (10 000 per user on QOS `normal`), so set `batch_size` before rerunning a large
+library: one element then runs several conformers. ORCA libraries refuse the flag.
 
 ### Layout, records and status
 
