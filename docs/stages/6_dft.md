@@ -282,11 +282,18 @@ completed conformer again (its record gets `resubmitted_from: completed`). Confo
 or running are left alone unless `--force` is given too. bceg is not run again, and since
 `dft.gxtb.molden` is not hashed, turning it on does not change the library's `params.json`.
 
-**The rerun overwrites.** Each conformer's `gxtb/` folder and `orca_condensed.json` are deleted when its
-job starts, so the previous run's files can never be condensed into the new one. A conformer whose rerun
-fails ends `failed` with no condensed file, even though it had one before. Values can also move
-slightly, because the multi-threaded xtb SCF is not bit-for-bit reproducible: re-extract the descriptor
-table afterwards rather than mixing old and new rows. Every array element counts against the cluster's
+**The previous outputs stay until they are replaced.** When a conformer's job starts, its `gxtb/` folder
+is moved to `gxtb.previous/` (with a copy of `optimization.xyz`), so the new run starts empty and none of
+the previous run's files can be condensed into it. `orca_condensed.json` is not touched. If the new run
+completes and condenses, it overwrites the condensed file and `gxtb.previous/` is deleted. If it fails,
+or the runner itself raises, `gxtb.previous/` is moved back: the conformer is recorded `failed` with
+`previous_outputs_kept: true`, and its condensed file, `gxtb/` and `optimization.xyz` are exactly as the
+last good run left them. A job killed outright (node failure) leaves `gxtb.previous/` beside a
+half-written `gxtb/`; the next run of that conformer takes `gxtb.previous/` as the last good run. An
+interrupted rerun therefore loses no data, and a plain `orcadesc submit` resubmits what it did not
+finish. Values can still move slightly between runs, because the multi-threaded xtb SCF is not
+bit-for-bit reproducible: re-extract the descriptor table once the rerun is done rather than mixing old
+and new rows, and try one molecule first. Every array element counts against the cluster's
 limit on submitted jobs (10 000 per user on QOS `normal`), so set `batch_size` before rerunning a large
 library: one element then runs several conformers. ORCA libraries refuse the flag.
 

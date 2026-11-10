@@ -781,21 +781,69 @@ def test_rerun_completed_prepares_completed_conformers_again(tree, fake_sbatch, 
     assert {meta[c]["resubmitted_from"] for c in confs} == {"completed"}
 
 
-def test_a_rerun_starts_from_an_empty_run_folder(tree, fake_sbatch, fake_xtb, tmp_path):
-    """Files of the previous run must not be condensed into the new one, nor survive a failed rerun."""
+def _broken(tmp_path: Path) -> str:
+    exe = tmp_path / "broken_xtb"
+    exe.write_text("#!/bin/sh\necho 'SCF did not converge'\nexit 1\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    return str(exe)
+
+
+def test_a_successful_rerun_replaces_the_previous_outputs(tree, fake_sbatch, fake_xtb):
+    """Nothing of the previous run is condensed into the new one, and nothing of it is left behind."""
+    from desc_utils.submit.gxtb import PREVIOUS_DIRNAME
     cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
     conf = tree["lib"] / key / "conf_1"
     stale = conf / gc.RUN_DIRNAME / "oxidation" / "stale_from_last_run"
     stale.write_text("x")
     assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=fake_xtb) == "completed"
-    assert not stale.exists()
+    assert not stale.exists() and not (conf / PREVIOUS_DIRNAME).exists()
     assert (conf / gc.RUN_DIRNAME / "singlepoint" / gc.MOLDEN_FILENAME).is_file()
 
-    broken = tmp_path / "broken_xtb"
-    broken.write_text("#!/bin/sh\necho 'SCF did not converge'\nexit 1\n")
-    broken.chmod(broken.stat().st_mode | stat.S_IEXEC)
-    assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=str(broken)) == "failed"
-    assert not (conf / "orca_condensed.json").exists(), "a failed rerun must not keep the old condensed file"
+
+def test_a_failed_rerun_keeps_the_previous_outputs(tree, fake_sbatch, fake_xtb, tmp_path):
+    """Until a rerun has a condensed file of its own, the last good one and the files it came from stay."""
+    from desc_utils.submit import records
+    from desc_utils.submit.gxtb import PREVIOUS_DIRNAME
+    cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    conf = tree["lib"] / key / "conf_1"
+    before = {p.relative_to(conf): p.read_bytes() for p in conf.rglob("*") if p.is_file()}
+
+    assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=_broken(tmp_path)) == "failed"
+    after = {p.relative_to(conf): p.read_bytes() for p in conf.rglob("*") if p.is_file()}
+    assert after == before, "condensed file, gxtb/ and optimization.xyz exactly as the last good run left them"
+    rec = records.load_metadata(tree["lib"], key)["conformers"]["conf_1"]
+    assert rec["status"] == "failed" and rec["previous_outputs_kept"] is True
+    assert not (conf / PREVIOUS_DIRNAME).exists()
+
+
+def test_a_killed_rerun_is_recovered_by_the_next_one(tree, fake_sbatch, fake_xtb, tmp_path):
+    """A job killed outright (node failure, SIGKILL) leaves gxtb.previous/ next to a half-written gxtb/:
+    the next run must treat gxtb.previous/ as the last good run, not set the half-written one aside."""
+    from desc_utils.submit.gxtb import PREVIOUS_DIRNAME, set_aside_previous
+    cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    conf = tree["lib"] / key / "conf_1"
+    good = (conf / gc.RUN_DIRNAME / "singlepoint" / "xtb.out").read_bytes()
+    assert set_aside_previous(conf)
+    (conf / gc.RUN_DIRNAME / "singlepoint").mkdir(parents=True)
+    (conf / gc.RUN_DIRNAME / "singlepoint" / "xtb.out").write_text("half written")   # then the node died
+
+    assert run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=_broken(tmp_path)) == "failed"
+    assert (conf / gc.RUN_DIRNAME / "singlepoint" / "xtb.out").read_bytes() == good
+    assert not (conf / PREVIOUS_DIRNAME).exists() and (conf / "orca_condensed.json").is_file()
+
+
+def test_a_crash_in_the_runner_restores_the_previous_outputs(tree, fake_sbatch, fake_xtb, tmp_path):
+    from desc_utils.submit.gxtb import PREVIOUS_DIRNAME
+    cfg, key, _ = _completed(tree, fake_sbatch, fake_xtb)
+    conf = tree["lib"] / key / "conf_1"
+    good = (conf / "orca_condensed.json").read_bytes()
+    plain = tmp_path / "plain_xtb"
+    plain.write_text("#!/bin/sh\necho \"unknown option '--gxtb' ignored\"\nexit 0\n")
+    plain.chmod(plain.stat().st_mode | stat.S_IEXEC)
+    with pytest.raises(gp.GxtbParseError):
+        run_gxtb_conformer(cfg, key, "conf_1", gxtb_cmd=str(plain))
+    assert (conf / "orca_condensed.json").read_bytes() == good
+    assert (conf / gc.RUN_DIRNAME / "singlepoint" / "xtb.out").is_file() and not (conf / PREVIOUS_DIRNAME).exists()
 
 
 def test_submit_rerun_completed_selects_complete_molecules(tree, fake_sbatch, fake_xtb, capsys):

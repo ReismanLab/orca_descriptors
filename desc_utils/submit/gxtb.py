@@ -104,6 +104,50 @@ def steps_to_run(opts: dict) -> list[str]:
     return [s for s in STEPS if s in wanted]
 
 
+#: where a rerun keeps the previous run's ``gxtb/`` (and a copy of its ``optimization.xyz``) until it is replaced
+PREVIOUS_DIRNAME = "gxtb.previous"
+
+
+def set_aside_previous(conf_dir: Path) -> bool:
+    """Move the previous run's ``gxtb/`` to ``gxtb.previous/``, with a copy of ``optimization.xyz``.
+
+    ``orca_condensed.json`` is left where it is: the new run only overwrites it once it has condensed. An
+    existing ``gxtb.previous/`` means a run was killed before it could tidy up; it then still holds the last
+    run that finished, and the half-written ``gxtb/`` is what gets thrown away. Returns whether there is a
+    previous run set aside.
+    """
+    from desc_utils import gxtb_condense as gc
+    run_dir, prev = conf_dir / gc.RUN_DIRNAME, conf_dir / PREVIOUS_DIRNAME
+    if prev.is_dir():
+        shutil.rmtree(run_dir, ignore_errors=True)
+        return True
+    if not run_dir.is_dir():
+        return False
+    run_dir.rename(prev)
+    geometry = conf_dir / "optimization.xyz"
+    if geometry.is_file():
+        shutil.copyfile(geometry, prev / "optimization.xyz")
+    return True
+
+
+def restore_previous(conf_dir: Path) -> bool:
+    """Put the set-aside run back (``gxtb/`` and ``optimization.xyz``); False when there was none."""
+    from desc_utils import gxtb_condense as gc
+    run_dir, prev = conf_dir / gc.RUN_DIRNAME, conf_dir / PREVIOUS_DIRNAME
+    if not prev.is_dir():
+        return False
+    shutil.rmtree(run_dir, ignore_errors=True)
+    prev.rename(run_dir)
+    geometry = run_dir / "optimization.xyz"
+    if geometry.is_file():
+        geometry.replace(conf_dir / "optimization.xyz")
+    return True
+
+
+def discard_previous(conf_dir: Path) -> None:
+    shutil.rmtree(conf_dir / PREVIOUS_DIRNAME, ignore_errors=True)
+
+
 #: what :func:`run_gxtb_conformer` returns for a conformer it never started because the job was
 #: already being stopped; :func:`run_gxtb_chunk` then records it as ``timeout`` (or ``failed``)
 NOT_STARTED = "not_started"
@@ -213,13 +257,25 @@ def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str
         "status": "running", "started_at": records.now(), "gxtb_cmd": resolved, **job_env}}})
 
     run_dir = conf_dir / gc.RUN_DIRNAME
-    # A rerun (a failed conformer, or a completed one with --rerun-completed) starts from nothing. xtb writes
-    # charges, wbo, g98.out and molden.input under fixed names, so a step that fails or is skipped this time
-    # would otherwise leave the previous run's files to be condensed; and if the single point fails there is
-    # no new condensed file to replace the old one.
-    shutil.rmtree(run_dir, ignore_errors=True)
-    (conf_dir / gc.CONDENSED_FILENAME).unlink(missing_ok=True)
+    # A rerun starts from an empty gxtb/ (xtb writes charges, wbo, g98.out and molden.input under fixed
+    # names: a step that fails or is skipped this time must not leave the previous run's files to be
+    # condensed), but the previous run is only set aside, not deleted, until this one has replaced it.
+    set_aside_previous(conf_dir)
     run_dir.mkdir(parents=True)
+    try:
+        status = _run_steps(cfg, lib, inchikey, conformer, conf_dir, run_dir, start, resolved, opts, charge,
+                            multiplicity, fixed, cpus, job_env, watch)
+    except BaseException:
+        restore_previous(conf_dir)        # a crash in the runner itself: the last good outputs come back
+        raise
+    return status
+
+
+def _run_steps(cfg, lib, inchikey, conformer, conf_dir, run_dir, start, resolved, opts, charge, multiplicity,
+               fixed, cpus, job_env, watch) -> str:
+    """The steps of one conformer, its record and its condensed file; see :func:`run_gxtb_conformer`."""
+    from desc_utils import gxtb_condense as gc
+    from desc_utils import gxtb_parse as gp
     geometry = start                      # the geometry each step runs on; the optimisation replaces it
     t0 = time.time()
     step_times: dict[str, dict] = {}
@@ -294,6 +350,13 @@ def run_gxtb_conformer(cfg: Config, inchikey: str, conformer: str, gxtb_cmd: str
 
     if cfg.condense and REQUIRED_STEP not in failed:
         outcome["condensed"] = gc.condense_folder(conf_dir, overwrite=True)
+    # this run replaced the previous one only if it produced what the previous one had: a single point and,
+    # with condense on, a condensed file. Otherwise the previous outputs go back where they were.
+    replaced = status == "completed" and (not cfg.condense or outcome["condensed"]["ok"])
+    if replaced:
+        discard_previous(conf_dir)
+    elif restore_previous(conf_dir):
+        outcome["previous_outputs_kept"] = True
     records.update_metadata(lib, inchikey, {"conformers": {conformer: outcome}})
     print(f"{inchikey}/{conformer}: {outcome['status']} "
           f"({len(step_times)} steps, {wall:.1f}s" + (f", failed: {', '.join(failed)}" if failed else "") + ")")
