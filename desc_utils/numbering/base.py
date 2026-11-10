@@ -16,6 +16,7 @@ STATUS_INCOMPLETE = "incomplete"          # backend returned a partial label set
 STATUS_FAILED = "failed"                  # backend raised (no match, missing file, ...)
 STATUS_ELEMENT_MISMATCH = "element_mismatch"
 STATUS_INCONSISTENT = "inconsistent"      # conformers of one molecule disagree
+STATUS_TOPOLOGY = "topology_changed"      # numbering.topology: the geometry is another species than the graph
 
 
 class NoMatch(Exception):

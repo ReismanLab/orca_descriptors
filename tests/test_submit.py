@@ -44,8 +44,9 @@ LEVEL_OF_THEORY = {
 
 
 def _ensemble(results_dir: Path, smiles: str, rel_kcal=(0.0, 2.0, 10.0), replicates: int = 1,
-              shift_kcal: float = 1.0) -> None:
-    """Write a finished bceg method folder; replicate i has the energies ``rel_kcal + (i - 1) * shift_kcal``."""
+              shift_kcal: float = 1.0, geometries=None) -> None:
+    """Write a finished bceg method folder; replicate i has the energies ``rel_kcal + (i - 1) * shift_kcal``.
+    ``geometries``: one coordinate array per conformer (default: fake, evenly spaced atoms)."""
     mol = InputMolecule.from_smiles(smiles)
     structure = Structure(mol.canonical_smiles)
     md = method_dir(results_dir, "none", mol.inchikey, "etkdg")
@@ -56,7 +57,8 @@ def _ensemble(results_dir: Path, smiles: str, rel_kcal=(0.0, 2.0, 10.0), replica
     md.params().write_text(json.dumps(sp))
     md.params(LOT).write_text(json.dumps(make_params({"refiner": "uma", "lot": LOT, "search_params_sha256": sp["sha256"]})))
     for rep in range(1, replicates + 1):
-        confs = [Conformer(coords=[[i * 0.1 + k + 10 * rep, 0.0, 0.0] for i in range(n)],
+        confs = [Conformer(coords=[[i * 0.1 + k + 10 * rep, 0.0, 0.0] for i in range(n)] if geometries is None
+                           else geometries[k],
                            energy=-100.0 + (r + (rep - 1) * shift_kcal) / HARTREE_TO_KCAL)
                  for k, r in enumerate(rel_kcal)]
         write_xyz(md.raw(rep), structure.elements, confs)
@@ -349,10 +351,48 @@ def test_structure_mol_keeps_dative_bonds_and_start_geometry(tmp_path):
     assert saved.GetConformer().GetAtomPosition(1).x == pytest.approx(3.0)
 
 
+def test_topology_check_skips_rearranged_conformers_before_the_window(tree, fake_sbatch):
+    """pruning.topology: the lowest conformer has lost its O (C-O 3 A): skipped_topology, and Emin comes from
+    the intact ones, so the window keeps conf_2 (0) and conf_3 (+3) and drops conf_4 (+6)."""
+    from bceg.chem import embed
+    structure = Structure(InputMolecule.from_smiles("CCO").canonical_smiles)
+    good = embed(structure.mol, 1)
+    o = structure.elements.index("O")
+    c = next(n.GetIdx() for n in structure.mol.GetAtomWithIdx(o).GetNeighbors() if n.GetSymbol() == "C")
+    broken = good.copy()
+    broken[o] = good[c] + 3.0 * (good[o] - good[c]) / np.linalg.norm(good[o] - good[c])
+    _ensemble(tree["results"], "CCO", rel_kcal=(-20.0, 0.0, 3.0, 6.0), geometries=[broken, good, good, good])
+    _rewrite(tree, pruning={"energy_window_kcal_mol": 5.0, "topology": {"allow": ["agostic"]}})
+    cfg = _frozen(tree, fake_sbatch)
+    assert cfg.topology["allow"] == ["agostic"] and cfg.topology["max_metal_ligand_distance"] == 2.5
+    key = tree["keys"]["CCO"]
+    assert prepare_molecule(cfg, key, "CCO") == "prepared"
+    meta = records.load_metadata(tree["lib"], key)
+    confs = meta["conformers"]
+    assert {k: v["status"] for k, v in confs.items()} == {
+        "conf_1": "skipped_topology", "conf_2": "submitted", "conf_3": "submitted", "conf_4": "skipped_energy_filter"}
+    assert any("bond broken" in m for m in confs["conf_1"]["topology_changes"])
+    assert "topology_changes" not in confs["conf_2"]
+    assert confs["conf_4"]["energy_above_min_kcal_mol"] == pytest.approx(6.0)
+    assert meta["orca_stage"]["n_skipped_topology"] == 1 and meta["orca_stage"]["n_to_run"] == 2
+    assert meta["dft"]["pruning"]["topology"]["allow"] == ["agostic"]
+    assert not (tree["lib"] / key / "conf_1").exists()
+
+
+def test_topology_off_leaves_the_pruning_hash_alone(tree):
+    for pruning in ({"energy_window_kcal_mol": 5.0}, {"energy_window_kcal_mol": 5.0, "topology": None}):
+        _rewrite(tree, pruning=pruning)
+        cfg = Config.load(tree["cfg"])
+        assert cfg.topology is None and cfg.compared()["pruning"] == {"energy_window_kcal_mol": 5.0}
+    _rewrite(tree, pruning={"topology": {"allow": ["bogus"]}})
+    with pytest.raises(ValueError, match="pruning.topology.allow"):
+        Config.load(tree["cfg"])
+
+
 def test_no_pruning_keeps_every_conformer(tree, fake_sbatch):
     confs = [Conformer([[0.0, 0.0, 0.0]], e) for e in (-1.0, -1.0 + 10 / HARTREE_TO_KCAL, None)]
-    assert [s for _, _, _, s in energy_window(confs, None)] == ["prepared", "prepared", "prepared"]
-    assert [s for _, _, _, s in energy_window(confs, 5.0)] == ["prepared", "skipped_energy_filter", "skipped_no_energy"]
+    assert [p[3] for p in energy_window(confs, None)] == ["prepared", "prepared", "prepared"]
+    assert [p[3] for p in energy_window(confs, 5.0)] == ["prepared", "skipped_energy_filter", "skipped_no_energy"]
     _rewrite(tree, pruning=DELETE)
     cfg = _frozen(tree, fake_sbatch)
     key = tree["keys"]["CCO"]

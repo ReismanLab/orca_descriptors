@@ -40,6 +40,7 @@ from typing import Any
 
 import yaml
 
+from bceg import topology
 from bceg.config import SLURM_KEYS as BCEG_SLURM_KEYS
 from bceg.config import Config as BcegConfig
 from bceg.config import _script_path
@@ -65,7 +66,7 @@ EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
                   "allow_decoordination": "start_allow_decoordination"}
 SEARCH_KEYS = {"name", "searcher", "params", "constraints", "slurm", "replicates"}
 POST_OPT_KEYS = {"refiner", "params", "slurm", "constrained", "continue_from"}
-PRUNING_KEYS = {"energy_window_kcal_mol"}
+PRUNING_KEYS = {"energy_window_kcal_mol", "topology"}
 DFT_KEYS = {"calc_param_template", "level_of_theory", "constrained", "engine", "gxtb"}
 #: stage-6 engines: the ORCA compound job, or one g-xTB run per conformer (desc_utils.submit.gxtb)
 DFT_ENGINES = ("orca", "gxtb")
@@ -275,6 +276,12 @@ def _pruning(block, where: str) -> dict:
         if isinstance(ewin, bool) or not isinstance(ewin, (int, float)) or ewin <= 0:
             raise ValueError(f"{where}.energy_window_kcal_mol must be a positive number or null, got {ewin!r}")
         block["energy_window_kcal_mol"] = float(ewin)
+    # topology: off unless given. Left out of the block when off, so a library pruned before the key existed
+    # keeps its params.json hash
+    if block.get("topology") in (None, False):
+        block.pop("topology", None)
+    else:
+        block["topology"] = topology.check_params(block["topology"], f"{where}.topology")
     return block
 
 
@@ -544,6 +551,11 @@ class Config:
     @property
     def ewin(self) -> float | None:
         return self.pruning["energy_window_kcal_mol"]
+
+    @property
+    def topology(self) -> dict | None:
+        """The stage-5 connectivity check (bceg.topology), or None when it is off."""
+        return self.pruning.get("topology")
 
     @property
     def dft(self) -> dict:

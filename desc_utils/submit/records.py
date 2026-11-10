@@ -14,8 +14,8 @@ ORCA stage of a molecule (``metadata["orca_stage"]["status"]``):
   ``ensemble_changed``  the ensemble's params.json hash differs from the one this library was built on
   ``failed``            the prepare task did not run to its end (``reason: cancelled`` after ``cancel``)
 Conformer (``metadata["conformers"][conf]["status"]``):
-  ``skipped_energy_filter``, ``skipped_no_energy``, ``prepared``, ``submitted``, ``running``,
-  ``completed``, ``failed``, ``timeout``
+  ``skipped_topology`` (pruning.topology: another species than the graph), ``skipped_energy_filter``,
+  ``skipped_no_energy``, ``prepared``, ``submitted``, ``running``, ``completed``, ``failed``, ``timeout``
 ``cancel`` writes ``failed`` with ``reason: cancelled`` (and ``cancelled_at``): a cancelled step is a failed
 step, and ``submit`` relaunches both alike.
 """
@@ -33,7 +33,9 @@ from pathlib import Path
 METADATA = "metadata.json"
 REGISTRY = "molecule_registry.json"
 
-OK_CONFORMER = {"completed", "skipped_energy_filter", "skipped_no_energy"}
+#: conformers stage 5 (pruning) left out of the DFT on purpose
+SKIPPED_CONFORMER = {"skipped_topology", "skipped_energy_filter", "skipped_no_energy"}
+OK_CONFORMER = {"completed"} | SKIPPED_CONFORMER
 PENDING_CONFORMER = {"submitted", "running"}
 BAD_CONFORMER = {"failed", "timeout", "prepared"}
 STAGE_WAITING = {"queued"}
@@ -110,7 +112,7 @@ def molecule_state(meta: dict) -> tuple[str, str]:
     ``absent``       nothing recorded for this molecule
     ``in_progress``  prepare task queued, or ORCA jobs submitted or running
     ``incomplete``   ensemble unavailable, or a conformer failed, timed out or was never submitted
-    ``complete``     every conformer completed or skipped by the energy filter
+    ``complete``     every conformer completed or skipped by the pruning
 
     Inferred from what was written down, not from squeue: a job killed before it recorded its end
     leaves its conformer at ``running``, and the molecule needs ``--force`` to be resubmitted.

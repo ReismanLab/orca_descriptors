@@ -194,7 +194,7 @@ CREST 3.x driven by a TOML input (`crest --input input.toml`); starts from the p
 | `shake` | `null` | `[dynamics] shake`: `0` off, `1` bonds to H, `2` all bonds; `null` leaves CREST's choice (all bonds except to a metal) |
 | `tstep` | `null` | `[dynamics] tstep`, MD time step in fs; `null` leaves CREST's choice (5 fs for GFN2, which needs SHAKE) |
 | `crossing` | `true` | genetic crossing (GC) after the MTDs; `false` runs `crest -nocross` |
-| `reftopo` | `true` | CREST's check that every conformer keeps the topology of the input; `false` runs `crest --noreftopo` (needed when the start geometry's bonding is ambiguous, e.g. a hydride on a metal; may let rearranged structures through) |
+| `reftopo` | `true` | CREST's check that every conformer keeps the topology of the input; `false` runs `crest --noreftopo` (needed when the start geometry's bonding is ambiguous, e.g. a hydride on a metal; may let rearranged structures through: `pruning.topology` ([5_pruning.md](5_pruning.md)) catches them afterwards) |
 | `cluster` | `null` | `null`: hand on `crest_conformers.xyz`; `true`: `crest --cluster`, CREST's PCA/k-means clustering picks the number of clusters, and the clustered subset `crest_clustered.xyz` is handed on instead; a number `N`: `--cluster N`, N clusters. The full ensemble is kept as `logs/raw_<i>_crest_conformers.xyz` |
 | `toml_extra` | `{}` | deep-merged into the TOML document, e.g. `{cregen: {ewin: 6.0}}` for CREST's own energy window (kcal/mol); applied last, so it wins over `shake` and `tstep` |
 | `seed_offset` | `0` | see above |

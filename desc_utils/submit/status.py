@@ -131,7 +131,7 @@ def molecule_rows(cfg: Config) -> list[dict]:
             reason = "ensemble: " + ", ".join(f"{PRINT_NAMES.get(k, k)} {stages[k]}" for k in STAGE_COLUMNS[1:4])
         confs = meta.get("conformers") or {}
         counts = Counter((v or {}).get("status") for v in confs.values())
-        n_to_run = sum(1 for v in confs.values() if (v or {}).get("status") not in ("skipped_energy_filter", "skipped_no_energy"))
+        n_to_run = sum(1 for v in confs.values() if (v or {}).get("status") not in records.SKIPPED_CONFORMER)
         n_conf = progress["n_conformers"]
         if n_conf is None and (meta.get("orca_stage") or {}).get("n_conformers_in_ensemble") is not None:
             n_conf = meta["orca_stage"]["n_conformers_in_ensemble"]

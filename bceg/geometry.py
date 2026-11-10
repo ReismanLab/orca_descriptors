@@ -49,13 +49,20 @@ BOND_STRETCH_FACTOR = 1.35
 CLASH_FACTOR = 1.0
 
 
-def _coordination_issues(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[tuple]:
-    """(i, j, distance, +1 if too long / -1 if too short, message) of every problem pair."""
+def pair_geometry(mol: Chem.Mol, coords: np.ndarray) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
+    """(symbols, covalent radii, distance matrix, graph adjacency as bool) of ``coords`` against ``mol``."""
     pt = Chem.GetPeriodicTable()
+    coords = np.asarray(coords, dtype=float)
     symbols = [a.GetSymbol() for a in mol.GetAtoms()]
     radii = np.array([pt.GetRcovalent(a.GetAtomicNum()) for a in mol.GetAtoms()])
     dist = np.linalg.norm(coords[:, None, :] - coords[None, :, :], axis=-1)
     bonded = Chem.GetAdjacencyMatrix(mol).astype(bool)
+    return symbols, radii, dist, bonded
+
+
+def _coordination_issues(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[tuple]:
+    """(i, j, distance, +1 if too long / -1 if too short, message) of every problem pair."""
+    symbols, radii, dist, bonded = pair_geometry(mol, coords)
 
     issues = []
     for b in mol.GetBonds():

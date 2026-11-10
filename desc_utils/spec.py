@@ -86,6 +86,10 @@ DEFAULTS: dict[str, Any] = {
         # `column` that must not be called SCF_energy, so the table always says where its energies come from.
         "energy": {"source": "orca", "basename": "singlepoint", "column": "SCF_energy", "key": "energy", "units": "eV"},
         "smarts": {"match_selection": "first"},
+        # connectivity check of the numbered geometry against <molecule>/structure.mol (bceg.topology);
+        # null = off, true = the defaults, or a block {allow, max_metal_ligand_distance, agostic_max,
+        # new_bond_tolerance}. A conformer with a change the block does not allow is `topology_changed`.
+        "topology": None,
     },
     "orca_xyz": {
         "vbur_radii": [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
@@ -326,6 +330,14 @@ def _validate_numbering(numbering: dict, labels: list[str], problems: list[str])
         problems.append("numbering.smiles.file (the SMILES list) is required with source: file")
     numbering["smiles"] = smiles
     numbering["energy"] = _validate_energy(numbering.get("energy"), problems)
+    if numbering.get("topology") in (None, False):
+        numbering["topology"] = None
+    else:
+        from bceg.topology import check_params
+        try:
+            numbering["topology"] = check_params(numbering["topology"], "numbering.topology")
+        except ValueError as exc:
+            problems.append(str(exc))
     return numbering
 
 

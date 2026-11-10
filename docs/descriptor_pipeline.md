@@ -118,9 +118,21 @@ cannot run on an xyz; when none of them is requested the tables carry no `orca_j
 `number` writes one row per conformer folder with the 1-based index of every label, plus `path`,
 `inchikey`, `SCF_energy`, `smiles`, `smiles_noH` (implicit hydrogens),
 annotator columns (e.g. `ligand_class`), `numbering_backend`,
-`numbering_status` (`ok`, `incomplete`, `failed`, `element_mismatch`, `inconsistent`) and
-`numbering_notes`. The table is a plain CSV so it can be inspected or corrected by hand; rows whose
-status is not `ok` are skipped downstream.
+`numbering_status` (`ok`, `incomplete`, `failed`, `element_mismatch`, `inconsistent`,
+`topology_changed`) and `numbering_notes`. The table is a plain CSV so it can be inspected or corrected
+by hand; rows whose status is not `ok` are skipped downstream.
+
+### Connectivity check (`numbering.topology`)
+
+Off by default. With `numbering: {topology: true}` (or a block: `allow`, `max_metal_ligand_distance`,
+`agostic_max`, `new_bond_tolerance`; the defaults and the kinds of change are those of `pruning.topology`,
+[stages/5_pruning.md](stages/5_pruning.md)), every numbered geometry (`data.geometry_file`, e.g. the DFT
+`optimization.xyz`) is compared with the molecule's graph, `<molecule>/structure.mol` written by
+`orcadesc submit`. A change not in `allow` (a decoordinated Ni-N, H-H after a reductive elimination, an
+inverted stereocentre) makes the row `topology_changed`, whatever the numbering found, with the changes
+in `numbering_notes`. Every change, allowed ones included (e.g. agostic contacts), goes to the
+`topology_changes` column. Folders without `structure.mol` (data from before `orcadesc`) are not
+checked; geometry atoms that differ from the graph's make the row `failed`.
 
 Where the two SMILES columns come from is `numbering.smiles.source`:
 
