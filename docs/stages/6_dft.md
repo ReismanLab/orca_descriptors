@@ -135,7 +135,16 @@ method, shipped as a build of `xtb` 6.7.1 that runs it when `--gxtb` is given. W
 each kept conformer gets one `xtb` run per step instead of an ORCA compound job, and
 `desc_utils.gxtb_condense` writes the same `orca_condensed.json` from the output.
 
-Nothing on the laptop side changes: run the same spec and the same `desc_utils.run` commands. The
+**One spec key does have to change: `descriptors.orca.redox.prefixes` must be `[mulliken]`.** g-xTB
+has no NPA, Hirshfeld or CM5 analysis, and `cm5` is *derived* from Hirshfeld charges, so with the
+default `[cm5]` (or with `nbo_charge`) every condensed Fukui column comes out empty — while
+`Vertical_Ionization_Potential`, `Vertical_Electron_Affinity`, `Hardness`, `Electronegativity` and
+`Electrophilicity` of the same family fill normally, and `aggregate` drops the empty columns, so
+nothing in the spreadsheet says the Fukui indices are missing. Measured on a real g-xTB library:
+0 of 21 Fukui columns filled with `[cm5]`, 21 of 21 with `[mulliken]`. `extract` now names
+descriptor columns that are empty for every conformer, which is the general guard.
+
+Nothing else on the laptop side changes: run the same spec and the same `desc_utils.run` commands. The
 descriptors g-xTB cannot produce come out as all-NaN columns, which `aggregate` drops, so they are
 simply absent from the spreadsheet rather than wrong. That also means a g-xTB table and a DFT table of
 the same library line up column-for-column wherever both engines have data.
