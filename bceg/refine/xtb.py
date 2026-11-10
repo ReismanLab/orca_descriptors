@@ -16,7 +16,7 @@ from __future__ import annotations
 from bceg.layout import check_name
 from bceg.refine.xtb_opt import XTB_REFINER_DEFAULTS, XtbRefiner
 from bceg.structure import Structure
-from bceg.xtb import METHOD_FLAGS
+from bceg.xtb import GFN0_PARAM_FILE, METHOD_FLAGS, XTB_PARAM_VARS, gfn0_param_path
 
 
 class XTB(XtbRefiner):
@@ -35,6 +35,16 @@ class XTB(XtbRefiner):
         super().validate()
         if self.params["gfn"] not in METHOD_FLAGS:
             raise ValueError(f"xtb: unknown method {self.params['gfn']!r}; choose from {sorted(METHOD_FLAGS)}")
+        # GFN1/GFN2/GFN-FF are compiled in; GFN0 reads GFN0_PARAM_FILE at run time and finds it only
+        # through XTBPATH / XTBHOME. Refusing it here costs a line in the config; letting it through
+        # costs a queued job that dies on the node with "param_gfn0-xtb.txt not found!".
+        if self.params["gfn"] == "gfn0" and gfn0_param_path() is None:
+            raise ValueError(
+                f"xtb: gfn0 needs {GFN0_PARAM_FILE}, and xtb looks for it only in "
+                f"{' / '.join(XTB_PARAM_VARS)}, neither of which points at a directory holding it. "
+                f"Export one in slurm.setup (the file ships with xtb, e.g. "
+                f"XTBPATH=$CONDA_PREFIX/opt/gxtb-2.0.1/share/xtb), or use gfn1/gfn2/gfnff, which need "
+                f"no parameter file.")
 
     def command(self, structure: Structure, exe: str) -> list[str]:
         """``--uhf`` is always passed: unlike g-xTB, xtb reads it for closed shells too (0 is a no-op)."""

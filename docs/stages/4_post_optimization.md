@@ -24,7 +24,7 @@ the transformation (stage 1).
 
 ### A job that runs out of time: the checkpoint
 
-`uma` and `aimnet2` append every optimised conformer to `raw_<i>_<lot>.partial.jsonl` as soon as it is
+Every refiner appends each optimised conformer to `raw_<i>_<lot>.partial.jsonl` as soon as it is
 done, so a job killed by its time limit, its memory limit, a node failure or `scancel` loses only the
 conformers in flight. The bceg jobs get SIGTERM 10 min before their time limit (`--signal=B:TERM@600`): the
 run record is then written `failed` with an `Interrupted` error and `n_checkpointed`, the conformers kept.
@@ -33,7 +33,10 @@ After a hard kill the record stays `running`, and `orcadesc status` / `submit` a
 without `--force`, and the run optimises only the conformers not yet in the checkpoint; the file is
 removed once `raw_<i>_<lot>.xyz` is written (`details.n_resumed`: how many came from it). Its first line
 is a key, the hash of `raw_<i>.xyz` and the refiner's parameters: a checkpoint of another search output or
-other parameters is ignored. `gxtb` has no checkpoint: it starts again from the first conformer.
+other parameters is ignored.
+
+`xtb` and `gxtb` record a conformer that did not converge too, and apply `keep_unconverged` once the
+loop is over, so resuming yields exactly the conformers an uninterrupted run would have produced.
 
 ### Refining further: `continue_from`
 
@@ -177,7 +180,7 @@ produced is optimised instead.
 
 | `params` | Default | Meaning |
 |---|---|---|
-| `gfn` | `gfn2` | method: `gfn2`, `gfn1`, `gfn0` or `gfnff` (the force field) |
+| `gfn` | `gfn2` | method: `gfn2`, `gfn1`, `gfn0` or `gfnff` (the force field). `gfn0` additionally needs its parameter file, see below |
 | `level` | `normal` | xtb `--opt` level: `crude`, `sloppy`, `loose`, `lax`, `normal`, `tight`, `vtight`, `extreme` |
 | `cycles` | xtb's default | optimiser cycles per conformer (xtb `--cycles`) |
 | `keep_unconverged` | `true` | keep conformers that did not converge within the cycles (flagged `converged: false`); `false` drops them |
@@ -186,8 +189,23 @@ produced is optimised instead.
 | `threads` | job's CPUs | resource: OpenMP threads of each xtb run (`SLURM_CPUS_PER_TASK`); the conformers run one after the other |
 
 `versions`: `xtb` (the `--version` line); `details.executable` is the resolved path. Per conformer:
-`cycles` when the optimisation converged. The refiner has no `device`: xtb runs on CPUs only, and it
-has no checkpoint — an interrupted step starts again from the first conformer.
+`cycles` when the optimisation converged. The refiner has no `device`: xtb runs on CPUs only. It is
+resumable, like every other refiner ([the checkpoint](#a-job-that-runs-out-of-time-the-checkpoint)).
+
+#### `gfn0` needs its parameter file on the search path
+
+GFN1, GFN2 and GFN-FF are compiled into xtb, but **GFN0 reads its parameters from
+`param_gfn0-xtb.txt` at run time**, and xtb looks for that file only in `XTBPATH` or `XTBHOME` — not
+next to the binary, even though the build ships it under `<prefix>/share/xtb`. With neither set, a
+`gfn0` job dies on the compute node with `param_gfn0-xtb.txt not found!` long after it was queued, so
+the refiner refuses `gfn: gfn0` while the config is read unless the file is reachable. Export it in
+`slurm.setup`:
+
+```yaml
+slurm:
+  setup:
+    - export XTBPATH=$CONDA_PREFIX/opt/gxtb-2.0.1/share/xtb
+```
 
 The cascade, as two library configs over one `ensembles_dir`
 ([library_workflow.md](../library_workflow.md#5-a-second-library-on-an-existing-ensembles-tree)):

@@ -10,7 +10,11 @@ always writes ``charges``, ``wbo`` and ``xtbopt.xyz`` under fixed names. The opt
 what the conformer is then taken from. Energies come from the ``TOTAL ENERGY`` line, falling back to
 the first float of the xyz comment line.
 
-There is no checkpoint: these refiners restart from the first conformer (``resumable`` stays False).
+These refiners are resumable: each conformer is appended to the checkpoint as soon as its xtb run
+returns, so a job killed by its time limit keeps everything up to the conformer in flight and the
+resubmitted job carries on from there (:mod:`bceg.refine.checkpoint`). Unconverged conformers are
+recorded too and ``keep_unconverged`` is applied at the end, so resuming cannot change which
+conformers the run would have produced.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from pathlib import Path
 from bceg.external import find_executable, resolve_threads, run
 from bceg.layout import check_name
 from bceg.refine.base import REFINER_CONSTRAINT_DEFAULTS, RefineResult, Refiner
+from bceg.refine.checkpoint import CheckpointWriter, load_checkpoint
 from bceg.structure import Structure
 from bceg.xtb import OPT_LEVELS, fix_input, xtb_identity
 from bceg.xyz import Conformer, read_xyz, write_xyz
@@ -44,6 +49,7 @@ class XtbRefiner(Refiner):
     """One ``xtb`` run per conformer. Subclasses define ``name``, ``defaults`` and :meth:`command`."""
 
     resource_keys = {"executable", "threads"}
+    resumable = True  # run() takes checkpoint=(path, key); bceg.tasks passes one
 
     def __init__(self, **params) -> None:
         super().__init__(**params)
@@ -72,45 +78,77 @@ class XtbRefiner(Refiner):
         """``--opt <level>``. ``--cycles`` is appended by :meth:`run`, after the method's own flags."""
         return ["--opt", self.params["level"]]
 
-    def run(self, structure: Structure, conformers: list[Conformer], workdir: Path) -> RefineResult:
+    def optimize_one(self, structure: Structure, index: int, conf: Conformer, workdir: Path,
+                     exe: str, threads: int, fixed: list[int]) -> dict:
+        """Optimise one conformer in ``workdir/conf_<index>/``; the result as a checkpoint record."""
+        sub = workdir / f"conf_{index}"
+        sub.mkdir(parents=True, exist_ok=True)
+        write_xyz(sub / "start.xyz", structure.elements, [Conformer(conf.coords)])
+        cmd = self.command(structure, exe)
+        if self.params["cycles"]:
+            cmd += ["--cycles", str(self.params["cycles"])]
+        proc = run(cmd + fix_input(sub, fixed), sub, threads=threads, log_name="xtb.out")
+        self.check_output(proc.stdout, exe)
+        optimized = sub / "xtbopt.xyz"
+        converged = proc.returncode == 0 and optimized.exists() and "FAILED TO CONVERGE" not in proc.stdout
+        geometry = optimized if optimized.exists() else sub / "xtblast.xyz"  # xtb leaves the last step there
+        if not geometry.exists():
+            raise RuntimeError(f"{self.name} optimisation of conformer {index} failed "
+                               f"(exit {proc.returncode}):\n{proc.stdout[-2000:]}")
+        elements, confs = read_xyz(geometry)
+        if elements != structure.elements:
+            raise RuntimeError(f"{geometry}: xtb changed the atom order")
+        energies = _ENERGY.findall(proc.stdout)
+        energy = float(energies[-1]) if energies else confs[0].energy  # the xyz comment carries the last energy
+        if energy is None:
+            raise RuntimeError(f"{self.name} gave no energy for conformer {index} (see {sub / 'xtb.out'})")
+        record = {"index": index, "coords": confs[0].coords, "energy": energy, "converged": converged}
+        cycles = _CYCLES.search(proc.stdout)
+        if cycles:
+            record["cycles"] = int(cycles.group(1))
+        return record
+
+    def run(self, structure: Structure, conformers: list[Conformer], workdir: Path, *,
+            checkpoint: tuple[Path, str] | None = None) -> RefineResult:
+        """Optimise every conformer, one xtb run at a time.
+
+        ``checkpoint``: ``(path, key)`` of the file each result is appended to as it comes; the
+        conformers already in it are not optimised again (``details["n_resumed"]``).
+        """
         exe = find_executable(self.params["executable"])
         _, version = xtb_identity(exe)
         threads = resolve_threads(self.params["threads"])
         fixed = self.fixed_atoms(structure)
+        done = load_checkpoint(*checkpoint) if checkpoint else {}
+        writer = CheckpointWriter(checkpoint[0], checkpoint[1], resumed=bool(done)) if checkpoint else None
+        new: list[dict] = []
+        try:
+            for i, conf in enumerate(conformers):
+                if i in done:
+                    continue
+                record = self.optimize_one(structure, i, conf, workdir, exe, threads, fixed)
+                new.append(record)
+                if writer:
+                    writer(record)   # on disk before the next conformer starts, so a kill keeps it
+        finally:
+            if writer:
+                writer.close()
+
+        # keep_unconverged is applied here rather than in the loop: the checkpoint holds every result,
+        # so resuming yields exactly the conformers an uninterrupted run would have produced
         out, n_unconverged = [], 0
-        for i, conf in enumerate(conformers):
-            sub = workdir / f"conf_{i}"
-            sub.mkdir(parents=True, exist_ok=True)
-            write_xyz(sub / "start.xyz", structure.elements, [Conformer(conf.coords)])
-            cmd = self.command(structure, exe)
-            if self.params["cycles"]:
-                cmd += ["--cycles", str(self.params["cycles"])]
-            proc = run(cmd + fix_input(sub, fixed), sub, threads=threads, log_name="xtb.out")
-            self.check_output(proc.stdout, exe)
-            optimized = sub / "xtbopt.xyz"
-            converged = proc.returncode == 0 and optimized.exists() and "FAILED TO CONVERGE" not in proc.stdout
-            geometry = optimized if optimized.exists() else sub / "xtblast.xyz"  # xtb leaves the last step there
-            if not geometry.exists():
-                raise RuntimeError(f"{self.name} optimisation of conformer {i} failed "
-                                   f"(exit {proc.returncode}):\n{proc.stdout[-2000:]}")
-            n_unconverged += not converged
-            if not converged and not self.params["keep_unconverged"]:
+        for r in sorted([*done.values(), *new], key=lambda r: r["index"]):
+            n_unconverged += not r["converged"]
+            if not r["converged"] and not self.params["keep_unconverged"]:
                 continue
-            elements, confs = read_xyz(geometry)
-            if elements != structure.elements:
-                raise RuntimeError(f"{geometry}: xtb changed the atom order")
-            energies = _ENERGY.findall(proc.stdout)
-            energy = float(energies[-1]) if energies else confs[0].energy  # the xyz comment carries the last energy
-            if energy is None:
-                raise RuntimeError(f"{self.name} gave no energy for conformer {i} (see {sub / 'xtb.out'})")
-            info = {"converged": converged, "source_index": i}
-            cycles = _CYCLES.search(proc.stdout)
-            if cycles:
-                info["cycles"] = int(cycles.group(1))
-            out.append(Conformer(confs[0].coords, energy, info))
+            info = {"converged": r["converged"], "source_index": r["index"]}
+            if r.get("cycles") is not None:
+                info["cycles"] = r["cycles"]
+            out.append(Conformer(r["coords"], r["energy"], info))
         return RefineResult(
             out,
             versions={"xtb": version or "unknown"},
             details={"executable": exe, "n_input": len(conformers), "n_unconverged": n_unconverged}
-            | ({"fixed_atoms": fixed} if fixed else {}),
+            | ({"fixed_atoms": fixed} if fixed else {})
+            | ({"n_resumed": len(done)} if done else {}),
         )

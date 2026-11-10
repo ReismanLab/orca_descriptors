@@ -520,3 +520,44 @@ def test_a_gfn2_lot_then_a_better_one_continues_from_it(project, fake_xtb):
     assert chain["continue_from"]["params_sha256"] == json.loads((md / "params_gfn2.json").read_text())["sha256"]
     # three files, three stages: search output, the cheap lot, the better one
     assert {p.name for p in md.glob("raw_1*.xyz")} == {"raw_1.xyz", "raw_1_gfn2.xyz", "raw_1_tight.xyz"}
+
+
+def test_an_interrupted_xtb_refinement_keeps_the_conformers_it_finished(project, fake_xtb, monkeypatch):
+    """The real xtb refiner through bceg.tasks: a walltime kill must not throw away finished conformers.
+
+    Before the checkpoint these refiners restarted from conformer 0, so a job killed near the end of a
+    long library lost everything it had computed.
+    """
+    from bceg.refine.xtb_opt import XtbRefiner
+
+    root, write = project
+    cfg_path = write(refiner="xtb", refiner_params="{gfn: gfn2}")
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    partial = md / "raw_1_gfn2.partial.jsonl"
+
+    real = XtbRefiner.optimize_one
+    state = {"n": 0}
+
+    def stop_after_two(self, structure, index, conf, workdir, exe, threads, fixed):
+        if state["n"] >= 2:
+            raise Interrupted("SIGTERM (time limit or scancel)")
+        state["n"] += 1
+        return real(self, structure, index, conf, workdir, exe, threads, fixed)
+
+    monkeypatch.setattr(XtbRefiner, "optimize_one", stop_after_two)
+    run_local(Config.load(cfg_path))
+
+    rec = json.loads((md / "run_1_gfn2.json").read_text())
+    assert rec["status"] == "failed" and "Interrupted" in rec["error"]
+    assert rec["checkpoint"] == partial.name and rec["n_checkpointed"] == 2
+    assert partial.exists() and not (md / "raw_1_gfn2.xyz").exists()
+
+    monkeypatch.setattr(XtbRefiner, "optimize_one", real)   # the resubmitted job
+    assert run_local(Config.load(cfg_path)) == {"done": 9}
+
+    rec = json.loads((md / "run_1_gfn2.json").read_text())
+    n = len(read_xyz(md / "raw_1.xyz")[1])
+    assert rec["status"] == "done" and rec["n_conformers"] == n
+    assert rec["details"]["n_resumed"] == 2          # the two from before the kill were not recomputed
+    assert not partial.exists()                      # removed once raw_1_gfn2.xyz is written
+    assert len(read_xyz(md / "raw_1_gfn2.xyz")[1]) == n

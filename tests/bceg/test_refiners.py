@@ -25,6 +25,7 @@ from bceg.refine import REFINERS, ase_opt
 from bceg.refine.gxtb import GXTB
 from bceg.refine.xtb import XTB
 from bceg.structure import Structure
+from bceg.xtb import GFN0_PARAM_FILE
 from bceg.xyz import HARTREE_TO_EV, Conformer
 
 
@@ -165,7 +166,7 @@ def test_gxtb_needs_the_executable(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- xtb (GFN-n)
 def test_xtb_parameters_and_resources():
     r = REFINERS["xtb"]()
-    assert r.lot == "gfn2" and r.resource_class() == "cpu" and r.resumable is False
+    assert r.lot == "gfn2" and r.resource_class() == "cpu" and r.resumable is True
     assert set(r.compared_params()) == {"gfn", "level", "cycles", "keep_unconverged", "lot"}
     assert set(r.recorded_params()) == {"executable", "threads"}
     # the lot follows the method, so gfn2 and gfn1 land in different files without being told to
@@ -197,9 +198,20 @@ def test_xtb_runs_one_run_per_conformer_and_parses_the_output(fake_xtb_bin, tmp_
     assert result.details == {"executable": str(fake_xtb_bin), "n_input": 2, "n_unconverged": 0}
 
 
+@pytest.fixture
+def gfn0_params(tmp_path, monkeypatch):
+    """A directory xtb would find param_gfn0-xtb.txt in; without one XTB refuses gfn0."""
+    share = tmp_path / "xtb_share"
+    share.mkdir()
+    (share / GFN0_PARAM_FILE).write_text("fake GFN0 parameters\n")
+    monkeypatch.setenv("XTBPATH", str(share))
+    monkeypatch.delenv("XTBHOME", raising=False)
+    return share
+
+
 @pytest.mark.parametrize("gfn, flags", [("gfn2", "--gfn 2"), ("gfn1", "--gfn 1"),
                                         ("gfn0", "--gfn 0"), ("gfnff", "--gfnff")])
-def test_xtb_method_flags(fake_xtb_bin, tmp_path, gfn, flags):
+def test_xtb_method_flags(fake_xtb_bin, tmp_path, gfn, flags, gfn0_params):
     structure = Structure("CCO")
     XTB(gfn=gfn).run(structure, _conformers(structure, 1), tmp_path)
     assert (tmp_path / "conf_0" / "args.txt").read_text() == f"start.xyz {flags} --opt normal --chrg 0 --uhf 0"
@@ -599,3 +611,111 @@ def test_the_production_start_method_spawns_workers_that_rebuild_the_refiner(tmp
     np.testing.assert_allclose(energies % 1000, [2 + c.coords[0, 0] + 0.1 for c in confs], atol=1e-6)   # 2 torch threads each
     assert [c.info["source_index"] for c in result.conformers] == [0, 1, 2, 3]
     assert sorted(p.name for p in (tmp_path / "work").glob("opt_*.log")) == [f"opt_{i}.log" for i in range(4)]
+
+
+# --------------------------------------------------------------------------- gfn0's parameter file
+def test_gfn0_is_refused_unless_its_parameter_file_is_findable(tmp_path, monkeypatch):
+    """xtb compiles GFN1/GFN2/GFN-FF in but reads GFN0's parameters from a file at run time, and looks
+    for it only in XTBPATH/XTBHOME. Refusing it here turns a job that dies on the compute node with
+    "param_gfn0-xtb.txt not found!" into a message at `orcadesc submit`."""
+    monkeypatch.delenv("XTBPATH", raising=False)
+    monkeypatch.delenv("XTBHOME", raising=False)
+    with pytest.raises(ValueError, match=GFN0_PARAM_FILE):
+        XTB(gfn="gfn0")
+    for gfn in ("gfn1", "gfn2", "gfnff"):       # compiled in: no file, no complaint
+        assert XTB(gfn=gfn).lot == gfn
+
+    share = tmp_path / "share"
+    share.mkdir()
+    monkeypatch.setenv("XTBPATH", str(share))
+    with pytest.raises(ValueError, match=GFN0_PARAM_FILE):   # the directory is on the path but empty
+        XTB(gfn="gfn0")
+    (share / GFN0_PARAM_FILE).write_text("fake GFN0 parameters\n")
+    assert XTB(gfn="gfn0").lot == "gfn0"        # now xtb would find it, so it is allowed
+
+    # either variable will do, and XTBPATH may list several directories
+    monkeypatch.delenv("XTBPATH")
+    monkeypatch.setenv("XTBHOME", str(share))
+    assert XTB(gfn="gfn0").lot == "gfn0"
+    monkeypatch.delenv("XTBHOME")
+    monkeypatch.setenv("XTBPATH", os.pathsep.join([str(tmp_path / "nowhere"), str(share)]))
+    assert XTB(gfn="gfn0").lot == "gfn0"
+
+
+# --------------------------------------------------------------------------- the checkpoint
+def _checkpoint(tmp_path, key="k"):
+    return tmp_path / "raw_1_gfn2.partial.jsonl", key
+
+
+def test_xtb_appends_every_conformer_to_the_checkpoint_as_it_finishes(fake_xtb_bin, tmp_path):
+    """A kill at any point must leave the finished conformers on disk, not just at the end."""
+    structure = Structure("CCO")
+    confs = _conformers(structure, 3)
+    path, key = _checkpoint(tmp_path)
+    result = XTB().run(structure, confs, tmp_path, checkpoint=(path, key))
+
+    lines = path.read_text().splitlines()
+    assert json.loads(lines[0]) == {"key": key}          # first line ties the file to this input
+    assert len(lines) == 1 + 3
+    assert [json.loads(ln)["index"] for ln in lines[1:]] == [0, 1, 2]
+    assert "n_resumed" not in result.details             # nothing was resumed on a fresh run
+
+
+def test_xtb_resumes_from_the_checkpoint_instead_of_restarting(fake_xtb_bin, tmp_path):
+    structure = Structure("CCO")
+    confs = _conformers(structure, 3)
+    path, key = _checkpoint(tmp_path)
+
+    # a first run that "died" after two conformers
+    first = XTB().run(structure, confs[:2], tmp_path / "a", checkpoint=(path, key))
+    assert len(path.read_text().splitlines()) == 1 + 2
+
+    second = XTB().run(structure, confs, tmp_path / "b", checkpoint=(path, key))
+    assert second.details["n_resumed"] == 2
+    assert len(second.conformers) == 3
+    # only the third conformer was actually optimised the second time round
+    assert sorted(p.name for p in (tmp_path / "b").iterdir() if p.is_dir()) == ["conf_2"]
+    # and the resumed ones came back identical to what the first run produced
+    for a, b in zip(first.conformers, second.conformers[:2]):
+        np.testing.assert_allclose(a.coords, b.coords)
+        assert a.energy == b.energy and a.info == b.info
+
+
+def test_a_checkpoint_of_another_input_is_ignored(fake_xtb_bin, tmp_path):
+    """The key ties the file to the geometries and parameters it was written for."""
+    structure = Structure("CCO")
+    confs = _conformers(structure, 2)
+    path, _ = _checkpoint(tmp_path)
+    XTB().run(structure, confs, tmp_path / "a", checkpoint=(path, "key-of-another-run"))
+
+    result = XTB().run(structure, confs, tmp_path / "b", checkpoint=(path, "the-real-key"))
+    assert "n_resumed" not in result.details
+    assert sorted(p.name for p in (tmp_path / "b").iterdir() if p.is_dir()) == ["conf_0", "conf_1"]
+
+
+def test_a_checkpoint_line_cut_off_by_the_kill_is_skipped(fake_xtb_bin, tmp_path):
+    structure = Structure("CCO")
+    confs = _conformers(structure, 3)
+    path, key = _checkpoint(tmp_path)
+    XTB().run(structure, confs[:2], tmp_path / "a", checkpoint=(path, key))
+    with open(path, "a") as fh:
+        fh.write('{"index": 2, "coords": [[0.0, 0.0')      # the kill landed mid-write
+
+    result = XTB().run(structure, confs, tmp_path / "b", checkpoint=(path, key))
+    assert result.details["n_resumed"] == 2 and len(result.conformers) == 3
+
+
+def test_an_unconverged_conformer_is_checkpointed_and_filtered_at_the_end(fake_xtb_bin, tmp_path, monkeypatch):
+    """keep_unconverged is applied after the loop, so resuming yields what one run would have."""
+    monkeypatch.setenv("XTB_FAKE_MODE", "unconverged")
+    structure = Structure("CCO")
+    confs = _conformers(structure, 2)
+    path, key = _checkpoint(tmp_path)
+
+    kept = XTB().run(structure, confs, tmp_path / "a", checkpoint=(path, key))
+    assert len(path.read_text().splitlines()) == 1 + 2        # recorded even though unconverged
+    assert [c.info["converged"] for c in kept.conformers] == [False, False]
+    assert kept.details["n_unconverged"] == 2
+
+    dropped = XTB(keep_unconverged=False).run(structure, confs, tmp_path / "b", checkpoint=(path, key))
+    assert dropped.conformers == [] and dropped.details["n_unconverged"] == 2

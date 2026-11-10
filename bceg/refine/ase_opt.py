@@ -41,6 +41,8 @@ import numpy as np
 
 from bceg.external import allocated_cpus, resolve_threads
 from bceg.refine.base import RefineResult
+from bceg.refine.checkpoint import CheckpointWriter as _CheckpointWriter  # noqa: F401  (re-exported)
+from bceg.refine.checkpoint import load_checkpoint
 from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_EV, Conformer
 
@@ -230,48 +232,6 @@ def _kill_workers(before: set) -> None:
     for p in set(multiprocessing.active_children()) - before:
         p.kill()
         p.join(timeout=30)
-
-
-# ---------------------------------------------------------------------------------------- the checkpoint
-def load_checkpoint(path: Path, key: str) -> dict[int, dict[str, Any]]:
-    """The results already in ``path`` (by conformer index); empty when it is absent or has another key.
-    A last line cut off by the kill is skipped."""
-    if not path.exists():
-        return {}
-    lines = path.read_text().splitlines()
-    try:
-        if json.loads(lines[0]).get("key") != key:
-            return {}
-    except (IndexError, ValueError, AttributeError):
-        return {}
-    done = {}
-    for line in lines[1:]:
-        try:
-            r = json.loads(line)
-        except ValueError:
-            continue
-        done[r["index"]] = r | {"coords": np.asarray(r["coords"])}
-    return done
-
-
-class _CheckpointWriter:
-    """Appends each result to the checkpoint file (flushed and synced, so a kill keeps it)."""
-
-    def __init__(self, path: Path, key: str, resumed: bool) -> None:
-        self.fh = open(path, "a" if resumed else "w")
-        if not resumed:
-            self._write({"key": key})
-
-    def _write(self, obj: dict) -> None:
-        self.fh.write(json.dumps(obj) + "\n")
-        self.fh.flush()
-        os.fsync(self.fh.fileno())
-
-    def __call__(self, r: dict) -> None:
-        self._write(r | {"coords": np.asarray(r["coords"]).tolist()})
-
-    def close(self) -> None:
-        self.fh.close()
 
 
 # ---------------------------------------------------------------------------------------- the loop
