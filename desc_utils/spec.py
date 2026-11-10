@@ -112,6 +112,35 @@ DEFAULTS: dict[str, Any] = {
         "carry_first": ["smiles", "smiles_noH", "ligand_class"],
         "exclude_columns": [],
     },
+    # Which conformers of a finished library are described (desc_utils.prune). Off by default, and
+    # NOT stage 5: stage 5 decides which conformers get a job and is hashed into the library's
+    # identity, this decides which of the ones it already holds are described, and is a property of
+    # the descriptor run - the same library may legitimately be extracted twice under two windows.
+    # BUNNY's N1/N2 convention, applied to the numbering table after numbering. See
+    # desc_utils/hemisphere.py for why it is a per-molecule post-pass and not an
+    # `orient` rule, and where each number comes from.
+    "hemisphere": {
+        "enabled": False,
+        "centre": "Ni",
+        # the first pair decides; every pair is swapped together, so C1/C2 follow
+        # their nitrogens as the SI requires
+        "pairs": [["N1", "N2"], ["C1", "C2"]],
+        "exclude": ["H1", "H2"],
+        "radius": 6.5,                      # the DECIDING sphere, not the descriptor one
+        "skip_classes": ["pyox"],           # N1 is the aromatic nitrogen there by definition
+        "class_column": "ligand_class",
+        "energy_column": None,              # defaults to numbering.energy.column
+    },
+    "prune": {
+        "enabled": False,
+        # defaults to numbering.energy.column, so the prune, `_lowE` and the Boltzmann weights
+        # cannot end up on different energies without the spec saying so
+        "energy_column": None,
+        "energy_window_kcal_mol": None,     # kcal/mol above each molecule's own lowest conformer
+        "rmsd_threshold_angstrom": None,    # symmetric heavy-atom RMSD; the lowest-energy conformer is kept
+        "energy_gate_kcal_mol": 0.2,        # pairs further apart in energy are never compared; see prune.py
+        "max_automorphisms": 1000,
+    },
     # The noise filter (correlation / variance pruning) is opt-in: the library should stay complete and
     # reproducible; enable it in the spec or with `aggregate --filter` when preparing a modelling set.
     "filter": {"enabled": False},
@@ -125,6 +154,9 @@ DEFAULTS: dict[str, Any] = {
         # written by `extract` / `all` only when some conformer needs a human look (numbering not ok,
         # ORCA job not completed); today's copy is removed again when everything is fine
         "check_csv": "{date}_{name}_conformers_to_check.csv",
+        # written by `extract` / `all` whenever the prune block is enabled: one row per conformer,
+        # kept or dropped, so the counts in the library's provenance can be checked afterwards
+        "pruning_csv": "{date}_{name}_pruning.csv",
     },
 }
 
@@ -146,6 +178,8 @@ class Spec:
     orca: dict | None
     descripytor: dict | None
     aggregate: dict
+    prune: dict
+    hemisphere: dict
     filter: dict
     output: dict
     path: Path | None = None
@@ -210,6 +244,25 @@ def _check_terms(section: str, key: str, terms: Any, arity: int | None, labels: 
     for i, term in enumerate(terms):
         if isinstance(term, str):
             term = [term]
+        if isinstance(term, dict):
+            # A quadrant/octant frame needs more than a list of atoms: which atoms are
+            # EXCLUDED from the volume and at what radius. BUNNY excludes the two
+            # hydrides and uses 5.0 A, and neither could be said in the list form.
+            bad = [k for k in term if k not in ("label", "atoms", "exclude", "radius")]
+            if bad:
+                problems.append(f"{section}.{key}[{i}]: unknown setting(s) {bad}; "
+                                f"a quadrant entry takes label, atoms, exclude, radius")
+            for sub in ("atoms", "exclude"):
+                vals = term.get(sub) or []
+                unknown = [l for l in vals if l not in labels]
+                if unknown:
+                    problems.append(f"{section}.{key}[{i}].{sub}: unknown atom label(s) "
+                                    f"{unknown}; declare them under `atoms`")
+            if len(term.get("atoms") or []) < 4:
+                problems.append(f"{section}.{key}[{i}].atoms: quadrants need at least "
+                                f"4 labels, got {len(term.get('atoms') or [])}")
+            norm.append(dict(term))
+            continue
         if not _is_label_list(term):
             problems.append(f"{section}.{key}[{i}]: expected atom labels, got {term!r}")
             continue
@@ -440,6 +493,70 @@ def _validate_descripytor(cfg: dict | None, labels: set[str], problems: list[str
 OUTPUT_PLACEHOLDERS = ("date", "name")
 
 
+def _validate_hemisphere(cfg, numbering, labels, problems) -> dict:
+    """The hemisphere block. Every label it names must be one the numbering produces."""
+    out = _merge_defaults(cfg, DEFAULTS["hemisphere"])
+    unknown = [k for k in (cfg or {}) if k not in DEFAULTS["hemisphere"]]
+    if unknown:
+        problems.append(f"hemisphere: unknown key(s) {unknown}; "
+                        f"allowed: {sorted(DEFAULTS['hemisphere'])}")
+    if not out.get("enabled"):
+        return out
+    pairs = [list(p) for p in (out.get("pairs") or [])]
+    if not pairs or any(len(p) != 2 for p in pairs):
+        problems.append("hemisphere.pairs: each entry is a pair of labels to swap together")
+    named = [out.get("centre")] + [l for p in pairs for l in p] + list(out.get("exclude") or [])
+    unknown = sorted({l for l in named if l and l not in labels})
+    if unknown:
+        problems.append(f"hemisphere: unknown atom label(s) {unknown}; "
+                        f"declare them under the numbering `roles`")
+    if out.get("energy_column") in (None, ""):
+        # the same rule as prune: the deciding conformer is the lowest on the SAME
+        # energy the ensemble is ranked by, never a second one chosen here
+        out["energy_column"] = numbering["energy"]["column"]
+    try:
+        if float(out["radius"]) <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        problems.append("hemisphere.radius must be a positive number of angstrom")
+    return out
+
+
+def _validate_prune(cfg: Mapping | None, numbering: Mapping, problems: list[str]) -> dict:
+    """The ``prune`` block (:mod:`desc_utils.prune`): which conformers of a finished library are described."""
+    from desc_utils.prune import ENERGY_GATE_VALID_BELOW
+
+    out = _merge_defaults(cfg, DEFAULTS["prune"])
+    unknown = [k for k in (cfg or {}) if k not in DEFAULTS["prune"]]
+    if unknown:
+        problems.append(f"prune: unknown key(s) {unknown}; allowed: {sorted(DEFAULTS['prune'])}")
+    if out.get("energy_column") in (None, ""):
+        # never guessed: the prune, `_lowE` and the Boltzmann weights must be on one energy
+        out["energy_column"] = numbering["energy"]["column"]
+    for key in ("energy_window_kcal_mol", "rmsd_threshold_angstrom"):
+        v = out.get(key)
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            problems.append(f"prune.{key} must be a non-negative number or null, got {v!r}")
+    gate = out.get("energy_gate_kcal_mol")
+    if gate is not None and (isinstance(gate, bool) or not isinstance(gate, (int, float)) or gate <= 0):
+        problems.append(f"prune.energy_gate_kcal_mol must be a positive number or null, got {gate!r}")
+    t = out.get("rmsd_threshold_angstrom")
+    if (out.get("enabled") and t is not None and t > ENERGY_GATE_VALID_BELOW
+            and gate is not None and gate == DEFAULTS["prune"]["energy_gate_kcal_mol"]):
+        # The gate is an empirical shortcut, measured only for tight thresholds; above them it would
+        # quietly declare distant-in-energy pairs distinct. Say so rather than extrapolating it.
+        problems.append(
+            f"prune.rmsd_threshold_angstrom {t} is above {ENERGY_GATE_VALID_BELOW} A, where the "
+            f"default energy gate of {gate} kcal/mol was measured to be safe. Set "
+            f"prune.energy_gate_kcal_mol explicitly (null compares every pair) to say which you want.")
+    if out.get("enabled") and t is None and out.get("energy_window_kcal_mol") is None:
+        problems.append("prune.enabled is true but neither energy_window_kcal_mol nor "
+                        "rmsd_threshold_angstrom is set, so it would do nothing")
+    return out
+
+
 def _validate_output(cfg: Mapping | None, problems: list[str]) -> dict:
     """File names of the stage outputs: known keys only, and only ``{date}`` / ``{name}`` as placeholders."""
     import string
@@ -520,6 +637,9 @@ def validate_spec(raw: Mapping[str, Any], path: Path | None = None) -> Spec:
     if not (isinstance(aggregate.get("temperature_K"), (int, float)) and aggregate["temperature_K"] > 0):
         problems.append("aggregate.temperature_K must be a positive number")
 
+    prune = _validate_prune(raw.get("prune"), numbering, problems)
+    hemisphere = _validate_hemisphere(raw.get("hemisphere"), numbering,
+                                      set(labels), problems)
     filt = _merge_defaults(raw.get("filter"), DEFAULTS["filter"])
     output = _validate_output(raw.get("output"), problems)
 
@@ -527,7 +647,8 @@ def validate_spec(raw: Mapping[str, Any], path: Path | None = None) -> Spec:
         raise SpecError(problems)
     return Spec(
         name=name, data=data, atoms=atoms, numbering=numbering, orca=orca,
-        descripytor=descripytor, aggregate=aggregate, filter=filt, output=output,
+        descripytor=descripytor, aggregate=aggregate, prune=prune, hemisphere=hemisphere,
+        filter=filt, output=output,
         path=path, raw=dict(raw),
     )
 

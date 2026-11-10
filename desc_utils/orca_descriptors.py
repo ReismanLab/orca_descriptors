@@ -146,6 +146,7 @@ class PropertiesXYZ:
         self.quadrant_list = None
         self.quadrant_radius = 6.5
         self.quadrant_excluded_atoms = None
+        self.quadrant_options = {}
 
     def reset_results(self):
         """Reset the results dictionary to an empty dictionary -- and remove the cache file if it exists."""
@@ -194,7 +195,16 @@ class PropertiesXYZ:
         return normalized
 
     def _normalize_quadrant_map(self, quadrant_list):
-        """Accept either a dict[label, index_sequence] or a legacy list of index sequences for quadrant/octant analysis."""
+        """Accept a dict[label, entry] or a legacy list of index sequences.
+
+        An entry is either the bare index sequence `(metal, z1, z2, xz...)` or a dict
+        `{"atoms": (...), "exclude": (...), "radius": float}`. The two extras exist
+        because BUNNY's own frame needs them and the class-level defaults could not
+        express them: its octants are computed with the two hydrides EXCLUDED from
+        the volume and at 5.0 A, while `quadrant_radius` here defaults to 6.5.
+        Leaving them to the defaults silently described a different sphere.
+        """
+        self.quadrant_options = {}
         if isinstance(quadrant_list, dict):
             iterable = quadrant_list.items()
         elif isinstance(quadrant_list, (list, tuple)):
@@ -208,11 +218,22 @@ class PropertiesXYZ:
             )
 
         normalized = {}
-        for label, indices in iterable:
+        for label, entry in iterable:
+            opts = {}
+            if isinstance(entry, dict):
+                indices, opts = entry.get("atoms"), entry
+            else:
+                indices = entry
             indices = tuple(int(i) for i in indices)
             if len(indices) < 4:
                 raise ValueError("Each quadrant entry must contain at least 4 atom indices.")
             normalized[str(label)] = indices
+            self.quadrant_options[str(label)] = {
+                "exclude": (tuple(int(i) for i in opts["exclude"])
+                            if opts.get("exclude") else None),
+                "radius": (float(opts["radius"]) if opts.get("radius") is not None
+                           else None),
+            }
         return normalized
 
     def _get_covalent_radius(self, element):
@@ -505,6 +526,19 @@ class PropertiesXYZ:
     
     ## 5 atom properties ##
     #-- quadrants --#
+    def _quadrant_frame(self, atom_list, quadrant_label):
+        """(kwargs for BuriedVolume, label). Per-entry options win over the defaults."""
+        opts = (getattr(self, "quadrant_options", None) or {}).get(quadrant_label) or {}
+        return dict(
+            metal_index=atom_list[0],
+            radius=opts.get("radius") if opts.get("radius") is not None else self.quadrant_radius,
+            include_hs=True,
+            excluded_atoms=(opts.get("exclude") if opts.get("exclude") is not None
+                            else self.quadrant_excluded_atoms),
+            z_axis_atoms=[atom_list[1], atom_list[2]],
+            xz_plane_atoms=list(atom_list[3:]),
+        )
+
     def get_vbur_quadrants(self):
         """Calculate buried volume in quadrants for all labeled entries in `define_quadrant_list()`."""
         if self.quadrant_list is None:
@@ -523,17 +557,9 @@ class PropertiesXYZ:
         z_axis_atoms = [atom_list[1], atom_list[2]]
         xz_plane_atoms = atom_list[3:]
         quadrant_label = quadrant_label or '_'.join(self._get_atom_label(i) for i in atom_list)
-        
-        vbur = BuriedVolume(
-            self.elements,
-            self.coordinates,
-            metal_center,
-            radius=self.quadrant_radius,
-            include_hs=True,
-            excluded_atoms=self.quadrant_excluded_atoms,
-            z_axis_atoms=z_axis_atoms,
-            xz_plane_atoms=xz_plane_atoms,
-        )
+
+        frame = self._quadrant_frame(atom_list, quadrant_label)
+        vbur = BuriedVolume(self.elements, self.coordinates, **frame)
                 
         vbur.octant_analysis()
                 
@@ -563,17 +589,9 @@ class PropertiesXYZ:
         z_axis_atoms = [atom_list[1], atom_list[2]]
         xz_plane_atoms = atom_list[3:]
         quadrant_label = quadrant_label or '_'.join(self._get_atom_label(i) for i in atom_list)
-        
-        vbur = BuriedVolume(
-            self.elements,
-            self.coordinates,
-            metal_center,
-            radius=self.quadrant_radius,
-            include_hs=True,
-            excluded_atoms=self.quadrant_excluded_atoms,
-            z_axis_atoms=z_axis_atoms,
-            xz_plane_atoms=xz_plane_atoms,
-        )
+
+        frame = self._quadrant_frame(atom_list, quadrant_label)
+        vbur = BuriedVolume(self.elements, self.coordinates, **frame)
                 
         vbur.octant_analysis()
 

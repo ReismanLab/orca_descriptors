@@ -99,3 +99,60 @@ into `records.SKIPPED_CONFORMER`); a new key of the `pruning` block (declared in
 the molecule's `conf_N/` folders exist (`n_dft` is kept/total), `failed` when the ensemble's
 `params.json` hash differs from the one the library was built on (`ensemble_changed`), `off` with
 `orca: off`, `-` otherwise.
+
+---
+
+## The other prune: choosing conformers of a library that is already computed
+
+Everything above is about which conformers get a *job*. A separate, later question is which
+conformers of a finished library are **described**, and it is answered on the laptop by the
+`prune` block of the descriptor spec (`desc_utils/prune.py`), not here.
+
+They are deliberately two things. Stage 5 is hashed into the library's identity: a library built
+with a 5 kcal/mol window is a different library from one built without. The descriptor-side prune
+is a property of the descriptor run, so the same library can be extracted twice under two windows
+and both tables are legitimate — which is the normal case when a library was computed with
+`energy_window_kcal_mol: null` (every conformer) precisely so the choice could be made later.
+
+```yaml
+prune:
+  enabled: true
+  energy_column: uma_energy_hartree   # default: numbering.energy.column
+  energy_window_kcal_mol: 6.0         # kcal/mol above each molecule's own lowest conformer
+  rmsd_threshold_angstrom: 0.01       # symmetric heavy-atom RMSD
+  energy_gate_kcal_mol: 0.2           # pairs further apart in energy are never compared
+  max_automorphisms: 1000
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `false`: every conformer is described, and the block is inert |
+| `energy_column` | `numbering.energy.column` | the energy the window and the clustering order use. It defaults to the numbering table's own column so that the prune, `_lowE` and the Boltzmann weights cannot end up on different energies without the spec saying so |
+| `energy_window_kcal_mol` | `null` | per molecule, against that molecule's lowest conformer |
+| `rmsd_threshold_angstrom` | `null` | greedy leader clustering in **ascending energy order**, so the lowest-energy conformer of a group of duplicates is the one kept; the distance is the heavy-atom RMSD minimised over the automorphisms of the heavy-atom graph, so a relabelling of equivalent atoms is not a different structure |
+| `energy_gate_kcal_mol` | `0.2` | pairs further apart than this in `energy_column` are not compared at all. An empirical shortcut, not a bound: measured on this project's own data, the largest energy gap of a pair below 0.02 Å is 0.04 kcal/mol. Above a threshold of 0.02 Å it is **refused** rather than extrapolated — set it explicitly, or `null` to compare every pair |
+| `max_automorphisms` | `1000` | cap on the permutations tried per pair |
+
+The window runs first, so a conformer outside it never becomes the leader of one inside it.
+
+### What is recorded
+
+`<date>_<name>_pruning.csv`, one row per conformer of the numbering table, kept or dropped:
+`path`, the molecule id, the energy, `prune_delta_e_kcal_mol` (above that molecule's minimum),
+`prune_status` (`kept`, `above_energy_window`, `duplicate`, `no_energy`), and for a duplicate the
+`prune_leader` it collapsed onto with `prune_rmsd_to_leader`. A count in a provenance block that
+cannot be checked afterwards is not provenance, which is why the whole table is written and not
+only the survivors.
+
+The prune runs between `number` and `extract` (`desc_utils/run.py::_apply_prune`), so only the
+survivors are described and the per-conformer table holds exactly the conformers the library is
+built from.
+
+### The automorphism cap is reported, not hidden
+
+A molecule whose heavy-atom graph has more symmetries than `max_automorphisms` is compared against
+an arbitrary subset of them, so its surviving count is an upper bound and can move by a conformer
+or two with the RDKit version. The record carries `prune_n_automorphisms` per conformer and the run
+names every molecule that reached the cap. Measured on the nih2 set, two ligands of 115 are at the
+default cap of 1000, and the counts of the other 113 reproduce the project's own measured ladder
+(`ConfAnalysis-v1/output/rmsd_dedupe_descriptors/.../kept_counts_umaconv_only_*.csv`) exactly.
