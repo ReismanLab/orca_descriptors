@@ -150,3 +150,53 @@ def test_numbering_topology_flags_a_rearranged_geometry(spec, tmp_path):
     assert "bond broken" in df.loc[df["numbering_status"] == "topology_changed", "numbering_notes"].iloc[0]
     assert "topology_changes" in df.columns
     assert len(usable_rows(df, topo_spec, quiet=True)) == 1
+
+
+# --------------------------------------------------------------------------- symmetric matches
+class _SymmetricMol:
+    """A molecule whose SMARTS match is symmetric, standing in for one conformer of a C2 ligand.
+
+    `uniquify=True` is RDKit's behaviour of keeping ONE representative per matched atom SET: for a
+    symmetric core both orientations have the same set, so one of them is discarded, and which one
+    survives depends on RDKit's internal ordering - which differs between conformers of the same
+    molecule. `representative` is that arbitrary choice.
+    """
+
+    ORIENTATIONS = ((3, 2, 1, 0), (0, 1, 2, 3))
+
+    def __init__(self, representative):
+        self.representative = representative
+
+    def GetSubstructMatches(self, patt, uniquify=True, **kw):       # noqa: N802 (RDKit's name)
+        return (self.representative,) if uniquify else self.ORIENTATIONS
+
+
+def _backend(match_selection):
+    from desc_utils.numbering.backends import SmartsBackend
+    return SmartsBackend(
+        [{"name": "core", "smarts": ["[#7]~[#6]~[#6]~[#7]"],
+          "roles": {"N1": 0, "C1": 1, "C2": 2, "N2": 3}, "required": True}],
+        match_selection=match_selection)
+
+
+def test_lowest_indices_is_the_same_labelling_whichever_orientation_rdkit_returns():
+    """Otherwise a C2-symmetric ligand gets different N1/N2 labels in different conformers, the
+    consistency check calls the molecule `inconsistent`, and every one of its conformers is dropped.
+    On the nih2 set that was 22 of 114 ligands and 833 of 4,539 conformers of one library - lost to
+    a labelling ambiguity rather than to anything chemical.
+    """
+    backend = _backend("lowest_indices")
+    labellings = {tuple(backend.number(_SymmetricMol(rep), None)[l]
+                        for l in ("N1", "C1", "C2", "N2"))
+                  for rep in _SymmetricMol.ORIENTATIONS}
+    assert labellings == {(0, 1, 2, 3)}, "lowest_indices must not depend on RDKit's representative"
+
+
+def test_first_match_selection_does_depend_on_it_which_is_why_it_is_not_the_default_here():
+    """`first` is unchanged and still means "RDKit's first match"; the nih2 specs ask for
+    `lowest_indices` precisely because this is what `first` does on a symmetric core."""
+    backend = _backend("first")
+    labellings = {tuple(backend.number(_SymmetricMol(rep), None)[l]
+                        for l in ("N1", "C1", "C2", "N2"))
+                  for rep in _SymmetricMol.ORIENTATIONS}
+    assert len(labellings) == 2

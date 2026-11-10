@@ -44,7 +44,15 @@ class SmartsBackend:
         for stage in self.stages:
             match = None
             for _, patt in stage["patterns"]:
-                matches = mol.GetSubstructMatches(patt)
+                # `uniquify=True` (the default) keeps ONE arbitrary orientation of a symmetric match
+                # per conformer, so `min` over them picks a different orientation in different
+                # conformers of a C2-symmetric ligand (BOX, BiOX, bipy, bisimidazoline) and the
+                # consistency check then reports the molecule as `inconsistent` - 22 of the 115
+                # nih2 ligands, 18% of its conformers, dropped for a labelling ambiguity rather
+                # than for anything chemical. `lowest_indices` therefore asks for every orientation
+                # and takes the lowest, which is the same choice in every conformer.
+                uniquify = self.match_selection != "lowest_indices"
+                matches = mol.GetSubstructMatches(patt, uniquify=uniquify)
                 if matches:
                     match = matches[0] if self.match_selection == "first" else min(matches)
                     break
