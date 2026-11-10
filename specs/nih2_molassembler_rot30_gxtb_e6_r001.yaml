@@ -1,0 +1,179 @@
+# nih2 / molassembler, 30 degree rotation step - g-xTB descriptors on UMA geometries
+#
+# g-xTB single points (the Grimme build of xtb 6.7.1, `--gxtb`: singlepoint + vertical oxidation and
+# reduction + Fukui, no geometry optimisation) on the UMA-refined geometries of the `molassembler_rot30` search,
+# three replicates pooled. Sterics come from morfeus on the same geometry, electronics from the g-xTB
+# output, which `desc_utils.gxtb_condense` writes into `orca_condensed.json` in the ORCA schema.
+#
+# Conformers are pruned before extraction: 6 kcal/mol on the UMA energies, then heavy-atom RMSD
+# de-duplication at 0.01 A keeping the lowest-energy conformer of each group. The parameters are in
+# the name: a different window or threshold is a different library.
+#
+# Run:  python -m desc_utils.run all --spec specs/nih2_molassembler_rot30_gxtb_e6_r001.yaml --jobs 0
+name: nih2_molassembler_rot30_gxtb_e6_r001
+spec_version: 1
+
+data:
+  root: DATA/nih2_molassembler_rot30_gxtb
+  layout: molecule/conformer          # <root>/<InChIKey>/conf_N/
+  conformer_glob: "conf_*"
+  geometry_file: optimization.xyz     # the uma-conv geometry the g-xTB single point was run on
+  molecule_id_column: inchikey
+  condensed_file: orca_condensed.json
+
+atoms:                                # order = column order in the numbering table
+  H1: H
+  Ni: Ni
+  H2: H
+  N1: N
+  C1: C
+  C2: C
+  N2: N
+
+numbering:
+  backend: smarts
+  index_base: 1
+  consistency: per_molecule           # flag molecules whose conformers disagree
+  smarts:
+    match_selection: lowest_indices   # every orientation of a symmetric match, lowest taken: a
+                                      # C2-symmetric ligand (BOX, BiOX, bipy, bisimidazoline)
+                                      # otherwise gets different N1/N2 labels in different
+                                      # conformers and the whole molecule is dropped
+    stages:
+      # Stage 1: the five-membered metallacycle. Three legacy alternatives, tried in order.
+      - name: core_5
+        smarts:
+          - "[H][Ni]1([H])[N]C=C[N]1"
+          - "[H][Ni]1([H])[N]CC[N]1"
+          - "[H][Ni]1([H])~[#7]~[#6]~[#6]~[#7]~1"
+        roles: {H1: 0, Ni: 1, H2: 2, N1: 3, C1: 4, C2: 5, N2: 6}
+        required: false
+      # Stage 2: BOX ligands form a six-membered metallacycle (N=C-C(R2)-C=N); C1/C2 are then the
+      # imine carbons, so the C1-C2 "bond" and the N1-C1-C2-N2 dihedral are through-space measures.
+      - name: core_6
+        smarts: "[H][Ni]1([H])~[#7]~[#6]~[#6]~[#6]~[#7]~1"
+        roles: {H1: 0, Ni: 1, H2: 2, N1: 3, C1: 4, C2: 6, N2: 7}
+        required: false
+      # Stage 3: PyOx orientation. Overrides N1/C1/C2/N2 so N1 is the pyridine nitrogen and N2 the
+      # oxazoline one. Not required: other ligands keep their stage-1 or stage-2 labels.
+      - name: pyox_orient
+        smarts: "[#7]~1(~[#28]~2)~[#6](~[#6]3~[#7]2~[#6]~[#6]~[#8]~3)~[#6]~[#6]~[#6]~[#6]1"
+        roles: {N1: 0, C1: 2, C2: 3, N2: 4}
+        required: false
+  orient: []
+  annotators: [lnih2_ligand_class]    # ligand_type (core_5/core_6) and ligand_class (pyox, biox, ...)
+  smiles:
+    source: registry                  # molecule_registry.json, written by `orcadesc submit`.
+    mode: strip_atoms                 #   NOT `geometry`: bond orders perceived from a metal complex
+    strip: [Ni]                       #   give the dihydro tautomer, whose InChIKey no longer matches
+                                      #   the folder and which no descriptor library can be joined on.
+  energy:
+    source: xyz_comment               # `energy=<hartree>` of the extended-xyz comment line
+    key: energy
+    units: hartree
+    column: uma_energy_hartree        # a UMA energy, not an SCF one, and the table must say so
+
+descriptors:
+  orca:
+    xyz:                              # morfeus on the geometry file; needs no ORCA output
+      atoms: [H1, H2, C1, C2, N1, N2, Ni]
+      bonds: &bonds
+        - [C1, N1]
+        - [N1, C1]
+        - [C2, N2]
+        - [N2, C2]
+        - [Ni, N1]
+        - [Ni, N2]
+        - [Ni, H1]
+        - [Ni, H2]
+        - [C1, C2]
+        - [C2, C1]
+      angles: &angles
+        - [H2, Ni, H1]
+        - [Ni, N1, C1]
+        - [Ni, N2, C2]
+        - [N1, C1, C2]
+        - [N2, C2, C1]
+        - [N1, Ni, N2]
+        - [C1, Ni, C2]
+      dihedrals:
+        - [N1, C1, C2, N2]
+        - [C1, C2, N2, Ni]
+        - [C2, C1, N1, Ni]
+      # BUNNY's own frame, from its get_vbur_quadrants_octants call site: the metal at
+      # the centre, the two hydrides EXCLUDED from the volume, z along N1->N2 and the xz
+      # plane fixed by N2, at 5.0 A. The label is `Ni`, so the columns come out named
+      # `%Vbur_Ni_octant_+,+,+` exactly as the published library names them. Note this
+      # radius is the DESCRIPTOR one; the N1/N2 decision below uses 6.5 A.
+      quadrants:
+        - label: Ni
+          atoms: [Ni, N1, N2, N2]
+          exclude: [H1, H2]
+          radius: 5.0
+      vbur_radii: [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+      # false, not true: the hemisphere pass changes WHICH atom `N1` is without changing
+      # one column name, so a cached xyz.json would be reused under the old numbering and
+      # the check in data_extraction compares names only. It cannot catch this.
+      use_cached_json: false
+    charges:
+      atoms: [H1, H2, C1, C2, N1, N2, Ni]
+      basename: singlepoint
+    # `nbo` is deliberately absent: g-xTB has no NBO analysis and gxtb_condense writes that section
+    # empty on purpose, so every NBO column would be NaN and then dropped.
+    redox:
+      atoms: [H1, H2, C1, C2, N1, N2, Ni]
+      prefixes: [mulliken]            # the ONLY prefix that fills here, and the honest one: g-xTB's
+                                      # charges are Mulliken-type (the condensed file says so), it has
+                                      # no NPA, Hirshfeld or CM5 analysis, and `cm5` is derived from
+                                      # Hirshfeld - with `cm5` or `nbo_charge` all 21 Fukui columns
+                                      # come out empty while IP/EA/hardness still fill, so the loss
+                                      # is silent. Measured: 21 of 21 filled with `mulliken`.
+      nbo_block_map: {singlepoint: 1, oxidation: 2, reduction: 3}
+  descripytor:
+    input: {kind: json}
+    charges: [H1, H2, C1, C2, N1, N2, Ni]
+    sterimol: *bonds
+    bond_length: *bonds
+    charge_diff: *bonds
+    # the vibration families are left out: these runs have freq_calc: false (a numerical Hessian is
+    # expensive and fails on metal complexes), so every vibrational column would be empty
+    dipole:
+      - [Ni, N2, N1]                  # origin, y-axis atom, xy-plane atom
+    bond_angle: *angles
+    radii: CPK
+    drop_atoms: []
+
+# N1/N2 by BUNNY's convention rather than by SMARTS match order: the bulkier donor is N2,
+# decided on each molecule's lowest-energy conformer from the buried-volume hemispheres
+# and applied to all of its conformers. PyOx keeps its own rule (N1 aromatic).
+hemisphere:
+  enabled: true
+  centre: Ni
+  pairs: [[N1, N2], [C1, C2]]         # C1/C2 follow their nitrogens
+  exclude: [H1, H2]
+  radius: 6.5                         # the deciding sphere, not the descriptor one
+  skip_classes: [pyox]
+
+prune:                                # which conformers are described; see docs/stages/5_pruning.md
+  enabled: true
+  energy_column: uma_energy_hartree
+  energy_window_kcal_mol: 6.0
+  rmsd_threshold_angstrom: 0.01
+  energy_gate_kcal_mol: 0.2
+
+aggregate:
+  group_by: inchikey
+  energy_column: uma_energy_hartree   # the energy the prune used, so one quantity orders everything
+  temperature_K: 298.15
+  kB_hartree_per_K: 3.166811563e-6
+  stats: [min, max, lowE, boltz]
+  carry_first: [smiles, smiles_noH, ligand_class]
+
+filter:
+  enabled: false
+
+output:
+  numbering_csv: "{date}_{name}_atom_numbering_results.csv"
+  pruning_csv: "{date}_{name}_pruning.csv"
+  per_conformer_csv: "{date}_{name}_combined_descriptors.csv"
+  aggregated_csv: "{date}_{name}_descriptors.csv"

@@ -45,10 +45,11 @@ to the next (`output` section of the spec).
 
 | You changed | Run |
 |---|---|
-| Descriptor terms only | `python -m desc_utils.run extract --spec S` then `aggregate --spec S` (morfeus geometry is cached in `<conf>/xyz.json`; add `--overwrite-xyz-json` if you changed `vbur_radii` or `quadrants`) |
+| Descriptor terms only | `python -m desc_utils.run extract --spec S` then `aggregate --spec S` (morfeus geometry is cached in `<conf>/xyz.json`; add `--overwrite-xyz-json` if you changed `vbur_radii`, or set `use_cached_json: false` if you changed the **numbering** - the cache check compares column NAMES, and a relabelled `N1` changes which atom a column describes without changing one name, so nothing can detect it. Adding `quadrants` is detected.) |
 | Atom labels or numbering rules | `all --spec S`, or `number --spec S` then `all --spec S --numbering <csv>` after hand corrections |
 | Added conformer folders on the cluster | condense on the cluster (existing files are skipped), rsync, then `all --spec S` |
 | Only the aggregation temperature | `aggregate --spec S` |
+| The `prune` block (another energy window or RMSD threshold) | `extract --spec S` then `aggregate --spec S`; the prune runs between numbering and extraction, so the numbering table is reused as it is |
 | You want the noise filter (correlation / variance pruning) for a modelling set | `aggregate --spec S --filter`, or set `filter.enabled: true` in the spec; needs enough molecules for correlations to mean anything (with two molecules every column is perfectly correlated and one survives) |
 
 ### Conformers that need a look
@@ -74,9 +75,11 @@ A spec has these sections:
 | `data` | `root` folder (`DATA/<LIB>`), `layout: molecule/conformer`, `conformer_glob`, `geometry_file` (the xyz every stage reads: numbering, morfeus, comment-line energy), `molecule_id_column`, `condensed_file` (`null` = raw ORCA files only). |
 | `atoms` | Ordered map `label -> expected element` (`null` = any). Labels are the only way descriptors refer to atoms. |
 | `numbering` | `backend` (`smarts`, `manual`, `first_n`, `molalign`), `index_base`, per-backend block, optional `orient` rules, `annotators`, `smiles` mode, `energy` (`source: orca`, the SCF energy of `basename`, column `SCF_energy`; or `source: xyz_comment`, the `key=` value of the extended-xyz comment line in `units`, converted to Hartree, with a mandatory `column` name that may not be `SCF_energy`). |
-| `descriptors.orca` | Four families with label lists: `xyz` (atoms, bonds, angles, dihedrals, quadrants, `vbur_radii`), `charges`, `nbo` (`homo_lumo_rank_range`, `nbo_block_index`, `spin`), `redox` (Fukui `prefixes`, `nbo_block_map`). |
+| `descriptors.orca` | Four families with label lists: `xyz` (atoms, bonds, angles, dihedrals, [quadrants](#quadrant-and-octant-frames), `vbur_radii`), `charges`, `nbo` (`homo_lumo_rank_range`, `nbo_block_index`, `spin`), `redox` (Fukui `prefixes`, `nbo_block_map`). |
 | `descriptors.descripytor` | DescriPyTor "Schema B" keys with label tuples: `charges`, `charge_diff`, `sterimol`, `bond_length`, `bond_angle`, `stretching_vibration`, `bending_vibration`, `dipole`, plus thresholds, `radii`, `drop_atoms`. |
 | `aggregate` | `group_by`, `energy_column` (defaults to `numbering.energy.column`), `temperature_K`, `kB_hartree_per_K`, `stats`, `carry_first`. |
+| `hemisphere` | How `N1`/`N2` are told apart: by SMARTS match order (off, the default) or by BUNNY's steric convention (on). See [Donor labelling](#donor-labelling-the-hemisphere-block). |
+| `prune` | Which conformers of the finished library are described: `energy_window_kcal_mol` (per molecule) and `rmsd_threshold_angstrom` (heavy-atom RMSD, lowest-energy conformer kept), on `energy_column`. Off by default. Not stage 5 — see [stages/5_pruning.md](stages/5_pruning.md#the-other-prune-choosing-conformers-of-a-library-that-is-already-computed). |
 | `filter` | Every option of `filter_numeric_descriptors`, plus `metal_label` (the metal label, or `null` for organic molecules). |
 | `output` | File names of the three stage outputs and of `check_csv`, the list of conformers to look at; `{date}` and `{name}` are filled in at run time. |
 
@@ -121,6 +124,80 @@ annotator columns (e.g. `ligand_class`), `numbering_backend`,
 `numbering_status` (`ok`, `incomplete`, `failed`, `element_mismatch`, `inconsistent`,
 `topology_changed`) and `numbering_notes`. The table is a plain CSV so it can be inspected or corrected
 by hand; rows whose status is not `ok` are skipped downstream.
+
+### Quadrant and octant frames
+
+A `quadrants` entry asks for the buried volume split into four quadrants and eight octants
+around one atom. Unlike every other term it needs more than a list of labels, because the
+frame is a construction: which atom is the centre, which two define the z axis, which fixes
+the xz plane, which atoms are taken **out** of the volume, and at what radius.
+
+```yaml
+quadrants:
+  - label: Ni                  # the column name: `%Vbur_Ni_octant_+,+,+`
+    atoms: [Ni, N1, N2, N2]    # centre, z-axis pair, then the xz-plane atom(s)
+    exclude: [H1, H2]          # removed from the volume
+    radius: 5.0
+```
+
+The older positional form (`[Ni, N1, N2, N2]` with no settings) still works and takes the
+class defaults - 6.5 A with nothing excluded. **Say the radius and the exclusions
+explicitly** if you are reproducing a published library: the column name carries neither,
+so a frame that differs from the one the names imply is not visible anywhere in the output.
+The block above is BUNNY's, from its own `get_vbur_quadrants_octants` call site.
+
+Octant columns are the only descriptors whose value depends on the ligand's handedness:
+reflection permutes the eight labels, and which permutation depends on this frame. Record
+it wherever the library's metadata lives, or the columns cannot be transferred to a mirror
+image later.
+
+### Donor labelling (the `hemisphere` block)
+
+The SMARTS stages number a complex in whatever order the pattern matched. That is
+reproducible - `match_selection: lowest_indices` makes one molecule get the same labels in
+all of its conformers - but it is **arbitrary**, so `N1` is not the same position from one
+molecule to the next and a descriptor named for it does not mean one thing across a library.
+
+`hemisphere.enabled: true` replaces that with BUNNY's convention (SI S4.3.1): **the
+sterically bulkier donor is `N2`**, with `C1`/`C2` following their nitrogens. The rule is
+taken from BUNNY's own property-collection code rather than from the SI prose, and three
+details differ from what the prose alone suggests:
+
+* the hemispheres are **quadrant sums** in the morfeus octant frame - north is `+,+` plus
+  `+,-`, south is `-,-` plus `-,+`;
+* the deciding sphere is **6.5 A**, while the octant *descriptors* are computed at 5.0 A
+  (the SI quotes 5 A, which is the descriptor radius, not this one);
+* the decision is made once on each molecule's **lowest-energy conformer** and applied to
+  every conformer of it. Per conformer it would give one ligand different labels in
+  different conformers, which is what `lowest_indices` exists to prevent.
+
+`skip_classes` holds the families that keep their own convention; for PyOx the SI fixes
+`N1` as the aromatic nitrogen, so sterics get no vote.
+
+```yaml
+hemisphere:
+  enabled: true
+  centre: Ni
+  pairs: [[N1, N2], [C1, C2]]   # swapped together; the FIRST pair decides
+  exclude: [H1, H2]             # taken out of the volume, as BUNNY does
+  radius: 6.5                   # the deciding sphere, not the descriptor one
+  skip_classes: [pyox]
+  class_column: ligand_class
+  energy_column: null           # defaults to numbering.energy.column
+```
+
+The pass runs between `number` and the prune, and **writes the corrected table back over
+the numbering CSV**: anything reading the old one would mark a different atom than the
+descriptors were computed on. It is a fixed point - once the bulkier donor is `N2` the
+frame flips with it and a second pass swaps nothing - so re-running a spec is safe.
+
+Two things to watch in the record. A molecule that could not be decided keeps the numbering
+it had and is **not** counted as a swap. And a near-tie is a real state: on a
+constitutionally symmetric ligand the two donors are equivalent, so the margin is ~0 and
+the label is close to arbitrary - harmless, because the descriptors on the two sides are
+then near-equal too. Measured on the 114-molecule `nih2` set: 69 PyOx held out, 45 decided,
+22 swapped, and 37 of the 38 two-donor ligands are constitutionally symmetric, so their
+labels come from 3D alone.
 
 ### Connectivity check (`numbering.topology`)
 
@@ -199,6 +276,8 @@ metal 4f Rydbergs, core orbitals, anisotropic NMR terms, NHO φ/θ angles, near-
 | `<date>_<name>_atom_numbering_results.csv` | conformer | 1-based index of every label, SCF energy, SMILES, `numbering_status` |
 | `<date>_<name>_combined_descriptors.csv` | conformer | `orca_job_status` (`completed`, `running`, `failed`; `unknown` for files condensed before 2026-09-23, `missing` for a folder with no file), `n_conformer_folders` of its molecule, what its ORCA job cost (`orca_run_time_s`, `orca_nprocs`, `orca_cpu_hours`, `orca_step_<step>_s` per compound step; empty for files condensed before 2026-10-02), then every descriptor of both engines, columns named by label (`charge_NBO_Ni`, `%Vbur_atom_Ni_radius_3.5`, `B1_Ni-N1`, ...) |
 | `<date>_<name>_descriptors.csv` | molecule | the spreadsheet: `inchikey`, `smiles`, `smiles_noH` (implicit hydrogens), `n_conformers` (rows aggregated), `n_conformers_completed`, `n_conformer_folders` (folders on disk), `all_conformers_completed` (`True` / `False`; empty when a status is `unknown`), `dft_cpu_hours` and `dft_<step>_cpu_hours` (core-hours of the molecule's ORCA jobs, summed; the ensemble's cost is in `orcadesc cost --csv`, joinable on `inchikey`), then `<descriptor>_min`, `_max`, `_lowE` (lowest-energy conformer) and `_boltz` (Boltzmann average at `temperature_K`); every descriptor is kept unless `--filter` is given |
+| `<date>_<name>_hemisphere.csv` | molecule | only with `hemisphere.enabled`: `decided`, `swapped`, the `north`/`south` buried volumes, the `conformer` they were measured on, the `ligand_class`, and a `reason` when the molecule was not decided |
+| `<date>_<name>_pruning.csv` | conformer | only with `prune.enabled`: `prune_status` (`kept`, `above_energy_window`, `duplicate`, `no_energy`), `prune_delta_e_kcal_mol`, and for a duplicate the `prune_leader` it collapsed onto with `prune_rmsd_to_leader` |
 | `<date>_<name>_conformers_to_check.csv` | conformer needing a look | only written when there is one (today's copy is removed otherwise): `path`, `reason`, `numbering_status`, `numbering_notes`, `orca_job_status` |
 
 Conventions worth knowing when reading the spreadsheet: energies are in Hartree, HOMO/LUMO in eV,

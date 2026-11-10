@@ -159,6 +159,101 @@ def cmd_number(args) -> int:
     return 0
 
 
+def _report_empty_columns(df, spec) -> None:
+    """Name the requested descriptor columns that came out empty for every conformer.
+
+    `aggregate` drops all-NaN columns, so a family that produced nothing simply does not appear in
+    the spreadsheet and the run looks clean. That is how a g-xTB library was extracted with all 21
+    Fukui columns empty - `descriptors.orca.redox.prefixes: [cm5]` cannot fill on g-xTB output,
+    which has no Hirshfeld charges to derive CM5 from, while the IP/EA/hardness columns of the same
+    family filled normally and hid it. Saying so at extraction time is the only cheap check.
+    """
+    import numpy as np
+
+    meta = {"path", "xyz_name", "inchi", "inchikey", "smiles", "smiles_noH", "ligand_type",
+            "ligand_class", "numbering_status", "numbering_notes", "numbering_backend",
+            "orca_job_status", "n_conformer_folders", *spec.labels}
+    cols = [c for c in df.columns if c not in meta and not str(c).startswith(("orca_run", "orca_step", "orca_nprocs", "orca_cpu"))]
+    empty = [c for c in cols if df[c].isna().all()]
+    if not empty:
+        return
+    print(f"NOTE: {len(empty)} of {len(cols)} descriptor column(s) are empty for every conformer "
+          f"and will not reach the spreadsheet: "
+          f"{', '.join(map(str, empty[:12]))}{' ...' if len(empty) > 12 else ''}",
+          file=sys.stderr)
+
+
+def _apply_hemisphere(spec, df_num, args, repo_root):
+    """BUNNY's N1/N2 convention, applied to the numbering table before anything reads it.
+
+    Before the prune, so the record covers every conformer rather than the survivors, and
+    long before extraction, because every site-labelled descriptor is computed from these
+    columns. The re-labelled table is written back over the numbering csv: a stage that
+    read the un-corrected one would silently describe different atoms under the same name.
+    """
+    cfg = spec.hemisphere
+    if not cfg.get("enabled"):
+        return df_num
+    from desc_utils import hemisphere as hs
+
+    df_num, record = hs.relabel(df_num, cfg, molecule_column=spec.data["molecule_id_column"],
+                                geometry_file=spec.data["geometry_file"])
+    out = _resolve(_output_name(spec, "numbering_csv")).with_name(
+        _output_name(spec, "numbering_csv").replace("atom_numbering_results", "hemisphere"))
+    record.to_csv(out, index=False, encoding="utf-8")
+    # Written back, not kept in memory: the numbering table on disk is what the modelling
+    # app reads to mark the site atom in 3D, so a table saying N1 is one atom beside a
+    # descriptor computed on the other is the silent disagreement this pass exists to end.
+    # Idempotent - once the bulkier donor IS N2 the frame flips with it, north wins, and a
+    # second pass swaps nothing.
+    table = _resolve(_output_name(spec, "numbering_csv"))
+    if table.exists():
+        df_num.to_csv(table, index=False, encoding="utf-8")
+    info = hs.summary(record)
+    print(f"hemisphere: {info['n_swapped']} of {info['n_decided']} molecules swapped "
+          f"({info['n_skipped_by_class']} kept their class convention, "
+          f"{info['n_undecided'] - info['n_skipped_by_class']} undecided); "
+          f"record in {out}")
+    if info["n_within_0p5_percent"]:
+        # a symmetric ligand's two donors ARE the same atom, so the winner is noise and
+        # the labels are arbitrary - harmless there, but not something to discover later
+        print(f"hemisphere: {info['n_within_0p5_percent']} molecule(s) decided on a margin "
+              f"under 0.5 %Vbur (smallest {info['smallest_margin']:.3f}); on a symmetric "
+              f"ligand the two donors are equivalent and the label is arbitrary")
+    return df_num
+
+
+def _apply_prune(spec, df_num, args, repo_root):
+    """The prune block, between numbering and extraction, with its record written beside the tables.
+
+    Pruning here rather than after extraction is not only cheaper: `aggregate` would otherwise have
+    to be told which rows to ignore, and a per-conformer table holding rows the library does not
+    describe is a table two stages can disagree about.
+    """
+    cfg = spec.prune
+    if not cfg.get("enabled"):
+        return df_num
+    from desc_utils import prune as pr
+
+    jobs = getattr(args, "jobs", 1)
+    keep, record = pr.prune(df_num, cfg, molecule_column=spec.data["molecule_id_column"],
+                            geometry_file=spec.data["geometry_file"], jobs=jobs)
+    out = _resolve(_output_name(spec, "pruning_csv"))
+    record.to_csv(out, index=False, encoding="utf-8")
+    info = pr.summary(record, int(cfg.get("max_automorphisms", pr.MAX_AUTOMORPHISMS)))
+    print(f"prune: {info['n_kept']} of {info['n_conformers']} conformers kept "
+          f"(window {cfg.get('energy_window_kcal_mol')} kcal/mol dropped {info['n_above_energy_window']}, "
+          f"RMSD {cfg.get('rmsd_threshold_angstrom')} A dropped {info['n_duplicates']}, "
+          f"{info['n_without_energy']} had no energy); record in {out}")
+    if info["molecules_at_automorphism_cap"]:
+        # their heavy-atom graph has more symmetries than were tried, so their count is an upper
+        # bound and can move by a conformer or two with the RDKit version
+        print(f"prune: {len(info['molecules_at_automorphism_cap'])} molecule(s) reached the "
+              f"{cfg.get('max_automorphisms')}-automorphism cap: "
+              f"{', '.join(info['molecules_at_automorphism_cap'])}")
+    return keep
+
+
 def cmd_extract(args) -> int:
     from desc_utils.extract import run_extraction
     from desc_utils.numbering import read_numbering_table
@@ -167,12 +262,15 @@ def cmd_extract(args) -> int:
     # every row, including the badly numbered ones: run_extraction keeps their metadata and skips the engines
     df_num = read_numbering_table(_resolve(args.numbering) if args.numbering else _existing_output(spec, "numbering_csv"),
                                   spec, usable=False)
+    df_num = _apply_hemisphere(spec, df_num, args, REPO_ROOT)
+    df_num = _apply_prune(spec, df_num, args, REPO_ROOT)
     families = args.families.split(",") if args.families else None
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, families=families,
                         overwrite_xyz_json=args.overwrite_xyz_json, jobs=args.jobs)
     out = _resolve(args.out, _output_name(spec, "per_conformer_csv"))
     df.to_csv(out, index=False)
     print(f"wrote {out}  rows={len(df)}  columns={df.shape[1]}")
+    _report_empty_columns(df, spec)
     _report_check(df, df_num, spec)
     return 0
 
@@ -205,10 +303,13 @@ def cmd_all(args) -> int:
         num_out = _resolve(_output_name(spec, "numbering_csv"))
         write_numbering_table(df_num, num_out)
         print(f"wrote {num_out}  rows={len(df_num)}  status={df_num['numbering_status'].value_counts().to_dict()}")
+    df_num = _apply_hemisphere(spec, df_num, args, REPO_ROOT)
+    df_num = _apply_prune(spec, df_num, args, REPO_ROOT)
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, jobs=args.jobs)
     per_conf = _resolve(_output_name(spec, "per_conformer_csv"))
     df.to_csv(per_conf, index=False)
     print(f"wrote {per_conf}  rows={len(df)}  columns={df.shape[1]}")
+    _report_empty_columns(df, spec)
     agg = aggregate_conformers(df, spec)
     if _use_filter(spec, args):
         agg, _ = apply_filter(agg, spec)

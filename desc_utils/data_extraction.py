@@ -280,6 +280,14 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
     return flat
 
 
+def _quadrant_label(quadrant) -> str:
+    """The column label of one quadrant/octant entry: its own, else the metal."""
+    if isinstance(quadrant, dict):
+        atoms = list(quadrant.get("atoms") or [])
+        return str(quadrant.get("label") or (atoms[0] if atoms else "?"))
+    return "_".join(quadrant)
+
+
 def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, overwrite_json=False, vbur_radii=None,
                         progress=True, geometry_file=od.PropertiesXYZ.DEFAULT_GEOMETRY_FILE):
     """Morfeus descriptors of ``geometry_file`` in every conformer folder of ``df`` (``optimization.xyz`` by default).
@@ -297,7 +305,14 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
         # A cached xyz.json is only trusted when it holds every column the current spec asks for;
         # otherwise the atom map changed since it was written and the geometry is recomputed.
         expected_keys = [f"SASA_{a}" for a in atoms] + [f"Bond_{b[0]}_{b[1]}" for b in bonds] \
-            + [f"Angle_{x[0]}_{x[1]}_{x[2]}" for x in angles] + [f"Dihed_{'_'.join(d)}" for d in dihedrals]
+            + [f"Angle_{x[0]}_{x[1]}_{x[2]}" for x in angles] + [f"Dihed_{'_'.join(d)}" for d in dihedrals] \
+            + [f"%Vbur_{_quadrant_label(q)}_octant_+,+,+" for q in (quadrants or [])]
+        # The octant key is in the list because it was NOT, and a library that had been
+        # extracted once without quadrants then kept every cached xyz.json and quietly
+        # produced no octant column at all. Note what this check still cannot see: it
+        # compares NAMES, and the hemisphere convention changes which atom `N1` is
+        # without changing one column name - so a re-numbered library must be extracted
+        # with `use_cached_json: false`, not merely with a wider expected-key list.
         cache_ok = P.results is not None and len(P.results) > 1 and set(expected_keys) <= set(P.results)
         if len(P.results) > 1 and not overwrite_json and not cache_ok:
             print(f"{P.cache_file} in {df.loc[row.Index, 'path']} lacks columns for the current spec; recomputing.")
@@ -355,10 +370,23 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
 
             # Quadrant properties
             if quadrants is not None:
-                quadrant_map = {
-                    "_".join(quadrant): tuple(int(df.loc[row.Index, atom]) for atom in quadrant)
-                    for quadrant in quadrants
-                }
+                quadrant_map = {}
+                for quadrant in quadrants:
+                    if isinstance(quadrant, dict):
+                        atoms = list(quadrant["atoms"])
+                        # The label defaults to the metal rather than to every atom in the
+                        # frame, so the column is `%Vbur_Ni_octant_+,+,+` as BUNNY names it
+                        # and not `%Vbur_Ni_N1_N2_N2_octant_+,+,+`.
+                        label = str(quadrant.get("label") or atoms[0])
+                        quadrant_map[label] = {
+                            "atoms": tuple(int(df.loc[row.Index, a]) for a in atoms),
+                            "exclude": tuple(int(df.loc[row.Index, a])
+                                             for a in (quadrant.get("exclude") or [])) or None,
+                            "radius": quadrant.get("radius"),
+                        }
+                    else:
+                        quadrant_map["_".join(quadrant)] = tuple(
+                            int(df.loc[row.Index, atom]) for atom in quadrant)
                 P.define_quadrant_list(quadrant_map)
                 P.get_vbur_quadrants()
                 P.get_vbur_octants()
