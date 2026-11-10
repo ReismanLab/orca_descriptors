@@ -24,7 +24,7 @@ import pandas as pd
 import pytest
 
 from desc_utils.aggregate import aggregate_conformers, apply_filter
-from desc_utils.extract import run_extraction
+from desc_utils.extract import duplicate_twin, run_extraction
 from desc_utils.extract.descripytor import extract_descripytor
 from desc_utils.numbering import build_numbering_table, read_numbering_table
 from desc_utils.spec import load_spec
@@ -32,6 +32,7 @@ from desc_utils.spec import load_spec
 pytestmark = pytest.mark.slow
 LABELS = ["H1", "Ni", "H2", "N1", "C1", "C2", "N2"]
 TOL = 1e-8
+TWIN_TOL = 1e-6
 
 
 @pytest.fixture(scope="module")
@@ -44,7 +45,26 @@ def numbering_ref(repo_root):
     return pd.read_csv(repo_root / "tests/reference/atom_numbering_results.csv")
 
 
+def _with_dropped_twins(ref: pd.DataFrame, new: pd.DataFrame, labels) -> tuple[pd.DataFrame, list[str]]:
+    """Reference columns that run_extraction now drops as duplicates are compared to the column kept instead.
+
+    That is the morfeus/NBO twin of a DescriPyTor column, or the ascending-order column of a direction-free
+    descriptor (negated for the signed NBO charge difference). Returns the frame with those columns filled
+    in, and their names: the 2026-09-22 reference computed the DescriPyTor angles itself, so they match the
+    morfeus angles to ~1e-7 degrees, not 1e-8.
+    """
+    new, twins = new.copy(), []
+    for c in ref.columns:
+        twin = duplicate_twin(c, new.columns, labels) if c not in new.columns else None
+        if twin is not None:
+            new[c] = twin[1] * new[twin[0]]
+            twins.append(c)
+    return new, twins
+
+
 def _assert_close(ref: pd.DataFrame, new: pd.DataFrame, cols, tol=TOL):
+    if not cols:
+        return
     a, b = ref[cols].astype(float), new[cols].astype(float)
     assert int((a.isna() != b.isna()).sum().sum()) == 0, "NaN pattern differs"
     diff = (a - b).abs().max()
@@ -84,11 +104,12 @@ def test_full_pipeline_reproduces_aggregated_csv(lnih2, repo_root):
     num = read_numbering_table(repo_root / "tests/reference/atom_numbering_results.csv", lnih2)
     per_conf = run_extraction(lnih2, num, repo_root, progress=False)
     agg = aggregate_conformers(per_conf, lnih2)
-    new = agg.set_index("inchikey").reindex(ref.index)
+    new, twins = _with_dropped_twins(ref, agg.set_index("inchikey").reindex(ref.index), lnih2.labels)
     numeric = [c for c in ref.columns if pd.api.types.is_numeric_dtype(ref[c])]
     missing = [c for c in numeric if c not in new.columns]
     assert not missing, f"{len(missing)} reference columns missing, e.g. {missing[:5]}"
-    _assert_close(ref, new, numeric)
+    _assert_close(ref, new, [c for c in numeric if c not in twins])
+    _assert_close(ref, new, [c for c in numeric if c in twins], tol=TWIN_TOL)
     filtered, report = apply_filter(agg, lnih2)
     assert report["final_numeric_count"] > 300
     assert {"inchikey", "inchikey_folder", "smiles", "ligand_class"} <= set(filtered.columns)
@@ -101,9 +122,10 @@ def test_test_molecules_pipeline(repo_root):
     assert (num[["at1", "at2"]].astype(int).values == [1, 2]).all()
     per_conf = run_extraction(spec, num, repo_root, progress=False)
     agg = aggregate_conformers(per_conf, spec)
-    new = agg.set_index("inchikey").reindex(ref.index)
+    new, twins = _with_dropped_twins(ref, agg.set_index("inchikey").reindex(ref.index), spec.labels)
     numeric = [c for c in ref.columns if pd.api.types.is_numeric_dtype(ref[c])]
     missing = [c for c in numeric if c not in new.columns]
     assert not missing, f"{len(missing)} reference columns missing, e.g. {missing[:5]}"
-    _assert_close(ref, new, numeric)
+    _assert_close(ref, new, [c for c in numeric if c not in twins])
+    _assert_close(ref, new, [c for c in numeric if c in twins], tol=TWIN_TOL)
     assert (new["Vertical_Ionization_Potential_boltz"] > 0).all()   # IP = E(cation) - E(neutral)
