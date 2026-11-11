@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from bceg.config import Config
-from bceg.external import available_cpus, cpu_model, gpu_names, workdir
+from bceg.external import allocated_cpus, cpu_model, gpu_names, workdir
 from bceg.inputs import InputMolecule, load_inputs, update_index
 from bceg.layout import MethodDir, method_dir
 from bceg.provenance import ParamsMismatch, check_or_write, make_params, read_record, write_record
@@ -208,7 +208,7 @@ def _env_record() -> dict:
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
         "slurm_partition": os.environ.get("SLURM_JOB_PARTITION"),
-        "cpus": available_cpus(),
+        "cpus": allocated_cpus(),
         "cpu_model": cpu_model(),
         "gpus": list(gpu_names()),
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
