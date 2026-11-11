@@ -245,13 +245,21 @@ step `slurm: {ntasks: N, cpus_per_task: 1}` and `nprocs: N`. A step with `ntasks
 unless it sets `nodes`: spread over several nodes, the chained post-optimisation would see only the
 first node's CPUs (one UMA worker where `ntasks` were asked for).
 
+GOAT itself starts each worker with `mpirun` on its own node. Workers that find no free slot die
+("All nodes which are allocated for this job are already filled"), and GOAT still reports a global
+minimum from the ones left, which under-samples the ensemble. The SmI2 runs of 2026-10-28 hit this
+(4 CPUs over 2-4 nodes, 1-3 of 8 workers). To prevent it, the run refuses to start on an allocation
+that spans several nodes or holds fewer CPUs than `nprocs`. After the run, it fails when fewer distinct
+workers (`goat.goat.<iter>.<worker>.out`) reported back than `Final number of workers`. A run that
+passes records `details.workers: {defined, launched}`.
+
 | `params` | Default | Meaning |
 |---|---|---|
 | `method` | `XTB` | level of the GOAT run (simple-input keyword) |
 | `keywords` | `""` | additional simple-input keywords |
 | `goat_block` | `{}` | `key: value` lines inside `%goat ... end`, e.g. `{MaxEn: 6.0}` |
 | `seed_offset` | `0` | see above |
-| `nprocs` | job's CPUs | resource: `%pal nprocs` |
+| `nprocs` | job's CPUs on its node | resource: `%pal nprocs` |
 | `maxcore` | `2000` | resource: `%maxcore`, MB per process |
 | `orca_cmd` | `orca` | resource: the ORCA binary; use the absolute path for parallel runs |
 

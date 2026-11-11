@@ -66,7 +66,7 @@ def test_local_run_layout_and_skip(project):
 
 def test_compute_usage_recorded(project, monkeypatch):
     root, write = project
-    monkeypatch.setattr("bceg.tasks.available_cpus", lambda: 8)
+    monkeypatch.setattr("bceg.tasks.allocated_cpus", lambda: 8)
     monkeypatch.setattr("bceg.tasks.gpu_names", lambda: ("NVIDIA A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"))
     run_local(Config.load(write()))
 
@@ -82,7 +82,7 @@ def test_compute_usage_recorded(project, monkeypatch):
 def test_compute_usage_recorded_on_failure(project, monkeypatch):
     """A run that dies still costs core-hours; the failed record must carry them."""
     root, write = project
-    monkeypatch.setattr("bceg.tasks.available_cpus", lambda: 4)
+    monkeypatch.setattr("bceg.tasks.allocated_cpus", lambda: 4)
     monkeypatch.setattr("bceg.tasks.gpu_names", lambda: ())
     run_local(Config.load(write(params="{n_confs: 0}")))
     rec = json.loads((root / "results" / "none" / BUTANE / "etkdg" / "run_1.json").read_text())
@@ -283,7 +283,7 @@ def test_search_usage_is_split_by_phase(project, fake_xtb, monkeypatch):
     from bceg import geometry
 
     root, write = project
-    monkeypatch.setattr("bceg.tasks.available_cpus", lambda: 4)
+    monkeypatch.setattr("bceg.tasks.allocated_cpus", lambda: 4)
     monkeypatch.setattr("bceg.tasks.gpu_names", lambda: ("GPU-X",))
     md = root / "results" / "none" / BUTANE / "etkdg"
 

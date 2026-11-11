@@ -23,19 +23,22 @@ def find_executable(name: str) -> str:
     return path
 
 
-def available_cpus() -> int:
-    """CPUs allotted to this job (SLURM_CPUS_PER_TASK), else the machine's CPU count."""
-    return int(os.environ.get("SLURM_CPUS_PER_TASK") or os.cpu_count() or 1)
-
-
 def resolve_threads(value: int | None) -> int:
-    """``None`` or 0 means "all CPUs allotted to the job"."""
-    return available_cpus() if not value else int(value)
+    """``None`` or 0 means "all CPUs the job holds on this node" (allocated_cpus)."""
+    return allocated_cpus() if not value else int(value)
+
+
+def allocated_nodes() -> int:
+    """Nodes the SLURM allocation spans (1 outside SLURM)."""
+    return int(os.environ.get("SLURM_JOB_NUM_NODES") or os.environ.get("SLURM_NNODES") or 1)
 
 
 def allocated_cpus() -> int:
     """CPUs the allocation holds on this node, whether requested as ``cpus_per_task`` or ``ntasks``:
-    ``SLURM_CPUS_ON_NODE``, else ``SLURM_NTASKS x SLURM_CPUS_PER_TASK``, else the machine's CPU count."""
+    ``SLURM_CPUS_ON_NODE``, else ``SLURM_NTASKS x SLURM_CPUS_PER_TASK``, else the machine's CPU count.
+
+    ``SLURM_CPUS_PER_TASK`` alone would be 1 for an ``ntasks: 8, cpus_per_task: 1`` job (GOAT's MPI
+    ranks): thread defaults and the run records' core-hours would see one CPU out of eight."""
     env = os.environ
     if env.get("SLURM_CPUS_ON_NODE"):
         return int(env["SLURM_CPUS_ON_NODE"])
