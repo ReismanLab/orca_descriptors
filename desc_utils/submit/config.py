@@ -56,14 +56,14 @@ STAGES = ("transformation", "pre_refinement", "conformer_search", "post_optimiza
 TOP_KEYS = {"library_dir", "smiles", "ensembles_dir", "run_bceg", *STAGES, "orca", "slurm", "condense", "_pipeline"}
 TRANSFORMATION_KEYS = {"name", "script", "params", "charge", "multiplicity"}
 PRE_REFINEMENT_KEYS = {"method", "params", "start_geometry", "start_ff", "max_metal_ligand_distance", "max_attempts",
-                       "xtb_executable", "constrained", "impose_steps", "allow_decoordination"}
+                       "xtb_executable", "constrained", "impose_steps", "allow_decoordination", "bound_n_stereo"}
 PRE_REFINEMENT_METHODS = ("xtb", "uma", "none")
 XTB_PARAMS = {"gfn": "gfn2", "level": "normal"}
 #: pre_refinement key -> bceg start_* parameter (bceg.search.base.START_DEFAULTS)
 EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
                   "max_metal_ligand_distance": "max_metal_ligand_distance", "max_attempts": "start_max_attempts",
                   "xtb_executable": "xtb_executable", "impose_steps": "start_impose_steps",
-                  "allow_decoordination": "start_allow_decoordination"}
+                  "allow_decoordination": "start_allow_decoordination", "bound_n_stereo": "start_bound_n_stereo"}
 SEARCH_KEYS = {"name", "searcher", "params", "constraints", "slurm", "replicates"}
 POST_OPT_KEYS = {"refiner", "params", "slurm", "constrained", "continue_from"}
 PRUNING_KEYS = {"energy_window_kcal_mol", "topology"}
@@ -219,6 +219,10 @@ def _pre_refinement(block, where: str, searcher: str) -> dict:
         out["constrained"] = True
     elif "impose_steps" in out:
         raise ValueError(f"{where}.impose_steps: only with `constrained: true`")
+    if out.get("bound_n_stereo", "none") not in ("none", "enumerate"):
+        raise ValueError(f"{where}.bound_n_stereo must be 'none' or 'enumerate', got {out['bound_n_stereo']!r}")
+    if out.get("bound_n_stereo") == "none":
+        out.pop("bound_n_stereo")  # the default: the hash of a library without it is unchanged
     return out
 
 

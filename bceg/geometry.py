@@ -167,9 +167,124 @@ def _uma_preoptimizer(params: dict):
     return UMA(**params["start_preopt_params"]), "fairchem-core", package_version("fairchem-core")
 
 
+# --------------------------------------------------------------------------- configurations of metal-bound N
+_TAG = {"CW": Chem.CHI_TETRAHEDRAL_CW, "CCW": Chem.CHI_TETRAHEDRAL_CCW}
+
+
+def bound_amine_stereocentres(mol: Chem.Mol) -> list[int]:
+    """Indices of the sp3 N bonded to a metal whose three other neighbours are all different.
+
+    A tertiary amine bound to a metal is a stereocentre that cannot invert without letting go of the
+    metal, so a conformer search started from one configuration rarely reaches the others. RDKit does
+    not perceive it (dative bonds do not count as neighbours for stereo perception), hence this function.
+    An N with two identical substituents (NMe2, NBn2) is not a stereocentre and is left out.
+    """
+    ranks = list(Chem.CanonicalRankAtoms(mol, breakTies=False))
+    out = []
+    for atom in mol.GetAtoms():
+        if atom.GetSymbol() != "N" or atom.GetIsAromatic() or atom.GetDegree() != 4:
+            continue
+        nbrs = list(atom.GetNeighbors())
+        metal = [n for n in nbrs if n.GetSymbol() not in ORGANIC_ELEMENTS]
+        others = [n for n in nbrs if n.GetSymbol() in ORGANIC_ELEMENTS]
+        if len(metal) == 1 and len(others) == 3 and len({ranks[n.GetIdx()] for n in others}) == 3:
+            out.append(atom.GetIdx())
+    return out
+
+
+def chiral_tag_from_coords(mol: Chem.Mol, idx: int, coords: np.ndarray) -> str:
+    """'CW' or 'CCW': the RDKit chiral tag of atom ``idx`` (neighbours in its bond order) read from 3D.
+
+    Works for any 4-coordinate atom, including an N whose fourth bond is dative (which RDKit's own
+    perception from 3D ignores); for an ordinary carbon stereocentre it agrees with RDKit.
+    """
+    atom = mol.GetAtomWithIdx(idx)
+    nbrs = [b.GetOtherAtomIdx(idx) for b in atom.GetBonds()]
+    if len(nbrs) != 4:
+        raise ValueError(f"atom {idx} has {len(nbrs)} neighbours, need 4")
+    p = [np.asarray(coords[j], dtype=float) for j in nbrs]
+    v = float(np.dot(p[1] - p[0], np.cross(p[2] - p[0], p[3] - p[0])))
+    return "CW" if v > 0 else "CCW"
+
+
+def with_bound_n_configuration(mol: Chem.Mol, centres: list[int], combination) -> Chem.Mol:
+    """A copy of ``mol`` with the given chiral tags on the metal-bound N, which ETKDG then enforces.
+
+    The tags are set raw: RDKit's stereo assignment would strip them (the N is no stereocentre to
+    RDKit), but the embedding honours them.
+    """
+    out = Chem.Mol(mol)
+    for idx, tag in zip(centres, combination):
+        out.GetAtomWithIdx(idx).SetChiralTag(_TAG[tag])
+    return out
+
+
+def bound_n_combinations(mol: Chem.Mol, centres: list[int], seed: int, tries: int = 3) -> tuple[list, list]:
+    """(feasible, infeasible) configuration combinations of ``centres``, in a fixed order.
+
+    A combination is feasible when ETKDG embeds it with the enforced configuration within ``tries``
+    seeds (some are impossible in fused or strained chelate rings). Deterministic for given inputs.
+    """
+    import itertools
+
+    feasible, infeasible = [], []
+    for combo in itertools.product(("CW", "CCW"), repeat=len(centres)):
+        tagged = with_bound_n_configuration(mol, centres, combo)
+        ok = False
+        for t in range(tries):
+            try:
+                xyz = embed(tagged, seed + SEED_STRIDE * t, ff="none")
+            except RuntimeError:
+                continue
+            if tuple(chiral_tag_from_coords(tagged, i, xyz) for i in centres) == combo:
+                ok = True
+                break
+        (feasible if ok else infeasible).append(combo)
+    return feasible, infeasible
+
+
+def _bound_n_setup(structure: Structure, seed: int, params: dict) -> tuple[Chem.Mol, dict | None]:
+    """start_bound_n_stereo: enumerate -> (the mol to embed, the record); otherwise (structure.mol, None).
+
+    Replicate ``i`` (seed = seed_offset + i) starts from the ((i - 1) mod n)-th of the n feasible
+    configurations of the metal-bound amine N, so replicates 1..n cover every configuration once.
+    """
+    if params.get("start_bound_n_stereo", "none") != "enumerate":
+        return structure.mol, None
+    if params["start_geometry"] != "etkdg":
+        raise ValueError("start_bound_n_stereo: enumerate needs start_geometry: etkdg")
+    centres = bound_amine_stereocentres(structure.mol)
+    if not centres:
+        return structure.mol, {"centres": [], "configuration": [], "index": None, "feasible": [], "infeasible": []}
+    offset = params.get("seed_offset", 0)
+    feasible, infeasible = bound_n_combinations(structure.mol, centres, offset + 1)
+    if not feasible:
+        raise RuntimeError(f"no configuration of the metal-bound N {centres} could be embedded")
+    k = (seed - offset - 1) % len(feasible)
+    return (with_bound_n_configuration(structure.mol, centres, feasible[k]),
+            {"centres": centres, "configuration": list(feasible[k]), "index": k,
+             "feasible": [list(c) for c in feasible], "infeasible": [list(c) for c in infeasible]})
+
+
+def _bound_n_problems(mol: Chem.Mol, coords: np.ndarray, record: dict | None, max_dist: float) -> list[str]:
+    """The metal-bound N whose configuration differs from the one imposed (decoordinated N excepted)."""
+    if not record or not record["centres"]:
+        return []
+    out = []
+    for idx, want in zip(record["centres"], record["configuration"]):
+        metal = next(n.GetIdx() for n in mol.GetAtomWithIdx(idx).GetNeighbors() if n.GetSymbol() not in ORGANIC_ELEMENTS)
+        if np.linalg.norm(np.asarray(coords[idx]) - np.asarray(coords[metal])) > max_dist:
+            continue  # let go of the metal: may invert, start_allow_decoordination decides about the bond
+        got = chiral_tag_from_coords(mol, idx, coords)
+        if got != want:
+            out.append(f"the configuration of metal-bound N{idx + 1} changed ({want} -> {got})")
+    return out
+
+
 def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: dict) -> tuple[np.ndarray, dict]:
     """Return (coords, info) following the start_* parameters of a searcher."""
     rejected = []
+    mol, bound_n = _bound_n_setup(structure, seed, params)
     preopt = params["start_preopt"]
     spec = params.get("constraints") if params.get("start_constraints") else None
     targets = cons.targets(spec, structure.mol) if spec else None
@@ -190,9 +305,14 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
             coords, source = structure.coords, "input"
         elif params["start_geometry"] == "etkdg":
             try:
-                coords, source = embed(structure.mol, s, ff=params["start_ff"]), f"etkdg(seed={s}, ff={params['start_ff']})"
+                coords, source = embed(mol, s, ff=params["start_ff"]), f"etkdg(seed={s}, ff={params['start_ff']})"
             except RuntimeError as exc:
                 rejected.append({"seed": s, "problems": [str(exc)]})
+                continue
+            # embed() falls back to an unenforced embedding, which RDKit's stereo check does not cover for N
+            wrong = _bound_n_problems(mol, coords, bound_n, float("inf"))
+            if wrong:
+                rejected.append({"seed": s, "stage": "embedded", "problems": wrong})
                 continue
         else:
             raise ValueError(f"Unknown start_geometry {params['start_geometry']!r}")
@@ -254,8 +374,11 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
             if not stereo_matches(_with_coords(structure.mol, coords)):
                 problems.append("a stereocentre's configuration changed")
             problems += off_targets(coords, targets, final=True)
+        problems += _bound_n_problems(mol, coords, bound_n, params["max_metal_ligand_distance"])
         if not problems:
             extra = {"imposed": imposed | {"preopt_holds": hold}} if spec else {}
+            if bound_n is not None:
+                extra["bound_n_stereo"] = bound_n
             if params.get("start_allow_decoordination"):
                 extra["decoordinated"] = decoordinated
             return coords, extra | {

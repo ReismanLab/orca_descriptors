@@ -28,6 +28,7 @@ geometry is kept as `logs/raw_1_start_geometry.xyz`; the attempts of a failed ru
 | `constrained` | `false` | `true`: impose `conformer_search.constraints` on the embedding, then pre-optimise with their atoms fixed, see [imposing constraints](#imposing-constraints) | `start_constraints` | yes, when `true` |
 | `allow_decoordination` | `false` | `true`: a metal-ligand bond longer than `max_metal_ligand_distance` after the pre-optimisation (a hemilabile amine arm letting go) is recorded under `decoordinated` instead of rejecting the geometry; the bonds of imposed atoms (Sm-I of I-Sm-I) must still hold, and a broken organic bond or a clash still rejects | `start_allow_decoordination` | yes, when `true` |
 | `impose_steps` | `10` | with `constrained`: steps of the ramp that brings the embedding onto the imposed values | `start_impose_steps` | yes, when `constrained` |
+| `bound_n_stereo` | `none` | `enumerate`: replicate `i` starts from the `((i - 1) mod n)`-th of the `n` feasible configurations of the metal-bound amine N, see [configurations of metal-bound N](#configurations-of-metal-bound-n) | `start_bound_n_stereo` | yes, when `enumerate` |
 
 The last column names the parameters of the searcher that the block is translated into
 (`bceg/search/base.py`, `START_DEFAULTS`); `bceg`'s own config takes them inside `methods.<name>.params`.
@@ -94,6 +95,43 @@ pre_refinement:
   method: xtb
   start_geometry: input          # the script returned coords
   max_metal_ligand_distance: 2.8
+```
+
+## Configurations of metal-bound N
+
+A tertiary amine bound to a metal is a stereocentre: it cannot invert without letting go of the metal.
+A conformer search therefore keeps, almost always, the N configurations of its start geometry, which
+ETKDG picks at random. With several such N, replicates explore different configurations and a
+handful of replicates can miss some (the 2026-10-28 SmI2 library: 2-4 combinations within
+5 kcal/mol for most ligands, most of them found by one replicate only). RDKit does not perceive these
+centres (dative bonds do not count for stereo perception), so a library cannot ask for them in its
+SMILES either.
+
+`bound_n_stereo: enumerate` assigns them per replicate:
+
+1. The centres are the sp3 N bonded to a metal whose three other neighbours differ (canonical ranks
+   without tie breaking): an NMe2 or NBn2 donor is not one; an aromatic N never is.
+2. Their 2^k combinations are tried, in a fixed order (`CW`/`CCW`, RDKit's chiral tags in the atom's
+   bond order), with up to three ETKDG embeddings each; a combination none of them reproduces is
+   *infeasible* (a configuration a fused or strained chelate cannot reach) and dropped.
+3. Replicate `i` (seed = `seed_offset + i`) embeds with the `((i - 1) mod n)`-th feasible
+   combination enforced as raw chiral tags. Replicates `1..n` thus cover every feasible combination once,
+   further replicates cycle with new seeds.
+4. The configuration is read back from 3D (signed volume of the four neighbours) after the embedding,
+   which may fall back to an unenforced one, and after the pre-optimisation. A changed configuration
+   rejects the seed, unless that N has let go of the metal (then `allow_decoordination` decides).
+
+`details.start_geometry.bound_n_stereo` records `centres` (0-based), `configuration`, `index`,
+`feasible` and `infeasible`. The pooled ensemble of the molecule then holds every configuration, and
+the descriptors are aggregated over them as over any conformers. Set `replicates` to at least the
+number of combinations (4 for two centres); a molecule without such N runs its replicates as before.
+
+```yaml
+pre_refinement:
+  method: uma
+  bound_n_stereo: enumerate
+conformer_search:
+  replicates: 5        # two bound N: 4 combinations, the fifth replicate repeats the first with a new seed
 ```
 
 ## Imposing constraints
