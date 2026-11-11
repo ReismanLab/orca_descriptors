@@ -14,6 +14,30 @@ from bceg.xyz import Conformer, read_xyz, write_xyz
 OPT_LEVELS = ("crude", "sloppy", "loose", "lax", "normal", "tight", "vtight", "extreme")
 METHOD_FLAGS = {"gfnff": ["--gfnff"], "gfn0": ["--gfn", "0"], "gfn1": ["--gfn", "1"], "gfn2": ["--gfn", "2"]}
 
+#: GFN1 and GFN2 are compiled into xtb, but GFN0 reads its parameters from this file at run time and
+#: only looks for it in ``XTBPATH`` / ``XTBHOME`` -- not next to the binary, even though the build
+#: ships it under ``<prefix>/share/xtb``. Without one of those set, ``--gfn 0`` dies on the compute
+#: node with "param_gfn0-xtb.txt not found!" long after the job was queued.
+GFN0_PARAM_FILE = "param_gfn0-xtb.txt"
+#: the environment variables xtb searches for it, in the order it searches them
+XTB_PARAM_VARS = ("XTBPATH", "XTBHOME")
+
+
+def gfn0_param_path(env: dict[str, str] | None = None) -> Path | None:
+    """Where xtb would find :data:`GFN0_PARAM_FILE`, or None when it would not find it at all.
+
+    Mirrors xtb's own lookup: every colon-separated entry of ``XTBPATH``, then ``XTBHOME``. Nothing
+    else is consulted, so this answers the question without running xtb -- which is what lets
+    ``XTB.validate`` refuse ``gfn: gfn0`` while the config is being read.
+    """
+    import os
+    env = os.environ if env is None else env
+    for var in XTB_PARAM_VARS:
+        for entry in (env.get(var) or "").split(os.pathsep):
+            if entry and (Path(entry) / GFN0_PARAM_FILE).is_file():
+                return Path(entry) / GFN0_PARAM_FILE
+    return None
+
 
 @lru_cache(maxsize=None)
 def _version_of(exe: str) -> str | None:
