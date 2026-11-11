@@ -443,6 +443,36 @@ def test_continue_from_chains_the_provenance_and_keeps_old_hashes(project):
     assert json.loads((md / "params_coarse.json").read_text()) == coarse
 
 
+def test_continue_from_at_another_multiplicity(project):
+    """A lot continued at another spin state: the refiner and the run record see that multiplicity, it is
+    hashed into params_<lot>.json, and the source lot and the search keep the transformation's."""
+    root, write = project
+    run_local(Config.load(write(refiner_params="{label: coarse}")))
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    coarse = json.loads((md / "params_coarse.json").read_text())
+    assert "multiplicity" not in coarse["compared"]["params"]
+
+    assert run_local(_refine_again(write, refiner_params="{label: triplet, multiplicity: 3}",
+                                   continue_from="coarse")) == {"done": 9}
+    rec = json.loads((md / "run_1_triplet.json").read_text())
+    assert rec["structure"]["multiplicity"] == 3 and rec["details"]["multiplicity"] == 3
+    assert json.loads((md / "params_triplet.json").read_text())["compared"]["params"]["multiplicity"] == 3
+    assert json.loads((md / "run_1_coarse.json").read_text())["structure"]["multiplicity"] == 1
+    assert json.loads((md / "params.json").read_text())["compared"]["structure"]["multiplicity"] == 1
+    assert json.loads((md / "params_coarse.json").read_text()) == coarse
+
+
+def test_a_multiplicity_impossible_for_the_molecule_fails_the_refinement(project):
+    root, write = project
+    run_local(Config.load(write(refiner_params="{label: coarse}")))
+    out = run_local(_refine_again(write, refiner_params="{label: doublet, multiplicity: 2}", continue_from="coarse"))
+    assert out == {"failed": 9}
+    md = root / "results" / "none" / BUTANE / "etkdg"
+    rec = json.loads((md / "run_1_doublet.json").read_text())
+    assert rec["status"] == "failed" and "Multiplicity 2 impossible" in rec["error"]
+    assert not (md / "raw_1_doublet.xyz").exists()
+
+
 def test_continue_from_an_unfinished_lot_warns_and_skips_that_replicate(project):
     """A replicate whose source lot is not finished has nothing pending: it is warned about and skipped,
     not queued (it could only wait) and not reported as a params mismatch (that would abort the submit,

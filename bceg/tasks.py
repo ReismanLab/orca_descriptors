@@ -375,6 +375,11 @@ def _run_refine(cfg: Config, task: Task, structure: Structure, md: MethodDir, sp
     rec_path, xyz = md.run_record(task.replicate, lot), md.refined(task.replicate, lot)
     if _is_complete(read_record(rec_path), xyz):
         return "skipped"
+    try:  # post_optimization.params.multiplicity, if set: checked against this molecule's electron count
+        structure = cfg.refiner.for_structure(structure)
+    except ValueError as exc:
+        write_record(rec_path, _base_record(task, structure, None) | {"lot": lot, "status": FAILED, "error": repr(exc)})
+        return FAILED
     # the search is checked whether or not this step continues from another lot: the chain
     # search -> source lot -> this one is verified end to end
     search_rec = read_record(md.run_record(task.replicate))

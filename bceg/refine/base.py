@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,11 @@ REFINER_CONSTRAINT_DEFAULTS = {"constraints": {}}
 #: and then left out of the hash, so the refinements written before it existed keep theirs
 STALL_DEFAULTS = {"stall_steps": None, "stall_energy": 0.001}
 
+#: the spin state of the refinement: ``None`` (default) keeps the transformation's multiplicity (stage 1);
+#: a number re-optimises at that multiplicity instead, e.g. a septet ``continue_from`` of a quintet search.
+#: Left out of the hash while ``None``, so the refinements written before it existed keep theirs.
+SPIN_DEFAULTS = {"multiplicity": None}
+
 POOL_RESERVE_GB = 2.0  # the job's own process besides its model copy: search results, CREST's leftovers, slack
 
 
@@ -38,6 +43,9 @@ class Refiner(Configurable):
             raise ValueError(f"{self.name}.stall_steps must be a positive number of steps or null, got {steps!r}")
         if "stall_energy" in self.params and not self.params["stall_energy"] > 0:
             raise ValueError(f"{self.name}.stall_energy must be > 0 eV, got {self.params['stall_energy']!r}")
+        mult = self.params.get("multiplicity")
+        if mult is not None and (isinstance(mult, bool) or not isinstance(mult, int) or mult < 1):
+            raise ValueError(f"{self.name}.multiplicity must be a positive integer or null, got {mult!r}")
         if self.params.get("constraints"):  # RDKit only then: the pool's workers start faster without it
             from bceg import constraints as cons
             cons.validate(self.params["constraints"], f"{self.name}.constraints")
@@ -51,7 +59,17 @@ class Refiner(Configurable):
         if out.get("stall_steps") is None:
             out.pop("stall_steps", None)
             out.pop("stall_energy", None)
+        if "multiplicity" in out and out["multiplicity"] is None:
+            del out["multiplicity"]
         return out
+
+    def for_structure(self, structure: Structure) -> Structure:
+        """``structure`` at this refinement's spin state: unchanged without ``multiplicity``, else a copy with
+        that multiplicity (checked against the electron count, as for the transformation's)."""
+        mult = self.params.get("multiplicity")
+        if mult is None or mult == structure.multiplicity:
+            return structure
+        return replace(structure, multiplicity=mult)
 
     def fixed_atoms(self, structure: Structure) -> list[int]:
         """The atoms held fixed (0-based), none without constraints."""

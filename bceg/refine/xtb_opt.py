@@ -24,7 +24,7 @@ from pathlib import Path
 
 from bceg.external import find_executable, resolve_threads, run
 from bceg.layout import check_name
-from bceg.refine.base import REFINER_CONSTRAINT_DEFAULTS, RefineResult, Refiner
+from bceg.refine.base import REFINER_CONSTRAINT_DEFAULTS, SPIN_DEFAULTS, RefineResult, Refiner
 from bceg.refine.checkpoint import CheckpointWriter, load_checkpoint
 from bceg.structure import Structure
 from bceg.xtb import OPT_LEVELS, fix_input, xtb_identity
@@ -42,6 +42,7 @@ XTB_REFINER_DEFAULTS = {
     "executable": "xtb",  # a name on PATH or an absolute path
     "threads": None,  # None/0: SLURM_CPUS_PER_TASK (or all CPUs outside SLURM)
     **REFINER_CONSTRAINT_DEFAULTS,
+    **SPIN_DEFAULTS,  # multiplicity: re-optimise at another spin state than the transformation's
 }
 
 

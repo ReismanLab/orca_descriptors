@@ -1242,3 +1242,24 @@ def test_a_refined_library_reads_the_continued_lot(tree):
     write_record(md.run_record(1, tight), {"status": "done", "n_conformers": 2})
     ens = Ensembles(cfg).ensemble(InputMolecule.from_smiles("CCO"))
     assert ens.done and [p.name for p in ens.xyz_paths] == [f"raw_1_{tight}.xyz"] and len(ens.conformers) == 2
+
+
+def test_a_lot_at_another_multiplicity_sets_stage_6s(tree):
+    """post_optimization.params.multiplicity: the ensemble (and so ORCA / g-xTB) takes the lot's spin state,
+    not the transformation's; a lot without it keeps the transformation's."""
+    triplet = "uma-m3"
+    md = method_dir(tree["results"], "none", tree["keys"]["CCO"], "etkdg")
+    path = _rewrite(tree, library_dir="LIB_M3",
+                    post_optimization={"refiner": "uma", "continue_from": LOT,
+                                       "params": {"model": LOT, "lot": triplet, "multiplicity": 3}})
+    cfg = Config.load(path)
+    assert cfg.compared()["post_optimization"]["params"]["multiplicity"] == 3
+    elements, confs = read_xyz(md.refined(1, LOT))
+    write_xyz(md.refined(1, triplet), elements, confs[:2])
+    md.params(triplet).write_text(json.dumps(make_params(
+        {"refiner": "uma", "lot": triplet, "params": cfg.compared()["post_optimization"]["params"]})))
+    write_record(md.run_record(1, triplet), {"status": "done", "n_conformers": 2})
+    ens = Ensembles(cfg).ensemble(InputMolecule.from_smiles("CCO"))
+    assert ens.done and ens.multiplicity == 3 and ens.record["refine_multiplicity"] == 3
+    base = Ensembles(Config.load(_rewrite(tree, library_dir="LIB_BASE"))).ensemble(InputMolecule.from_smiles("CCO"))
+    assert base.multiplicity == 1 and "refine_multiplicity" not in base.record
