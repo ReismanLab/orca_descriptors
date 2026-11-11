@@ -160,7 +160,8 @@ def _uma_preoptimizer(params: dict):
     from bceg.refine.ase_opt import package_version
     from bceg.refine.uma import UMA
 
-    allowed = set(UMA.defaults) - {"lot", "keep_unconverged", "workers", "constraints"}  # one geometry: no pool
+    # one geometry: no pool; the start geometry is made at the transformation's spin state (no multiplicity)
+    allowed = set(UMA.defaults) - {"lot", "keep_unconverged", "workers", "constraints", "multiplicity"}
     unknown = set(params["start_preopt_params"]) - allowed
     if unknown:
         raise ValueError(f"start_preopt_params: unknown UMA parameter(s) {sorted(unknown)}; allowed: {sorted(allowed)}")

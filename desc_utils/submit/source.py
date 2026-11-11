@@ -162,6 +162,11 @@ class Ensembles:
         struct = compared.get("structure") or {}
         charge = struct.get("charge", structure.charge)
         multiplicity = struct.get("multiplicity", structure.multiplicity)
+        # a refinement at another spin state (post_optimization.params.multiplicity) hands stage 6 its own
+        lot_mult = (((refine_params or {}).get("compared") or {}).get("params") or {}).get("multiplicity")
+        if self.lot and lot_mult is not None:
+            multiplicity = lot_mult
+            record["refine_multiplicity"] = int(lot_mult)
         record["n_conformers"] = len(conformers)
         record["n_conformers_per_replicate"] = per_replicate
         record["versions"] = runs[0][1].get("versions")
