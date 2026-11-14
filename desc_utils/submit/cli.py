@@ -16,7 +16,7 @@ from desc_utils.submit.config import Config
 from desc_utils.submit.cost import print_cost
 from desc_utils.submit.source import Ensembles
 from desc_utils.submit.status import print_status
-from desc_utils.submit.tasks import CANCELLED_AT_START, prepare_molecule, run_orca_conformer
+from desc_utils.submit.tasks import CANCELLED_AT_START, prepare_molecule, run_orca_chunk, run_orca_conformer
 
 SKIP_STATES = {"complete", "in_progress"}
 
@@ -288,6 +288,9 @@ def cmd_prepare_task(args) -> int:
 def cmd_orca_task(args) -> int:
     cfg = Config.load(args.config)
     task = slurm.read_task(Path(args.tasks), args.index)
+    if "conformers" in task:  # a packed element (slurm.orca_batch)
+        statuses = run_orca_chunk(cfg, task["inchikey"], task["conformers"])
+        return 0 if all(s in ("completed", CANCELLED_AT_START) for s in statuses.values()) else 1
     status = run_orca_conformer(cfg, task["inchikey"], task["conformer"])
     return 0 if status in ("completed", CANCELLED_AT_START) else 1
 

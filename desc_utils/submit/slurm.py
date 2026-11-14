@@ -1,5 +1,6 @@
 """SLURM scripts of the ORCA stage: the ``prepare`` array (one element per molecule) and one ORCA
-array per molecule (one element per conformer). Scripts and task lists live in ``_jobs/<timestamp>/``.
+array per molecule (one element per conformer, or per chunk of conformers packed onto one node with
+``slurm.orca_batch``). Scripts and task lists live in ``_jobs/<timestamp>/``.
 
 Both arrays run ``python -m desc_utils.submit <task> <frozen config> --tasks <jsonl> --index $SLURM_ARRAY_TASK_ID``
 after the ``slurm.setup`` lines (activate ``gp_env``, load the ORCA module, NBO variables, ...).
@@ -68,8 +69,45 @@ def write_prepare_array(cfg: Config, jobdir: Path, molecules: list[dict], force:
 
 
 def write_orca_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[str]) -> tuple[Path, Path]:
-    """``orca_<InChIKey>.sbatch`` + ``.jsonl``: one element per conformer folder name."""
-    return _write_stage6_array(cfg, jobdir, inchikey, conformers, "orca", "orca-task", "ORCA")
+    """``orca_<InChIKey>.sbatch`` + ``.jsonl``: one element per conformer folder name.
+
+    With ``slurm.orca_batch``, element ``i`` runs ``chunks(conformers, batch_size)[i]`` instead (task line
+    ``{"inchikey", "conformers": [...]}``), several ORCA runs at once (``tasks.run_orca_chunk``), and the
+    element asks for :func:`orca_batch_profile` rather than ``slurm.orca``.
+    """
+    batch = cfg.orca_batch
+    if not batch:
+        return _write_stage6_array(cfg, jobdir, inchikey, conformers, "orca", "orca-task", "ORCA")
+    groups = chunks(conformers, batch["batch_size"])
+    return _write_stage6_array(cfg, jobdir, inchikey, [{"inchikey": inchikey, "conformers": g} for g in groups],
+                               "orca", "orca-task", "ORCA", profile_dict=orca_batch_profile(cfg))
+
+
+#: the per-conformer keys of slurm.orca that do not describe a packed element's allocation
+_PER_CONFORMER_KEYS = ("ntasks", "cpus_per_task", "mem", "mem_per_cpu", "nodes")
+
+
+def orca_batch_profile(cfg: Config) -> dict:
+    """The SLURM request of one packed ORCA element.
+
+    ``slurm.orca.ntasks`` stays what ONE conformer gets (``%pal nprocs``, already in calcParam.inp).
+    ``exclusive``: one whole node (``--nodes=1 --exclusive --mem=0``) and no ``--ntasks``, the set-up the
+    ConfAnalysis DFT cost study measured at 1.03 billed CPU-h per single point; the node bills at its
+    full core count whatever was asked, so the element fills it (workers = node CPUs // ntasks).
+    Otherwise ``workers x ntasks`` tasks on one node, each with ``mem_per_cpu``.
+    """
+    orca = dict(cfg.slurm["orca"])
+    batch = cfg.orca_batch
+    out = {k: v for k, v in orca.items() if k not in _PER_CONFORMER_KEYS}
+    out["nodes"] = 1
+    if batch["exclusive"]:
+        out["mem"] = 0
+        out["extra"] = [*(orca.get("extra") or []), "--exclusive"]
+    else:
+        out["ntasks"] = batch["workers"] * int(orca.get("ntasks") or 1)
+        if orca.get("mem_per_cpu"):
+            out["mem_per_cpu"] = orca["mem_per_cpu"]
+    return out
 
 
 def chunks(conformers: list[str], size: int) -> list[list[str]]:
@@ -93,8 +131,10 @@ def write_gxtb_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list[
 
 
 def _write_stage6_array(cfg: Config, jobdir: Path, inchikey: str, conformers: list,
-                        profile: str, subcommand: str, label: str) -> tuple[Path, Path]:
-    """``conformers``: folder names (one task each), or ready-made task dicts (the g-xTB chunks)."""
+                        profile: str, subcommand: str, label: str,
+                        profile_dict: dict | None = None) -> tuple[Path, Path]:
+    """``conformers``: folder names (one task each), or ready-made task dicts (the batched chunks).
+    ``profile_dict``: the SLURM request, when it is not ``slurm.<profile>`` as written (a packed ORCA element)."""
     log_dir = jobdir / "slurm_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     name = f"{profile}_{inchikey}"
@@ -115,7 +155,8 @@ def _write_stage6_array(cfg: Config, jobdir: Path, inchikey: str, conformers: li
         "exit $?",
     ]
     script = jobdir / f"{name}.sbatch"
-    script.write_text("\n".join([*_header(name, array, cfg.slurm[profile], log_dir, ["#SBATCH --signal=B:TERM@600"]),
+    request = profile_dict if profile_dict is not None else cfg.slurm[profile]
+    script.write_text("\n".join([*_header(name, array, request, log_dir, ["#SBATCH --signal=B:TERM@600"]),
                                  *_setup(cfg), *body, ""]))
     return script, tasks_path
 
