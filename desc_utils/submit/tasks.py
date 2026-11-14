@@ -2,7 +2,7 @@
 
 ``prepare_molecule``  (prepare array, one element per molecule, runs after bceg)
     read the ensemble (the search's replicates pooled in order), check its hyper-parameter hash against
-    the library, prune it (stage 5: the connectivity check and the energy window, or nothing), split it into conf_N/ folders, render
+    the library, prune it (stage 5: the connectivity check, the energy window and pruning.method, or nothing), split it into conf_N/ folders, render
     calcParam.inp, record everything, submit the ORCA array.
 ``run_orca_conformer``  (ORCA array, one element per conformer)
     run ORCA in conf_N/, record the outcome (exit code AND the termination banner), condense.
@@ -30,6 +30,7 @@ from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils import orca_parse as op
+from desc_utils.submit import pruning as pruning_methods
 from desc_utils.submit import records, slurm, template
 from desc_utils.submit.cancel import REASON, this_job_cancelled, was_cancelled
 from desc_utils.submit.config import Config
@@ -194,14 +195,30 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
     topo = cfg.topology
     if topo is not None and ens.structure is None:
         raise RuntimeError(f"{inchikey}: pruning.topology needs the ensemble's structure (the molecular graph)")
-    pruned = energy_window(ens.conformers, cfg.ewin, None if ens.structure is None else ens.structure.mol, topo)
+    graph = None if ens.structure is None else ens.structure.mol
+    pruned = energy_window(ens.conformers, cfg.ewin, graph, topo)
     n_topo = sum(1 for p in pruned if p[3] == "skipped_topology")
     if topo is not None:
         print(f"{inchikey}: {n_topo}/{len(pruned)} conformer(s) skipped_topology")
+    method_info: dict = {}
+    method_summary = None
+    if cfg.pruning_method is not None:
+        alive = [k for k, p in enumerate(pruned) if p[3] == "prepared"]
+        decided, method_summary = pruning_methods.apply(
+            cfg.pruning_method, cfg.pruning_params, ens.elements, [pruned[k][1] for k in alive], graph,
+            names=[pruned[k][0] for k in alive])
+        for k, (status, info) in zip(alive, decided):
+            name, conf, rel, _, changes = pruned[k]
+            pruned[k] = (name, conf, rel, status, changes)
+            method_info[name] = info
+        print(f"{inchikey}: pruning.method {cfg.pruning_method} kept {method_summary['n_kept']}/"
+              f"{method_summary['n_in']} conformer(s) in {method_summary['seconds']} s")
     for name, conf, rel, status, changes in pruned:
         rec = {"energy_hartree": conf.energy, "energy_above_min_kcal_mol": rel}
         if changes:
             rec["topology_changes"] = changes
+        if method_info.get(name):
+            rec |= method_info[name]
         if "replicate" in conf.info:
             rec |= {"replicate": conf.info["replicate"], "index_in_replicate": conf.info["index"]}
         old = (existing.get(name) or {}).get("status")
@@ -233,6 +250,7 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         "orca_stage": {"status": "prepared", "reason": "", "prepared_at": records.now(),
                        "n_conformers_in_ensemble": len(ens.conformers), "n_replicates": cfg.replicates,
                        "n_skipped_topology": n_topo,
+                       **({"pruning_method": method_summary} if method_summary else {}),
                        "n_to_run": len(to_run)},
     })
     if not to_run:

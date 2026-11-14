@@ -9,7 +9,8 @@
                             frozen or bonds constrained during the search, and how many replicates of the
                             search are run and pooled
     post_optimization    4. refinement of every conformer (uma | null)
-    pruning              5. which conformers get an ORCA job (energy window on the stage-4 energies; null = all)
+    pruning              5. which conformers get an ORCA job (topology check, energy window on the stage-4
+                            energies, then one dedupe/clustering method; null = all)
     orca, dft            6. the ORCA compound job (level_of_theory, template)
     slurm, condense      resources: setup lines, bceg's profiles (slurm.ensembles), prepare and orca profiles
 
@@ -52,6 +53,8 @@ from bceg.transforms import IDENTITY
 from bceg.xtb import METHOD_FLAGS as XTB_METHODS
 from bceg.xtb import OPT_LEVELS as XTB_LEVELS
 
+from desc_utils.submit import pruning as pruning_methods
+
 STAGES = ("transformation", "pre_refinement", "conformer_search", "post_optimization", "pruning", "dft")
 TOP_KEYS = {"library_dir", "smiles", "ensembles_dir", "run_bceg", *STAGES, "orca", "slurm", "condense", "_pipeline"}
 TRANSFORMATION_KEYS = {"name", "script", "params", "charge", "multiplicity"}
@@ -66,7 +69,7 @@ EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
                   "allow_decoordination": "start_allow_decoordination"}
 SEARCH_KEYS = {"name", "searcher", "params", "constraints", "slurm", "replicates"}
 POST_OPT_KEYS = {"refiner", "params", "slurm", "constrained", "continue_from"}
-PRUNING_KEYS = {"energy_window_kcal_mol", "topology"}
+PRUNING_KEYS = {"energy_window_kcal_mol", "topology", "method", *pruning_methods.METHODS}
 DFT_KEYS = {"calc_param_template", "level_of_theory", "constrained", "engine", "gxtb"}
 #: stage-6 engines: the ORCA compound job, or one g-xTB run per conformer (desc_utils.submit.gxtb)
 DFT_ENGINES = ("orca", "gxtb")
@@ -286,7 +289,8 @@ def _pruning(block, where: str) -> dict:
         block.pop("topology", None)
     else:
         block["topology"] = topology.check_params(block["topology"], f"{where}.topology")
-    return block
+    # method: null unless given, and then left out with its block, for the same reason as topology
+    return pruning_methods.check_block(block, where)
 
 
 #: solvation keywords of the ORCA level_of_theory, named here only to explain why they are refused
@@ -560,6 +564,16 @@ class Config:
     def topology(self) -> dict | None:
         """The stage-5 connectivity check (bceg.topology), or None when it is off."""
         return self.pruning.get("topology")
+
+    @property
+    def pruning_method(self) -> str | None:
+        """``pruning.method`` (desc_utils.submit.pruning.METHODS), or None when only the window applies."""
+        return self.pruning.get("method")
+
+    @property
+    def pruning_params(self) -> dict | None:
+        """The chosen method's block, defaults filled in."""
+        return self.pruning.get(self.pruning_method) if self.pruning_method else None
 
     @property
     def dft(self) -> dict:
