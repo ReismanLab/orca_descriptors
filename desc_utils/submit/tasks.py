@@ -31,7 +31,7 @@ from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils import orca_parse as op
 from desc_utils.submit import records, slurm, template
-from desc_utils.submit.cancel import REASON, was_cancelled
+from desc_utils.submit.cancel import REASON, this_job_cancelled, was_cancelled
 from desc_utils.submit.config import Config
 from desc_utils.submit.source import Ensemble, Ensembles
 
@@ -392,9 +392,17 @@ def orca_outcome(out_path: Path, exit_code: int | None) -> dict:
             "orca_run_time_s": run_time_s, "orca_steps_s": steps}
 
 
+#: returned by a task whose job ``cancel`` listed before it started (scancel failed, the job ran later)
+CANCELLED_AT_START = "cancelled_at_start"
+
+
 def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str | None = None) -> str:
-    """Run ORCA for one conformer folder and record the outcome. Returns the conformer status."""
+    """Run ORCA for one conformer folder and record the outcome. Returns the conformer status, or
+    :data:`CANCELLED_AT_START` (nothing run, nothing written) when ``cancel`` listed this job."""
     lib = cfg.library_dir
+    if this_job_cancelled(lib):
+        print(f"{inchikey}/{conformer}: this job was cancelled by `orcadesc cancel`, not started")
+        return CANCELLED_AT_START
     conf_dir = lib / inchikey / conformer
     if not (conf_dir / "calcParam.inp").exists():
         raise FileNotFoundError(f"{conf_dir}: no calcParam.inp (prepare step missing)")
