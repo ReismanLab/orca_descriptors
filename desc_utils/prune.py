@@ -35,7 +35,7 @@ HARTREE_TO_KCAL = 627.509474
 #: Covalent radii (Angstrom) used to perceive the heavy-atom graph, as in the source script.
 RCOV = {"H": 0.31, "B": 0.84, "C": 0.76, "N": 0.71, "O": 0.66, "F": 0.57, "Si": 1.11, "P": 1.07,
         "S": 1.05, "Cl": 1.02, "Br": 1.20, "I": 1.39, "Ni": 1.24}
-MAX_AUTOMORPHISMS = 1000
+MAX_AUTOMORPHISMS = 10000
 
 #: Default energy gate: pairs further apart than this in the pruning energy are never compared.
 #: Measured on this project's own data - the largest energy gap of a pair below 0.02 A is
@@ -220,9 +220,20 @@ def _molecule_record(paths, energies_h, geometry_file, threshold, gate_kcal, max
                 f"libraries separately, or fix the ensemble that was built with a different atom "
                 f"order.")
         X.append(xyz)
-    X = np.array(X)
-    E_kcal = (np.asarray(energies_h, dtype=float) - np.nanmin(energies_h)) * HARTREE_TO_KCAL
-    heavy, perms = automorphisms(sym0, X[0], max_automorphisms)
+    return dedupe(sym0, np.array(X), energies_h, threshold, gate_kcal, max_automorphisms)
+
+
+def dedupe(sym, X, energies_h, threshold, gate_kcal, max_automorphisms=MAX_AUTOMORPHISMS):
+    """RMSD dedupe of one molecule's geometries ``X`` (``n x atoms x 3``, one atom order ``sym``).
+
+    Returns ``(kept, leader, rmsd_to_leader, n_automorphisms, n_pairs_compared)``; ``leader[i]`` is the
+    index of the kept conformer ``i`` duplicates (-1 when kept). Shared by this laptop-side prune and
+    stage 5 (``desc_utils.submit.pruning``), so both count duplicates the same way. ``energies_h`` in
+    Hartree; without energies (all None/NaN) every conformer has the same energy, so the visit order is the
+    input order and the energy gate compares every pair."""
+    E = np.asarray([np.nan if e is None else e for e in energies_h], dtype=float)
+    E_kcal = np.zeros(len(E)) if np.isnan(E).all() else (E - np.nanmin(E)) * HARTREE_TO_KCAL
+    heavy, perms = automorphisms(sym, X[0], max_automorphisms)
     I, J = candidate_pairs(X, E_kcal, heavy, threshold, gate_kcal)
     R = pair_rmsd(X, heavy, perms, I, J, threshold) if len(I) else np.zeros(0)
     kept, leader = leaders(len(X), E_kcal, I, J, R, threshold)
