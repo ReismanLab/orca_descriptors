@@ -6,6 +6,8 @@
     calcParam.inp, record everything, submit the ORCA array.
 ``run_orca_conformer``  (ORCA array, one element per conformer)
     run ORCA in conf_N/, record the outcome (exit code AND the termination banner), condense.
+``run_orca_chunk``  (ORCA array with ``slurm.orca_batch``, one element per chunk of a molecule's conformers)
+    run several of them at once on one (exclusive) node, each as ``run_orca_conformer`` would.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ import subprocess
 import threading
 import time
 import traceback
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from rdkit import Chem
@@ -37,6 +41,11 @@ from desc_utils.submit.source import Ensemble, Ensembles
 
 TERMINATION_BANNER = "ORCA TERMINATED NORMALLY"
 RUN_TIME_RE = re.compile(r"^TOTAL RUN TIME:\s*(.+?)\s*$", re.MULTILINE)
+#: what a batched run returns for a conformer it never started because the job was already being
+#: stopped; :func:`record_not_started` then records it as ``timeout`` (or ``failed`` after a cancel)
+NOT_STARTED = "not_started"
+#: ORCA is MPI-only: a threaded BLAS in each rank would oversubscribe a node shared by several runs
+SINGLE_THREAD_ENV = {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
 
 
 def conformer_name(i: int) -> str:
@@ -223,6 +232,10 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         write_xyz(conf_dir / "input.xyz", ens.elements, [tagged])
         if not gxtb_engine:  # g-xTB takes its options from the config, there is no input file to copy
             shutil.copyfile(mol_dir / "calcParam.inp", conf_dir / "calcParam.inp")
+            if not lot["opt_geom"]:
+                # No optimisation step, so ORCA never writes optimization.xyz; yet the template's redox
+                # steps and the condenser read it. Without the step it is the input geometry.
+                shutil.copyfile(conf_dir / "input.xyz", conf_dir / "optimization.xyz")
         conformer_records[name] = rec | {"status": "prepared", "prepared_at": records.now()}
         if old in records.BAD_CONFORMER or old in records.PENDING_CONFORMER or old == "completed":
             conformer_records[name] |= {"resubmitted_from": old, "reason": None}
@@ -242,8 +255,8 @@ def prepare_molecule(cfg: Config, inchikey: str, input_smiles: str, force: bool 
         writer = slurm.write_gxtb_array if gxtb_engine else slurm.write_orca_array
         script, _ = writer(cfg, cfg.jobdir, inchikey, to_run)
         job_id = slurm.sbatch(script)
-        # with g-xTB batching, element i runs the i-th chunk of dft.gxtb.batch_size conformers
-        per_element = (cfg.gxtb.get("batch_size") or 1) if gxtb_engine else 1
+        # with batching, element i runs the i-th chunk of dft.gxtb.batch_size / slurm.orca_batch.batch_size conformers
+        per_element = (cfg.gxtb.get("batch_size") or 1) if gxtb_engine else ((cfg.orca_batch or {}).get("batch_size") or 1)
         records.update_metadata(lib, inchikey, {"conformers": {
             c: {"status": "submitted", "slurm_array_job_id": job_id, "slurm_array_index": i // per_element,
                 "submitted_at": records.now()}
@@ -392,8 +405,14 @@ def orca_outcome(out_path: Path, exit_code: int | None) -> dict:
             "orca_run_time_s": run_time_s, "orca_steps_s": steps}
 
 
-def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str | None = None) -> str:
-    """Run ORCA for one conformer folder and record the outcome. Returns the conformer status."""
+def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str | None = None,
+                       cpus: int | None = None, watch: TermWatch | None = None, packed: dict | None = None) -> str:
+    """Run ORCA for one conformer folder and record the outcome. Returns the conformer status.
+
+    ``cpus``: what the conformer's cost is counted on; default the whole allocation. ``watch``: the
+    SIGTERM handler of a packed element (:func:`run_orca_chunk`); a conformer reached after it fired is
+    not started and :data:`NOT_STARTED` is returned. ``packed``: recorded with the conformer, so the
+    node it shared and its billed size stay traceable."""
     lib = cfg.library_dir
     conf_dir = lib / inchikey / conformer
     if not (conf_dir / "calcParam.inp").exists():
@@ -401,17 +420,22 @@ def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str
     orca = orca_cmd or cfg.slurm.get("orca_cmd") or shutil.which("orca")
     if not orca:
         raise FileNotFoundError("orca not found on PATH; load the module in slurm.setup or set slurm.orca_cmd")
+    if watch is not None and watch.terminated:
+        return NOT_STARTED                # the job is being stopped: leave the record at submitted
 
     nprocs = (records.load_metadata(lib, inchikey).get("dft") or {}).get("nprocs")
-    cpus = allocated_cpus(nprocs)
+    cpus = cpus or allocated_cpus(nprocs)
     job_env = {"slurm_job_id": os.environ.get("SLURM_JOB_ID"), "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
                "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"), "host": os.uname().nodename, "cpus": cpus}
+    if packed:
+        job_env["packed"] = packed
     records.update_metadata(lib, inchikey, {"conformers": {conformer: {
         "status": "running", "started_at": records.now(), "orca_cmd": orca, **job_env}}})
 
     out_path = conf_dir / "calcParam.out"
     t0 = time.time()
-    exit_code, timed_out = run_watching_for_term([orca, "calcParam.inp"], conf_dir, out_path)
+    exit_code, timed_out = run_watching_for_term([orca, "calcParam.inp"], conf_dir, out_path,
+                                                 env=SINGLE_THREAD_ENV if watch is not None else None, watch=watch)
 
     outcome = orca_outcome(out_path, exit_code)
     if timed_out:
@@ -425,6 +449,79 @@ def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str
     records.update_metadata(lib, inchikey, {"conformers": {conformer: outcome}})
     print(f"{inchikey}/{conformer}: {outcome['status']} (exit {exit_code}, banner {outcome['orca_terminated_normally']})")
     return outcome["status"]
+
+
+def orca_workers(workers: int | None, node_cpus: int, nprocs: int, n_conformers: int) -> int:
+    """ORCA runs at once in a packed element: ``workers``, or every ``nprocs`` CPUs of the node filled;
+    never more than there are conformers, never oversubscribed (measured 3.4x slower), at least one."""
+    fill = max(1, node_cpus // max(1, nprocs))
+    return max(1, min(int(workers or fill), fill, n_conformers))
+
+
+def record_not_started(lib: Path, inchikey: str, statuses: dict[str, str]) -> None:
+    """Record the conformers a stopped batched element never started (``NOT_STARTED`` in ``statuses``)
+    as the SIGTERM meant (``timeout``, or ``failed`` after ``orcadesc cancel``), updating ``statuses``:
+    left at ``submitted`` they would look in progress, while a ``timeout`` is rerun by the next plain submit."""
+    not_started = [c for c, st in statuses.items() if st == NOT_STARTED]
+    if not not_started:
+        return
+    job_env = {"slurm_job_id": os.environ.get("SLURM_JOB_ID"), "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID")}
+    outcome = terminated_outcome(lib, job_env)
+    reason = "not started: the job was stopped before reaching it"
+    if outcome.get("reason"):
+        reason = f"{outcome['reason']}; {reason}"
+    records.update_metadata(lib, inchikey, {"conformers": {
+        c: {**outcome, "reason": reason, "finished_at": records.now()} for c in not_started}})
+    for c in not_started:
+        statuses[c] = outcome["status"]
+    print(f"{inchikey}: {len(not_started)} conformer(s) not started, recorded as {outcome['status']}")
+
+
+def run_orca_chunk(cfg: Config, inchikey: str, conformers: list[str], orca_cmd: str | None = None) -> dict[str, str]:
+    """Run a chunk of one molecule's conformers in one packed element; returns {conformer: status}.
+
+    ``slurm.orca_batch``: the element holds one node (exclusive by default) and runs ``workers`` ORCA
+    jobs at once, each with the ``nprocs`` MPI ranks of calcParam.inp (``slurm.orca.ntasks``); a worker
+    takes the next conformer as soon as its last one ends, so the node stays full until the chunk runs
+    dry. Each conformer is recorded as a lone one would be, its cost counted on its own ``nprocs``;
+    the node's CPUs and the worker count are stored with it under ``packed``. An exclusive node is
+    billed whole, idle tail included, so the element's billed CPU-h (node CPUs x wall time) is printed
+    at the end: the sum of the conformers' ``cpu_hours`` is the lower bound of the bill.
+
+    On SIGTERM the running conformers are recorded ``timeout`` (``failed`` after a cancel) and the
+    ones not started yet likewise, with ``reason`` saying so. A conformer whose run raises is recorded
+    ``failed`` with the error and the others carry on.
+    """
+    lib = cfg.library_dir
+    nprocs = int((records.load_metadata(lib, inchikey).get("dft") or {}).get("nprocs") or 1)
+    node_cpus = allocated_cpus(nprocs)
+    workers = orca_workers((cfg.orca_batch or {}).get("workers"), node_cpus, nprocs, len(conformers))
+    packed = {"node_cpus": node_cpus, "workers": workers, "chunk_size": len(conformers),
+              "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID")}
+    print(f"{inchikey}: {len(conformers)} conformer(s) on {node_cpus} CPU(s), {workers} ORCA run(s) x {nprocs} rank(s) at once")
+    statuses: dict[str, str] = {}
+
+    def one(conformer: str) -> str:
+        try:
+            return run_orca_conformer(cfg, inchikey, conformer, orca_cmd=orca_cmd, cpus=nprocs, watch=watch,
+                                      packed=packed)
+        except Exception as exc:  # noqa: BLE001 -- recorded, then the next conformer runs
+            traceback.print_exc()
+            records.update_metadata(lib, inchikey, {"conformers": {conformer: {
+                "status": "failed", "reason": f"{type(exc).__name__}: {exc}", "finished_at": records.now()}}})
+            return "failed"
+
+    t0 = time.time()
+    with TermWatch() as watch:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for conformer, status in zip(conformers, pool.map(one, conformers)):
+                statuses[conformer] = status
+    record_not_started(lib, inchikey, statuses)
+    wall = time.time() - t0
+    print(f"{inchikey}: element done in {wall:.0f} s, billed {node_cpus} CPU(s) x {wall / 3600:.3f} h = "
+          f"{node_cpus * wall / 3600:.2f} CPU-h; " + ", ".join(
+              f"{s} {n}" for s, n in sorted(Counter(statuses.values()).items())))
+    return statuses
 
 
 def _condense(conf_dir: Path) -> dict:
