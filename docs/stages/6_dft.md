@@ -32,7 +32,48 @@ before the walltime), and condenses the outputs to `orca_condensed.json` when `c
 | `dft.calc_param_template` | `desc_utils/submit/calcParam.inp.tmpl` | your own copy of the template, only to change which compound steps exist or how they chain | yes (its SHA-256; the copy is frozen under `_jobs/<timestamp>/`) |
 | `slurm.orca` | `{time: "160:00:00", mem_per_cpu: 4G, ntasks: 16, nodes: 1}` | the ORCA job profile; `ntasks` becomes `%pal nprocs`, `mem_per_cpu` (or `mem`/`ntasks`) gives `%maxcore` at 75 % | no |
 | `slurm.orca_cmd` | `orca` on PATH | the ORCA binary, when `module load` is not enough | no |
+| `slurm.orca_batch` | absent (one conformer per element) | several conformers per array element, run side by side on one node: `batch_size`, `workers`, `exclusive` ([below](#packing-conformers-onto-exclusive-nodes-slurmorca_batch)) | no |
 | `condense` (top level) | `true` | write `conf_N/orca_condensed.json` when each job ends | no |
+
+### Packing conformers onto exclusive nodes (`slurm.orca_batch`)
+
+Without it every conformer is its own SLURM job of `slurm.orca.ntasks` CPUs, which on a shared node
+competes with other users' jobs: the ConfAnalysis DFT cost study measured that at 2.9x the cost of a
+quiet node on average, 8.9x at worst (OpenMPI busy-polls while a rank is descheduled). Asking for the
+node with `--exclusive` alone is worse, because an exclusive node bills its full core count. The fix
+it measured is one exclusive node running several 4-rank ORCA jobs at once: 1.03 billed CPU-h per
+single point. `slurm.orca_batch` does that:
+
+```yaml
+slurm:
+  orca: {time: "24:00:00", mem_per_cpu: 4G, ntasks: 4}   # ntasks: the MPI ranks of ONE conformer (%pal nprocs)
+  orca_batch:
+    batch_size: 64        # conformers per array element (one queue entry), one molecule's at most
+    workers: null         # ORCA runs at once; null: the node's CPUs // ntasks, e.g. 16 on 64 cores
+    exclusive: true       # the default: --nodes=1 --exclusive --mem=0, no --ntasks
+```
+
+- **One queue entry per chunk, not per conformer.** Element `i` takes the `i`-th `batch_size` conformers
+  of the molecule. `workers` of them run at once, and a worker starts the next conformer as soon as its
+  last one ends, so the node stays full until the chunk runs dry. Chunks never span molecules.
+- **Workers fill whatever node the element lands on**: `SLURM_CPUS_ON_NODE // ntasks`, so 16 on a 64-core
+  node and 8 on a 32-core one. A larger `workers` is capped there: oversubscribing measured 3.4x slower.
+  Add `constraint:` to `slurm.orca` to land on one node type.
+- **Size `time` for the chunk**: about `batch_size / workers` rounds of the slowest conformer, on the
+  smallest node the element might get.
+- **Memory**: `--mem=0` gives the element the node's memory; `%maxcore` still comes from
+  `slurm.orca.mem_per_cpu` (75 %), so keep `mem_per_cpu x ntasks x workers` within the node.
+- **`exclusive: false`** asks for `workers x ntasks` tasks on one node instead (then `workers` is
+  required): packing without the exclusive node.
+- **Cost**: each conformer records `cpus` = `ntasks` and `cpu_hours` from its own wall time, plus
+  `packed: {node_cpus, workers, chunk_size, slurm_array_task_id}`. An exclusive node bills its idle tail
+  too, so the element prints its billed CPU-h (node CPUs x wall time) in its SLURM log; the conformers'
+  `cpu_hours` add up to the lower bound of the bill.
+- **Stopping**: on SIGTERM (walltime or `orcadesc cancel`) the running ORCA jobs are stopped and recorded
+  `timeout` (`failed` after a cancel), and so are the conformers not started yet, with
+  `reason: not started: ...`; the next plain `submit` reruns them. ORCA runs with `OMP_NUM_THREADS=1`
+  and `MKL_NUM_THREADS=1` so no threaded BLAS oversubscribes the node.
+- Not hashed: a library can switch between packed and unpacked elements at any `submit`.
 
 ### `level_of_theory`
 
@@ -40,7 +81,7 @@ All keys but `extra_basis` are required; an unknown key is refused.
 
 | Key | Type | Compound step it feeds | Meaning |
 |---|---|---|---|
-| `opt_geom` | bool | `optimization` | run the geometry optimisation (else the input geometry is used as is) |
+| `opt_geom` | bool | `optimization` | run the geometry optimisation (else the input geometry is used as is, and `prepare` writes `conf_N/optimization.xyz` as a copy of `input.xyz`, because the redox steps and the condenser read that file) |
 | `freq_calc` | bool | `frequency` | harmonic frequencies and thermochemistry on the optimised geometry |
 | `nmr_calc` | bool | `nmr` | GIAO shieldings |
 | `vertical_redox` | bool | `oxidation`, `reduction` | vertical N-1 / N+1 electron single points on the optimised geometry (multiplicity + 1) |
@@ -49,7 +90,7 @@ All keys but `extra_basis` are required; an unknown key is refused.
 | `svp_method` | string | `singlepoint`, `oxidation`, `reduction` | e.g. `"m06 d4 def2-tzvp"` |
 | `property_solvent` | string | `singlepoint`, `nmr`, `oxidation`, `reduction` | solvation keyword for the property steps |
 | `nmr_method` | string | `nmr` | e.g. `"m06 d4 def2-tzvp"` |
-| `nbo_run` | string | `singlepoint`, `oxidation`, `reduction` | population analysis keywords, `"NBO NPA"` (needs `NBOEXE`/`GENEXE` in `slurm.setup`) or `""` |
+| `nbo_run` | string | `singlepoint`, `oxidation`, `reduction` | population analysis keywords, `"NBO NPA"` (needs `NBOEXE`/`GENEXE` in `slurm.setup`) or `""`. **With `condense: true` it must run NBO**: the condenser needs one complete NBO block (the NPA charges) and refuses a job without one, so `""` leaves the job uncondensed |
 | `extra_basis` | mapping | `optimization`, `frequency` | `{element: basis}` rendered as a `%basis NewGTO` block, e.g. `{Ni: def2-tzvp}` for full def2-TZVP on Ni; `{}` or absent for none |
 
 The `singlepoint` step always runs (`HIRSHFELD CHELPG`, `%elprop` dipole and polarizability are fixed
@@ -75,7 +116,9 @@ slurm:
 condense: true
 ```
 
-A cheaper single-point-only library:
+A cheaper single-point-only library, on the stage-4 geometries as they are (`prepare` copies each
+`input.xyz` to `optimization.xyz`). NBO stays on: the condenser needs it, and on a closed-shell single
+point it costs little next to the SCF:
 
 ```yaml
 dft:
@@ -89,7 +132,7 @@ dft:
     svp_method: "r2scan-3c"
     property_solvent: ""
     nmr_method: ""
-    nbo_run: ""
+    nbo_run: "NBO NPA"
     extra_basis: {}
 ```
 

@@ -93,7 +93,14 @@ GXTB_RESOURCE_KEYS = {"executable", "batch_size", "workers"}
 #: ``dft.gxtb`` keys that only add an output file and change no number in the results: also excluded from
 #: the hash, so an existing library can be rerun with the orbitals written out
 GXTB_OUTPUT_KEYS = {"molden"}
-SLURM_KEYS = {"setup", "ensembles", "prepare", "orca", "gxtb", "array_throttle", "orca_cmd", "gxtb_cmd"}
+SLURM_KEYS = {"setup", "ensembles", "prepare", "orca", "gxtb", "array_throttle", "orca_cmd", "gxtb_cmd", "orca_batch"}
+#: ``slurm.orca_batch``: several ORCA conformers per array element, run side by side
+#: (desc_utils.submit.tasks.run_orca_chunk). Resources only, so recorded, never hashed.
+ORCA_BATCH_DEFAULTS = {
+    "batch_size": 1,          # conformers per array element, one molecule's at most
+    "workers": None,          # ORCA runs at once; None: the node's CPUs // slurm.orca.ntasks
+    "exclusive": True,        # one whole node per element (--exclusive --mem=0), filled with workers
+}
 PROFILE_KEYS = {"partition", "account", "time", "mem", "mem_per_cpu", "ntasks", "cpus_per_task", "nodes",
                 "qos", "constraint", "gres", "extra"}
 
@@ -329,6 +336,31 @@ def _gxtb(block, where: str, post_opt_refiner: str | None) -> dict:
     return block
 
 
+def _orca_batch(block, where: str, dft: dict) -> dict | None:
+    """Validate ``slurm.orca_batch`` and fill in the defaults; None when it is absent (one conformer per
+    element, every element its own ``slurm.orca`` allocation, as before the key existed)."""
+    if block is None:
+        return None
+    if not isinstance(block, dict):
+        raise ValueError(f"{where} must be a mapping, got {block!r}")
+    if dft.get("engine", DEFAULT_DFT_ENGINE) != "orca":
+        raise ValueError(f"{where} is for dft.engine: orca; g-xTB batches with dft.gxtb.batch_size / workers")
+    block = {**ORCA_BATCH_DEFAULTS, **block}
+    _check_keys(block, set(ORCA_BATCH_DEFAULTS), where)
+    size = block["batch_size"]
+    if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+        raise ValueError(f"{where}.batch_size must be a positive integer, got {size!r}")
+    workers = block["workers"]
+    if workers is not None and (isinstance(workers, bool) or not isinstance(workers, int) or workers < 1):
+        raise ValueError(f"{where}.workers must be a positive integer or null, got {workers!r}")
+    if not isinstance(block["exclusive"], bool):
+        raise ValueError(f"{where}.exclusive must be true or false, got {block['exclusive']!r}")
+    if not block["exclusive"] and workers is None:
+        raise ValueError(f"{where}: without exclusive the element asks for workers x slurm.orca.ntasks "
+                         f"CPUs, so workers must be set")
+    return block
+
+
 # --------------------------------------------------------------------------- bceg's view of the stages
 def start_params(pre: dict) -> dict:
     """The bceg ``start_*`` searcher parameters that the pre_refinement block stands for."""
@@ -449,6 +481,7 @@ def read_raw(path: str | Path) -> dict:
     _check_keys(slurm, SLURM_KEYS, f"{path}: slurm")
     for prof in ("prepare", "orca", "gxtb"):
         _check_keys(slurm[prof], PROFILE_KEYS, f"{path}: slurm.{prof}")
+    slurm["orca_batch"] = _orca_batch(slurm.get("orca_batch"), f"{path}: slurm.orca_batch", dft)
     slurm["setup"] = list(slurm.get("setup") or [])
     slurm["ensembles"] = dict(slurm.get("ensembles") or {})
     _check_keys(slurm["ensembles"], BCEG_SLURM_KEYS, f"{path}: slurm.ensembles")
@@ -575,6 +608,11 @@ class Config:
     def gxtb(self) -> dict:
         """The resolved ``dft.gxtb`` block; empty with the ORCA engine."""
         return self.dft.get("gxtb") or {}
+
+    @property
+    def orca_batch(self) -> dict | None:
+        """The resolved ``slurm.orca_batch`` block, or None: one ORCA conformer per array element."""
+        return self.slurm.get("orca_batch")
 
     @property
     def transformation_name(self) -> str:

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import stat
+import time
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +28,7 @@ from bceg.structure import Structure
 from bceg.xyz import HARTREE_TO_KCAL, Conformer, read_xyz, write_xyz
 
 from desc_utils.submit import records, slurm, template
+from desc_utils.submit import tasks as tasks_module
 from desc_utils.submit.cli import main
 from desc_utils.submit.config import Config
 from desc_utils.submit.source import Ensembles
@@ -336,6 +339,21 @@ def test_prepare_prunes_splits_and_submits(tree, fake_sbatch):
     assert reg["transformed_smiles"] == "CCO"
 
 
+def test_optimization_xyz_is_the_input_geometry_without_the_optimisation_step(tree, fake_sbatch):
+    """opt_geom false: nothing in ORCA writes optimization.xyz, but the redox steps and the condenser read
+    it, so prepare writes it as a copy of input.xyz. With opt_geom true ORCA writes it, prepare does not."""
+    key = tree["keys"]["CCO"]
+    conf = tree["lib"] / key / "conf_1"
+    assert prepare_molecule(_frozen(tree, fake_sbatch), key, "CCO") == "prepared"
+    assert not (conf / "optimization.xyz").exists()
+    shutil.rmtree(tree["root"] / "LIB")
+    _rewrite(tree, dft={"level_of_theory": {**LEVEL_OF_THEORY, "opt_geom": False, "freq_calc": False}})
+    assert prepare_molecule(_frozen(tree, fake_sbatch), key, "CCO") == "prepared"
+    assert (conf / "optimization.xyz").read_text() == (conf / "input.xyz").read_text()
+    inp = (conf / "calcParam.inp").read_text()
+    assert "Variable opt_geom = false;" in inp and "optimization.xyz" in inp.split("oxidation")[1]
+
+
 def test_structure_mol_keeps_dative_bonds_and_start_geometry(tmp_path):
     from bceg.transforms import BUILTIN_TRANSFORMS, Transformation
     t = Transformation("NiF2", BUILTIN_TRANSFORMS / "ni_x2.py", {"x": "F"}, multiplicity=1)
@@ -630,6 +648,106 @@ def test_allocated_cpus_rules(monkeypatch):
     assert allocated_cpus(16) == 16
     monkeypatch.setenv("SLURM_CPUS_ON_NODE", "32")
     assert allocated_cpus(16) == 32                      # what the allocation holds on this node wins
+
+
+def _batched_slurm(**batch) -> dict:
+    return {**_lib_cfg()["slurm"], "orca_batch": batch}
+
+
+def test_orca_batch_config_profile_and_hash(tree):
+    """slurm.orca_batch: validated, defaults filled in, never part of the params hash; the element asks
+    for a whole node (no --ntasks: slurm.orca.ntasks stays the per-conformer %pal nprocs)."""
+    plain = Config.load(_rewrite(tree)).compared()
+    cfg = Config.load(_rewrite(tree, slurm=_batched_slurm(batch_size=40)))
+    assert cfg.orca_batch == {"batch_size": 40, "workers": None, "exclusive": True}
+    assert cfg.compared() == plain
+    prof = slurm.orca_batch_profile(cfg)
+    assert prof == {"time": "01:00:00", "nodes": 1, "mem": 0, "extra": ["--exclusive"]}
+    lines = slurm.directives(prof)
+    assert "#SBATCH --exclusive" in lines and "#SBATCH --mem=0" in lines and not any("--ntasks" in x for x in lines)
+    cfg = Config.load(_rewrite(tree, slurm=_batched_slurm(batch_size=8, workers=3, exclusive=False)))
+    assert slurm.orca_batch_profile(cfg) == {"time": "01:00:00", "nodes": 1, "ntasks": 6, "mem_per_cpu": "4G"}
+    assert Config.load(_rewrite(tree)).orca_batch is None
+    for bad, message in (({"batch_size": 0}, "batch_size must be a positive integer"),
+                         ({"workers": True}, "workers must be a positive integer"),
+                         ({"exclusive": False}, "workers must be set"),
+                         ({"pack": 4}, "pack")):
+        _rewrite(tree, slurm=_batched_slurm(**bad))
+        with pytest.raises(ValueError, match=message):
+            Config.load(tree["cfg"])
+    _rewrite(tree, slurm=_batched_slurm(batch_size=4),
+             dft={"engine": "gxtb", "gxtb": {"opt_geom": False}})
+    with pytest.raises(ValueError, match="for dft.engine: orca"):
+        Config.load(tree["cfg"])
+
+
+def test_orca_workers_fill_the_node_never_oversubscribe():
+    assert tasks_module.orca_workers(None, 64, 4, 100) == 16   # the node filled
+    assert tasks_module.orca_workers(None, 32, 4, 100) == 8    # whatever node the element landed on
+    assert tasks_module.orca_workers(None, 64, 4, 3) == 3      # no more runs than conformers
+    assert tasks_module.orca_workers(40, 64, 4, 100) == 16     # never oversubscribed
+    assert tasks_module.orca_workers(4, 64, 4, 100) == 4
+    assert tasks_module.orca_workers(None, 2, 4, 5) == 1
+
+
+def _slow_fake_orca(path: Path, seconds: float) -> Path:
+    """The fake ORCA that also sleeps and prints the thread settings it was started with."""
+    _fake_orca(path)
+    body = path.read_text().replace("echo 'fake orca'\n",
+                                    f'echo "fake orca OMP=$OMP_NUM_THREADS MKL=$MKL_NUM_THREADS"\nsleep {seconds}\n')
+    path.write_text(body)
+    return path
+
+
+def test_packed_orca_element_runs_conformers_side_by_side(tree, fake_sbatch, tmp_path, monkeypatch):
+    """batch_size 3 on a 4-CPU 'node' with nprocs 2: one array element, two ORCA runs at once, each
+    conformer recorded on its own 2 CPUs with the node it shared; the element runs through orca-task."""
+    orca = _slow_fake_orca(tmp_path / "orca_slow", 1.0)
+    _rewrite(tree, slurm={**_batched_slurm(batch_size=3), "orca_cmd": str(orca)}, pruning=DELETE)
+    cfg = _frozen(tree, fake_sbatch)
+    key = tree["keys"]["CCO"]
+    assert prepare_molecule(cfg, key, "CCO") == "prepared"
+    meta = records.load_metadata(tree["lib"], key)
+    assert {c: r["slurm_array_index"] for c, r in meta["conformers"].items()} == {"conf_1": 0, "conf_2": 0, "conf_3": 0}
+    script = fake_sbatch[-1]["script"].read_text()
+    assert "#SBATCH --array=0-0%50" in script and "#SBATCH --exclusive" in script and "#SBATCH --mem=0" in script
+    assert "#SBATCH --nodes=1" in script and "--ntasks" not in script and "--mem-per-cpu" not in script
+    assert "nprocs 2" in (tree["lib"] / key / "conf_1" / "calcParam.inp").read_text()
+    tasks_file = fake_sbatch[-1]["script"].with_suffix(".jsonl")
+    assert json.loads(tasks_file.read_text()) == {"inchikey": key, "conformers": ["conf_1", "conf_2", "conf_3"]}
+
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "1002")
+    monkeypatch.setenv("SLURM_ARRAY_TASK_ID", "0")
+    monkeypatch.setenv("SLURM_CPUS_ON_NODE", "4")
+    t0 = time.time()
+    assert main(["orca-task", str(cfg.path), "--tasks", str(tasks_file), "--index", "0"]) == 0
+    wall = time.time() - t0
+    assert wall < 2.8                                        # 3 x 1 s on 2 workers: 2 rounds, not 3
+    meta = records.load_metadata(tree["lib"], key)
+    for c in ("conf_1", "conf_2", "conf_3"):
+        rec = meta["conformers"][c]
+        assert rec["status"] == "completed" and rec["cpus"] == 2
+        assert rec["cpu_hours"] == round(rec["wall_time_s"] / 3600 * 2, 5)
+        assert rec["packed"] == {"node_cpus": 4, "workers": 2, "chunk_size": 3, "slurm_array_task_id": "0"}
+        assert "OMP=1 MKL=1" in (tree["lib"] / key / c / "calcParam.out").read_text()
+    assert records.molecule_state(meta)[0] == "complete"
+
+
+def test_stopped_packed_element_records_what_it_never_started(tree, fake_sbatch, tmp_path, monkeypatch):
+    cfg = _frozen(tree, fake_sbatch)
+    key = tree["keys"]["CCO"]
+    prepare_molecule(cfg, key, "CCO")
+    watch = tasks_module.TermWatch()
+    watch.terminated = True                                  # SIGTERM already arrived
+    good = _fake_orca(tmp_path / "orca_ok")
+    status = run_orca_conformer(cfg, key, "conf_1", orca_cmd=str(good), cpus=2, watch=watch)
+    assert status == tasks_module.NOT_STARTED
+    assert records.load_metadata(tree["lib"], key)["conformers"]["conf_1"]["status"] == "submitted"
+    statuses = {"conf_1": status}
+    tasks_module.record_not_started(tree["lib"], key, statuses)
+    rec = records.load_metadata(tree["lib"], key)["conformers"]["conf_1"]
+    assert statuses == {"conf_1": "timeout"} and rec["status"] == "timeout" and rec["reason"].startswith("not started")
+    assert not (tree["lib"] / key / "conf_1" / "calcParam.out").exists()
 
 
 def test_orca_task_records_and_status(tree, fake_sbatch, tmp_path, monkeypatch, capsys):
@@ -1197,6 +1315,11 @@ def test_cancelled_job_that_starts_late_touches_nothing(tree, fake_sbatch, tmp_p
 
     good = _fake_orca(tmp_path / "orca_ok")
     assert run_orca_conformer(cfg, key, "conf_1", orca_cmd=str(good)) == CANCELLED_AT_START
+    assert records.load_metadata(tree["lib"], key) == before
+    assert not (tree["lib"] / key / "conf_1" / "calcParam.out").exists()
+    # a packed element (slurm.orca_batch) of the listed job likewise runs and records nothing
+    chunk = tasks_module.run_orca_chunk(cfg, key, ["conf_1"], orca_cmd=str(good))
+    assert chunk == {"conf_1": CANCELLED_AT_START}
     assert records.load_metadata(tree["lib"], key) == before
     assert not (tree["lib"] / key / "conf_1" / "calcParam.out").exists()
 
