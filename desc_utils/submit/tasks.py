@@ -35,7 +35,7 @@ from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils import orca_parse as op
 from desc_utils.submit import records, slurm, template
-from desc_utils.submit.cancel import REASON, was_cancelled
+from desc_utils.submit.cancel import REASON, this_job_cancelled, was_cancelled
 from desc_utils.submit.config import Config
 from desc_utils.submit.source import Ensemble, Ensembles
 
@@ -405,15 +405,23 @@ def orca_outcome(out_path: Path, exit_code: int | None) -> dict:
             "orca_run_time_s": run_time_s, "orca_steps_s": steps}
 
 
+#: returned by a task whose job ``cancel`` listed before it started (scancel failed, the job ran later)
+CANCELLED_AT_START = "cancelled_at_start"
+
+
 def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str | None = None,
                        cpus: int | None = None, watch: TermWatch | None = None, packed: dict | None = None) -> str:
-    """Run ORCA for one conformer folder and record the outcome. Returns the conformer status.
+    """Run ORCA for one conformer folder and record the outcome. Returns the conformer status, or
+    :data:`CANCELLED_AT_START` (nothing run, nothing written) when ``cancel`` listed this job.
 
     ``cpus``: what the conformer's cost is counted on; default the whole allocation. ``watch``: the
     SIGTERM handler of a packed element (:func:`run_orca_chunk`); a conformer reached after it fired is
     not started and :data:`NOT_STARTED` is returned. ``packed``: recorded with the conformer, so the
     node it shared and its billed size stay traceable."""
     lib = cfg.library_dir
+    if this_job_cancelled(lib):
+        print(f"{inchikey}/{conformer}: this job was cancelled by `orcadesc cancel`, not started")
+        return CANCELLED_AT_START
     conf_dir = lib / inchikey / conformer
     if not (conf_dir / "calcParam.inp").exists():
         raise FileNotFoundError(f"{conf_dir}: no calcParam.inp (prepare step missing)")
@@ -490,9 +498,13 @@ def run_orca_chunk(cfg: Config, inchikey: str, conformers: list[str], orca_cmd: 
 
     On SIGTERM the running conformers are recorded ``timeout`` (``failed`` after a cancel) and the
     ones not started yet likewise, with ``reason`` saying so. A conformer whose run raises is recorded
-    ``failed`` with the error and the others carry on.
+    ``failed`` with the error and the others carry on. An element whose job ``cancel`` listed before it
+    started runs and writes nothing: every conformer is :data:`CANCELLED_AT_START`.
     """
     lib = cfg.library_dir
+    if this_job_cancelled(lib):
+        print(f"{inchikey}: this job was cancelled by `orcadesc cancel`, {len(conformers)} conformer(s) not started")
+        return dict.fromkeys(conformers, CANCELLED_AT_START)
     nprocs = int((records.load_metadata(lib, inchikey).get("dft") or {}).get("nprocs") or 1)
     node_cpus = allocated_cpus(nprocs)
     workers = orca_workers((cfg.orca_batch or {}).get("workers"), node_cpus, nprocs, len(conformers))

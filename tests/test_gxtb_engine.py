@@ -740,6 +740,22 @@ def test_sigterm_stops_the_chunk_and_records_every_conformer(tree, fake_sbatch, 
         assert recs[c]["status"] == "timeout" and recs[c]["reason"].startswith("not started")
 
 
+def test_cancelled_chunk_that_starts_late_touches_nothing(tree, fake_sbatch, fake_xtb, monkeypatch):
+    """scancel failed and the array element starts later: it must leave the conformers to a new submit."""
+    from desc_utils.submit import records
+    from desc_utils.submit.cancel import cancelled_path
+    from desc_utils.submit.gxtb import run_gxtb_chunk
+    from desc_utils.submit.tasks import CANCELLED_AT_START
+    cfg, key = _prepared(tree, fake_sbatch, gxtb={"batch_size": 10})
+    confs = _all_methanol(tree, key)
+    records.update_json(cancelled_path(tree["lib"]), {"7001": records.now()})
+    before = records.load_metadata(tree["lib"], key)
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "7001")
+    assert run_gxtb_chunk(cfg, key, confs, gxtb_cmd=fake_xtb) == {c: CANCELLED_AT_START for c in confs}
+    assert records.load_metadata(tree["lib"], key) == before
+    assert not any((tree["lib"] / key / c / gc.RUN_DIRNAME).exists() for c in confs)
+
+
 def test_gxtb_task_reads_old_and_new_task_lines(tree, fake_sbatch, monkeypatch):
     """Arrays queued before batching have one {"conformer"} per line; they must still run."""
     from desc_utils.submit import cli

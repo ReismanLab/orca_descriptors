@@ -34,7 +34,9 @@ from pathlib import Path
 
 from desc_utils.submit import records
 from desc_utils.submit.config import Config
-from desc_utils.submit.tasks import TermWatch, allocated_cpus, run_watching_for_term, terminated_outcome
+from desc_utils.submit.cancel import this_job_cancelled
+from desc_utils.submit.tasks import (CANCELLED_AT_START, TermWatch, allocated_cpus, run_watching_for_term,
+                                     terminated_outcome)
 
 #: the steps of a g-xTB conformer job, in run order. ``singlepoint`` is the only one that must succeed:
 #: without it there is nothing to condense.
@@ -177,6 +179,9 @@ def run_gxtb_chunk(cfg: Config, inchikey: str, conformers: list[str], gxtb_cmd: 
     ``failed`` with the error and the others carry on: one bad folder does not cost the rest of the chunk.
     """
     lib = cfg.library_dir
+    if this_job_cancelled(lib):
+        print(f"{inchikey}: this job was cancelled by `orcadesc cancel`, {len(conformers)} conformer(s) not started")
+        return {c: CANCELLED_AT_START for c in conformers}
     nprocs = (records.load_metadata(lib, inchikey).get("dft") or {}).get("nprocs")
     workers, threads = resolve_workers(cfg.gxtb.get("workers"), allocated_cpus(nprocs), len(conformers))
     print(f"{inchikey}: {len(conformers)} conformer(s), {workers} worker(s) x {threads} thread(s)")

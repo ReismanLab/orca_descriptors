@@ -1285,16 +1285,55 @@ def test_orca_task_cancelled_is_failed_not_timeout(tree, fake_sbatch, tmp_path, 
     monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "1002")
     monkeypatch.setenv("SLURM_JOB_ID", "1003")
 
-    def term_soon():
-        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    def term_soon(cancel: bool = False):
+        def fire():
+            if cancel:  # `cancel` lists the job, then scancel sends the TERM to the running task
+                records.update_json(cancelled_path(tree["lib"]), {"1002": records.now()})
+            os.kill(os.getpid(), signal.SIGTERM)
+        threading.Timer(1.0, fire).start()
 
     term_soon()
     assert run_orca_conformer(cfg, key, "conf_1", orca_cmd=str(slow)) == "timeout"   # a walltime TERM
-    records.update_json(cancelled_path(tree["lib"]), {"1002": records.now()})
-    term_soon()
+    term_soon(cancel=True)
     assert run_orca_conformer(cfg, key, "conf_2", orca_cmd=str(slow)) == "failed"
     c2 = records.load_metadata(tree["lib"], key)["conformers"]["conf_2"]
     assert c2["reason"] == "cancelled" and c2["wall_time_s"] > 0
+
+
+def test_cancelled_job_that_starts_late_touches_nothing(tree, fake_sbatch, tmp_path, monkeypatch):
+    """scancel failed after `cancel` wrote its records, and the queued jobs start later: by then a new
+    submit may own the folders, so a prepare or ORCA task of a listed job neither runs nor records."""
+    from desc_utils.submit.cancel import cancelled_path
+    from desc_utils.submit.tasks import CANCELLED_AT_START
+    cfg = _frozen(tree, fake_sbatch)
+    key, other = tree["keys"]["CCO"], tree["keys"]["CC(C)O"]
+    prepare_molecule(cfg, key, "CCO")
+    records.update_json(cancelled_path(tree["lib"]), {"1002": records.now()})
+    before = records.load_metadata(tree["lib"], key)
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "1002")
+    monkeypatch.setenv("SLURM_JOB_ID", "1003")
+
+    good = _fake_orca(tmp_path / "orca_ok")
+    assert run_orca_conformer(cfg, key, "conf_1", orca_cmd=str(good)) == CANCELLED_AT_START
+    assert records.load_metadata(tree["lib"], key) == before
+    assert not (tree["lib"] / key / "conf_1" / "calcParam.out").exists()
+    # a packed element (slurm.orca_batch) of the listed job likewise runs and records nothing
+    chunk = tasks_module.run_orca_chunk(cfg, key, ["conf_1"], orca_cmd=str(good))
+    assert chunk == {"conf_1": CANCELLED_AT_START}
+    assert records.load_metadata(tree["lib"], key) == before
+    assert not (tree["lib"] / key / "conf_1" / "calcParam.out").exists()
+
+    tasks = tmp_path / "prepare.jsonl"
+    slurm.write_tasks(tasks, [{"inchikey": other, "input_smiles": "CC(C)O"}])
+    other_before = records.load_metadata(tree["lib"], other)
+    assert main(["prepare-task", str(cfg.path), "--tasks", str(tasks), "--index", "0"]) == 0
+    assert records.load_metadata(tree["lib"], other) == other_before
+    assert not list((tree["lib"] / other).glob("conf_*"))
+
+    # an element of another (new) array is not affected
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "2002")
+    monkeypatch.setenv("SLURM_JOB_ID", "2003")
+    assert run_orca_conformer(cfg, key, "conf_1", orca_cmd=str(good)) == "completed"
 
 
 # --------------------------------------------------------------------------- a second library, one ensembles tree
