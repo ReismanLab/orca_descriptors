@@ -103,6 +103,38 @@ def test_helpers():
     assert op.polar_anisotropy([1.0, 1.0, 1.0]) == 0.0 and op.polar_anisotropy(None) is None
 
 
+def _property_json(path, dft, info=None):
+    """A minimal property.json: NiH2 with the integrated electron counts ``dft`` and ``Calculation_Info``."""
+    import json
+
+    geom = {"Geometry": {"NAtoms": 3, "Coordinates": {"Cartesians": [["Ni", 0, 0, 0], ["H", 1.4, 0, 0], ["H", 0, 1.4, 0]]}},
+            "DFT_Energy": {"finalEn": -1508.0, **dft}}
+    data = {"Geometries": [geom]}
+    if info is not None:
+        data["Calculation_Info"] = info
+    path.write_text(json.dumps(data))
+
+
+def test_electron_counts_come_from_calculation_info_not_the_grid_integral(tmp_path):
+    """ORCA writes nTotalEl as the grid-integrated density truncated to an integer: 29.9997 electrons
+    of a neutral NiH2 singlet become 29, which made the state a cation. Calculation_Info is exact."""
+    _property_json(tmp_path / "singlepoint.property.json", {"nAlphaEl": 14, "nBetaEl": 14, "nTotalEl": 29},
+                   {"Charge": 0, "Mult": 1, "NumOfElectrons": 30})
+    st = op.property_state(tmp_path, "singlepoint")
+    assert (st["charge"], st["multiplicity"], st["n_alpha"], st["n_beta"], st["n_electrons"]) == (0, 1, 15, 15, 30)
+
+    # an oxidised doublet: one more alpha than beta electron
+    _property_json(tmp_path / "oxidation.property.json", {"nAlphaEl": 14, "nBetaEl": 13, "nTotalEl": 28},
+                   {"Charge": 1, "Mult": 2, "NumOfElectrons": 29})
+    st = op.property_state(tmp_path, "oxidation")
+    assert (st["charge"], st["multiplicity"], st["n_alpha"], st["n_beta"], st["n_electrons"]) == (1, 2, 15, 14, 29)
+
+    # a file without Calculation_Info keeps the old derivation from the integrated counts
+    _property_json(tmp_path / "old.property.json", {"nAlphaEl": 15, "nBetaEl": 15, "nTotalEl": 30})
+    st = op.property_state(tmp_path, "old")
+    assert (st["charge"], st["multiplicity"], st["n_electrons"]) == (0, 1, 30)
+
+
 @pytest.mark.skipif(not (FIXTURE / "calcParam.out").is_file(), reason="needs the tracked fixture conformer")
 def test_fixture_frequency_tables():
     text = (FIXTURE / "calcParam.out").read_text()
