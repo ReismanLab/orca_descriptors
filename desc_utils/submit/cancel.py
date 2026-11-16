@@ -17,10 +17,16 @@ What is marked, with ``reason: cancelled`` and ``cancelled_at``:
   * bceg run records (search and post-optimisation) still ``running`` in a cancelled job -> ``failed``.
     A bceg task that had not started has no record and is simply pending again.
 Completed conformers and finished bceg replicates are left alone.
+
+The cancelled job ids go to ``_jobs/cancelled.json`` before ``scancel``. When ``scancel`` fails
+(SLURM unavailable) the jobs stay queued; a prepare, ORCA or g-xTB task that starts later finds its
+id there and exits without running or writing anything (:func:`this_job_cancelled`), so it cannot
+run beside a newer submission of the same conformers. bceg's own jobs do not check it.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from bceg.provenance import read_record, write_record
@@ -41,6 +47,16 @@ def was_cancelled(library_dir: Path, job_ids: list[str | None]) -> bool:
     """True when one of ``job_ids`` (array id or element id) was cancelled by ``cancel``."""
     done = records.load_json(cancelled_path(library_dir))
     return any(j and str(j) in done for j in job_ids)
+
+
+def this_job_cancelled(library_dir: Path) -> bool:
+    """True when the SLURM job this process runs in was cancelled by ``cancel``.
+
+    Checked by the prepare, ORCA and g-xTB tasks before they touch anything: when ``scancel`` fails
+    after ``cancel`` has written its records (SLURM unavailable), the job stays queued and may start
+    later, possibly after a new ``submit`` has re-prepared the same conformer folders. It must then
+    leave the folders and records to the new submission instead of running a second time beside it."""
+    return was_cancelled(library_dir, [os.environ.get("SLURM_ARRAY_JOB_ID"), os.environ.get("SLURM_JOB_ID")])
 
 
 def _library_jobs(cfg: Config) -> list[dict] | None:
