@@ -48,7 +48,7 @@ def test_floors_around_the_metal():
     o = next(n.GetIdx() for n in s.mol.GetAtomWithIdx(sm).GetNeighbors()
              if n.GetSymbol() == "O" and n.GetTotalNumHs(includeNeighbors=True) == 1)
     h = next(n.GetIdx() for n in s.mol.GetAtomWithIdx(o).GetNeighbors() if n.GetSymbol() == "H")
-    assert _bounds(bm, sm, h)[0] >= chem.METAL_13_FLOOR * (r_sm + pt.GetRcovalent("H")) - 1e-6
+    assert _bounds(bm, sm, h)[0] >= chem.METAL_SUBSTITUENT_FLOOR * (r_sm + pt.GetRcovalent("H")) - 1e-6
 
 
 def test_smi2_iodides_do_not_collapse():
@@ -79,8 +79,9 @@ def test_collapsed_embedding_is_rejected_before_the_preopt(tmp_path, monkeypatch
     s = smi2_complex()
     real = chem.embed
     monkeypatch.setattr(geometry, "embed", lambda mol, seed, ff: _iodide_on_sm(s, seed) if seed == 1 else real(mol, seed, ff=ff))
-    params = {**START_DEFAULTS, "start_preopt": "none", "max_metal_ligand_distance": 3.6,
-              "start_allow_decoordination": True}
+    # no pre-optimisation here, so the raw embedding's squeezed Sm...C contacts (UMA's to fix) are not checked
+    monkeypatch.setattr(geometry, "coordination_problems", lambda *a: [])
+    params = {**START_DEFAULTS, "start_preopt": "none", "max_metal_ligand_distance": 3.6}
     _, info = geometry.make_start_geometry(s, 1, tmp_path, params)
     assert info["attempts"] == 2 and info["seed"] == 1 + SEED_STRIDE
     assert info["rejected"][0]["stage"] == "embedded"

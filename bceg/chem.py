@@ -43,10 +43,14 @@ def is_organic(elements: list[str]) -> bool:
 
 
 #: floors of RDKit's distance bounds around a metal, as fractions of the covalent-radii sum: a metal-ligand
-#: bond at least METAL_BOND_FLOOR x, a 1-3 pair through or onto the metal at least METAL_13_FLOOR x. Both stay
-#: below real distances (Sm-I 3.1 A vs 2.86 A floor; Sm...C through Sm-N-C 3.3-3.5 A vs 3.29 A floor)
+#: bond at least METAL_BOND_FLOOR x, two ligands of one metal at least METAL_13_FLOOR x apart, the metal and a
+#: donor's substituent (M-N-C) at least METAL_SUBSTITUENT_FLOOR x apart. All stay below real distances (Sm-I
+#: 3.1 A vs 2.86 A floor; Sm...C through Sm-N-C 3.3-3.5 A vs 3.01 A floor). METAL_SUBSTITUENT_FLOOR 1.2
+#: (3.29 A) leaves too little room for the amine N configurations ETKDG enforces with start_bound_n_stereo:
+#: one SmI2·L embedding took 99 s instead of 0.4 s
 METAL_BOND_FLOOR = 0.85
 METAL_13_FLOOR = 1.2
+METAL_SUBSTITUENT_FLOOR = 1.1
 
 
 def metal_bounds_matrix(mol: Chem.Mol) -> np.ndarray | None:
@@ -55,9 +59,9 @@ def metal_bounds_matrix(mol: Chem.Mol) -> np.ndarray | None:
     RDKit has no parameters for most metals and sets loose generic bounds for their bonds: on SmI2·L the
     I...I lower bound (1-3 through Sm) is 1.0 A and Sm-I's 1.1 A, so most embeddings put the two iodides
     on top of each other (I...I 0.0 or 0.8 A), which no pre-optimisation undoes. Raised here: each
-    metal-ligand bond's lower bound to METAL_BOND_FLOOR x the covalent-radii sum, and that of every 1-3
-    pair through or onto the metal (two ligands of the metal not bonded to each other; the metal and a
-    donor's substituent: Sm...C, Sm...H of a bound OH) to METAL_13_FLOOR x. Upper bounds are lifted to
+    metal-ligand bond's lower bound to METAL_BOND_FLOOR x the covalent-radii sum, that of two ligands of
+    the metal (not bonded to each other) to METAL_13_FLOOR x, and that of the metal and a donor's
+    substituent (Sm...C, Sm...H of a bound OH) to METAL_SUBSTITUENT_FLOOR x. Upper bounds are lifted to
     stay above the new lower bounds, then the matrix is triangle-smoothed again; if smoothing fails, the
     embedding uses RDKit's own bounds (None).
 
@@ -91,7 +95,7 @@ def metal_bounds_matrix(mol: Chem.Mol) -> np.ndarray | None:
             for k in mol.GetAtomWithIdx(i).GetNeighbors():  # M-D-k: the donor's own substituents
                 k = k.GetIdx()
                 if k != m.GetIdx() and mol.GetBondBetweenAtoms(m.GetIdx(), k) is None:
-                    floor(m.GetIdx(), k, METAL_13_FLOOR * (rcov[m.GetIdx()] + rcov[k]))
+                    floor(m.GetIdx(), k, METAL_SUBSTITUENT_FLOOR * (rcov[m.GetIdx()] + rcov[k]))
     if not changed or not DoTriangleSmoothing(bm):
         return None
     return bm
