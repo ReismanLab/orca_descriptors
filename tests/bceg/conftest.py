@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from bceg.refine import REFINERS, RefineResult, Refiner
+from bceg.refine.base import SPIN_DEFAULTS
 from bceg.search import SEARCHERS, SearchResult, Searcher
 from bceg.search.base import START_DEFAULTS, START_RESOURCE_KEYS
 from bceg.xyz import Conformer
@@ -23,7 +24,7 @@ class FakeRefiner(Refiner):
     """
 
     name = "fake"
-    defaults = {"label": "fake-lot", "scale": 1.0, "keep": 0, "device": "cpu"}
+    defaults = {"label": "fake-lot", "scale": 1.0, "keep": 0, "device": "cpu", **SPIN_DEFAULTS}
     resource_keys = {"device"}
 
     @property
@@ -34,7 +35,7 @@ class FakeRefiner(Refiner):
         out = [Conformer(c.coords, -float(i) * self.params["scale"], {"converged": True}) for i, c in enumerate(conformers)]
         keep = self.params["keep"]
         return RefineResult(out[:keep] if keep else out, versions={"fake": "0"},
-                            details={"n_input": len(conformers)})
+                            details={"n_input": len(conformers), "multiplicity": structure.multiplicity})
 
 
 REFINERS["fake"] = FakeRefiner

@@ -20,7 +20,32 @@ search, right after it.
 Recorded per run for every refiner (`run_1_<lot>.json`): `n_conformers`, `details.n_input`,
 `details.n_unconverged`, `versions`, wall time and core-hours. Each conformer's comment line carries
 `converged=True|False` and `source_index` (its index in `raw_1.xyz`). Charge and multiplicity come from
-the transformation (stage 1).
+the transformation (stage 1), unless the refiner's `multiplicity` sets another spin state ([below](#at-another-spin-state-multiplicity)).
+
+### At another spin state: `multiplicity`
+
+Every refiner takes `params.multiplicity` (default `null`). Set, the step optimises the conformers at that
+multiplicity instead of the transformation's (checked against the electron count), records it in
+`run_<i>_<lot>.json` (`structure.multiplicity`) and in `params_<lot>.json` (it is hashed; `null` is left
+out, so the lots written before it keep their hash), and hands it to stage 6: a library built on that lot
+runs ORCA or g-xTB at that multiplicity. The search, the start geometry (`pre_refinement` refuses the key)
+and the other lots keep the transformation's.
+
+Its use is a `continue_from` lot at another spin state on an existing ensembles tree, e.g. the septet of
+Sm(II) complexes searched as quintets, without searching again:
+
+```yaml
+library_dir: ../DATA/smI2_septet                # new
+ensembles_dir: ../DATA/smI2_quintet/ensembles   # the existing tree; stages 1-3 copied verbatim
+post_optimization:
+  refiner: uma
+  continue_from: uma-s-1p2                      # the quintet lot
+  params: {model: uma-s-1p2, task: omol, fmax: 0.01, max_steps: 50000, device: cpu,
+           multiplicity: 7, lot: uma-s-1p2-m7}
+```
+
+Because the `conf_N` numbering follows the source lot, the quintet and septet libraries compare conformer
+by conformer.
 
 ### A job that runs out of time: the checkpoint
 
@@ -106,6 +131,7 @@ constraints the parameter is left out of `params_<lot>.json`, so unconstrained e
 | `keep_unconverged` | `true` | keep conformers that did not reach `fmax` (flagged `converged: false` on their comment line); `false` drops them |
 | `stall_steps` | `null` (off) | stop a conformer whose lowest energy went down by less than `stall_energy` over the last `stall_steps` steps (an optimiser oscillating between two geometries); it is then unconverged (`keep_unconverged` keeps or drops it) and flagged `stalled: true`; `details.n_stalled` counts them. Hashed only when set. `100` stopped the one oscillating SmI2 conformer at step 437 and none of 2359 converged ones |
 | `stall_energy` | `0.001` | eV; the energy drop below which `stall_steps` counts as no progress (hashed only with `stall_steps`) |
+| `multiplicity` | `null` | spin state of this refinement: `null` keeps the transformation's; a number re-optimises at that multiplicity ([at another spin state](#at-another-spin-state-multiplicity)); every refiner takes it |
 | `lot` | model name | label used in the file names (`raw_1_<lot>.xyz`) |
 | `device` | `cpu` | resource: `cpu` or `cuda`; `cuda` sends the step (and, chained, its whole job) to `slurm.ensembles.gpu` |
 | `workers` | allocation's CPUs | resource: worker processes the conformers are shared out over (`cpu`: one per CPU of the allocation, at most 8 outside SLURM; `cuda`: 1), see [CPU parallelism](#cpu-parallelism-workers-and-threads) |

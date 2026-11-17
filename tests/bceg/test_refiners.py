@@ -444,6 +444,24 @@ def test_stall_settings_are_hashed_only_when_on():
             REFINERS["uma"](**bad)
 
 
+def test_multiplicity_is_hashed_only_when_set_and_changes_the_structure():
+    """post_optimization.params.multiplicity: absent from the hash while null (old lots keep theirs); set, the
+    refiner works on a copy of the structure at that spin state, checked against the electron count."""
+    for name in ("uma", "aimnet2", "xtb", "gxtb"):
+        assert "multiplicity" not in REFINERS[name]().compared_params()
+        assert REFINERS[name](multiplicity=7).compared_params()["multiplicity"] == 7
+    for bad in (0, -1, True, 2.5):
+        with pytest.raises((ValueError, TypeError)):
+            REFINERS["uma"](multiplicity=bad)
+    o2 = Structure("O=O")
+    assert REFINERS["uma"]().for_structure(o2) is o2
+    triplet = REFINERS["uma"](multiplicity=3).for_structure(o2)
+    assert triplet.multiplicity == 3 and triplet.uhf == 2 and o2.multiplicity == 1
+    assert triplet.elements == o2.elements and triplet.charge == o2.charge
+    with pytest.raises(ValueError, match="impossible"):
+        REFINERS["uma"](multiplicity=2).for_structure(o2)
+
+
 def test_aimnet2_unconverged_conformers_are_flagged_or_dropped(fake_aimnet, tmp_path):
     fake_aimnet["force"] = 1.0
     structure = Structure("CCO")
