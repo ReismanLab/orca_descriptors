@@ -82,7 +82,7 @@ def test_i_sm_i_made_linear_with_the_metal_bonds_at_the_radii_sums():
     mol = mol_from_smiles("I[Sm](I)(<-O1CCCC1)(<-O1CCCC1)")
     targets, held = cons.targets(SM_LINEAR, mol), cons.held_atoms(SM_LINEAR, mol)
     (t,) = targets["angles"]
-    coords = embed(mol, 3, ff="none")
+    coords = embed(mol, 5, ff="none")  # seed 3 starts at 120.1 deg with the metal bound floors (bceg.chem)
     assert cons.angle(coords, *t["atoms"]) < 120
     out, info = impose.impose(mol, coords, targets, held, check=geometry.new_problems(mol, coords, 4.0))
     assert cons.angle(out, *t["atoms"]) == pytest.approx(180.0, abs=0.5)
