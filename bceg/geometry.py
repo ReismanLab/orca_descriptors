@@ -4,11 +4,14 @@ Each replicate gets its own ETKDG embedding (seed = replicate seed), optionally
 pre-optimised with xtb (``start_preopt: gfn2 | gfn1 | gfn0 | gfnff``) or with UMA
 (``start_preopt: uma``, parameters in ``start_preopt_params``), then checked:
 
-- every bond to a metal (e.g. Ni-N, Ni-F, Ni-H) must be <= ``max_metal_ligand_distance``;
+- every bond to a metal (e.g. Ni-N, Ni-F, Ni-H) must be <= ``max_metal_ligand_distance`` and
+  >= COLLAPSE_FACTOR x the covalent-radii sum;
 - every other bond of the graph must stay < 1.35 x the covalent-radii sum;
 - no two non-bonded atoms may be closer than the covalent-radii sum (e.g. collapsed H-H).
 
-A rejected geometry is re-embedded with the next seed (``seed + attempt * 10007``),
+An embedding with two atoms on top of each other (closer than COLLAPSE_FACTOR x their covalent-radii sum,
+e.g. an iodide trapped on Sm, where distance geometry has no gradient to pull it off) is rejected before the
+pre-optimisation, which cannot undo it. A rejected geometry is re-embedded with the next seed (``seed + attempt * 10007``),
 so the result is deterministic per replicate.
 
 With ``start_constraints`` (``pre_refinement: constrained``) the searcher's ``constraints`` are imposed
@@ -47,6 +50,10 @@ SEED_STRIDE = 10007
 WALL_MARGIN = 0.3  # Angstrom below max_metal_ligand_distance where an imposed atom's bond to a metal meets its wall
 BOND_STRETCH_FACTOR = 1.35
 CLASH_FACTOR = 1.0
+#: closer than this x the covalent-radii sum, two atoms are on top of each other: such an embedding is rejected
+#: before the pre-optimisation, and a bond to a metal this short is a problem (real bonds: Ni-H 0.94x,
+#: Sm-O 0.91x; ETKDG squeezes Sm-I to ~0.65x, which the pre-optimisation fixes)
+COLLAPSE_FACTOR = 0.5
 
 
 def pair_geometry(mol: Chem.Mol, coords: np.ndarray) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
@@ -71,6 +78,8 @@ def _coordination_issues(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_dis
         if symbols[i] not in ORGANIC_ELEMENTS or symbols[j] not in ORGANIC_ELEMENTS:
             if d > max_metal_ligand_distance:
                 issues.append((i, j, d, 1, f"{label} {d:.2f} A > {max_metal_ligand_distance} A (decoordinated)"))
+            elif d < COLLAPSE_FACTOR * (radii[i] + radii[j]):
+                issues.append((i, j, d, -1, f"{label} {d:.2f} A (metal-ligand bond collapsed)"))
         elif d > BOND_STRETCH_FACTOR * (radii[i] + radii[j]):
             issues.append((i, j, d, 1, f"{label} {d:.2f} A (bond broken)"))
     iu = np.triu_indices(len(symbols), k=1)
@@ -78,6 +87,13 @@ def _coordination_issues(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_dis
         if not bonded[i, j] and dist[i, j] < CLASH_FACTOR * (radii[i] + radii[j]):
             issues.append((i, j, dist[i, j], -1, f"{symbols[i]}{i}...{symbols[j]}{j} {dist[i, j]:.2f} A (non-bonded clash)"))
     return issues
+
+
+def collapsed_pairs(mol: Chem.Mol, coords: np.ndarray) -> list[str]:
+    """Pairs (bonded or not) closer than COLLAPSE_FACTOR x their covalent-radii sum: atoms on top of each other."""
+    symbols, radii, dist, _ = pair_geometry(mol, coords)
+    i, j = np.nonzero(np.triu(dist < COLLAPSE_FACTOR * (radii[:, None] + radii[None, :]), k=1))
+    return [f"{symbols[a]}{a}...{symbols[b]}{b} {dist[a, b]:.2f} A (collapsed embedding)" for a, b in zip(i, j)]
 
 
 def coordination_problems(mol: Chem.Mol, coords: np.ndarray, max_metal_ligand_distance: float) -> list[str]:
@@ -311,7 +327,7 @@ def make_start_geometry(structure: Structure, seed: int, workdir: Path, params: 
                 rejected.append({"seed": s, "problems": [str(exc)]})
                 continue
             # embed() falls back to an unenforced embedding, which RDKit's stereo check does not cover for N
-            wrong = _bound_n_problems(mol, coords, bound_n, float("inf"))
+            wrong = collapsed_pairs(mol, coords) + _bound_n_problems(mol, coords, bound_n, float("inf"))
             if wrong:
                 rejected.append({"seed": s, "stage": "embedded", "problems": wrong})
                 continue
