@@ -17,7 +17,7 @@ from bceg.refine.uma import UMA
 from bceg.search import SEARCHERS
 from bceg.search.base import START_DEFAULTS
 
-from desc_utils.submit import config, template
+from desc_utils.submit import config, pruning, template
 
 DOCS = Path(__file__).resolve().parents[1] / "docs" / "stages"
 README = Path(__file__).resolve().parents[1] / "README.md"
@@ -39,8 +39,10 @@ CASES = [
      | {k for s in SHIPPED.values() for k in s.defaults if k not in START_KEYS}),
     ("4_post_optimization.md", config.POST_OPT_KEYS | set(SHIPPED_REFINERS) | {"null"}
      | {k for r in SHIPPED_REFINERS.values() for k in r.defaults}),
-    ("5_pruning.md", config.PRUNING_KEYS | {"prepared", "skipped_topology", "skipped_energy_filter", "skipped_no_energy", "null"}
-     | set(topology.DEFAULTS) | set(topology.KINDS)),
+    ("5_pruning.md", config.PRUNING_KEYS | {"prepared", "skipped_topology", "skipped_energy_filter", "skipped_no_energy", "null",
+                                            pruning.DUPLICATE, pruning.NOT_REPRESENTATIVE}
+     | set(topology.DEFAULTS) | set(topology.KINDS) | {k for d in pruning.DEFAULTS.values() for k in d}
+     | set(pruning.MARC_METRICS) | set(pruning.MARC_CLUSTERS) | set(pruning.MARC_PICKS)),
     ("6_dft.md", template.ALL_KEYS | {"orca", "dft.calc_param_template", "dft.level_of_theory", "dft.constrained", "slurm.orca",
                                       "slurm.orca_cmd", "condense", "optimization", "frequency", "singlepoint",
                                       "nmr", "oxidation", "reduction",

@@ -224,7 +224,8 @@ def pipeline_line(cfg: Config) -> str:
     return (f"transformation {cfg.transformation_name} | pre_refinement {pre_txt} | conformer_search "
             f"{cfg.method_name} ({cfg.search['searcher']}, {n_rep} replicate{'s' if n_rep > 1 else ''}) | "
             f"post_optimization {post_txt} | pruning "
-            f"{'none' if ewin is None else f'{ewin:g} kcal/mol'} | dft {'on' if cfg.orca_on else 'off'}")
+            f"{'none' if ewin is None else f'{ewin:g} kcal/mol'}"
+            f"{'' if cfg.pruning_method is None else f' + {cfg.pruning_method}'} | dft {'on' if cfg.orca_on else 'off'}")
 
 
 def cmd_fetch_weights(args) -> int:

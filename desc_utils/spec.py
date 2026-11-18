@@ -139,7 +139,7 @@ DEFAULTS: dict[str, Any] = {
         "energy_window_kcal_mol": None,     # kcal/mol above each molecule's own lowest conformer
         "rmsd_threshold_angstrom": None,    # symmetric heavy-atom RMSD; the lowest-energy conformer is kept
         "energy_gate_kcal_mol": 0.2,        # pairs further apart in energy are never compared; see prune.py
-        "max_automorphisms": 1000,
+        "max_automorphisms": 10000,
     },
     # The noise filter (correlation / variance pruning) is opt-in: the library should stay complete and
     # reproducible; enable it in the spec or with `aggregate --filter` when preparing a modelling set.

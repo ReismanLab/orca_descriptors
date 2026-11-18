@@ -15,7 +15,8 @@ ORCA stage of a molecule (``metadata["orca_stage"]["status"]``):
   ``failed``            the prepare task did not run to its end (``reason: cancelled`` after ``cancel``)
 Conformer (``metadata["conformers"][conf]["status"]``):
   ``skipped_topology`` (pruning.topology: another species than the graph), ``skipped_energy_filter``,
-  ``skipped_no_energy``, ``prepared``, ``submitted``, ``running``, ``completed``, ``failed``, ``timeout``
+  ``skipped_no_energy``, ``skipped_duplicate`` / ``skipped_not_representative`` (pruning.method),
+  ``prepared``, ``submitted``, ``running``, ``completed``, ``failed``, ``timeout``
 ``cancel`` writes ``failed`` with ``reason: cancelled`` (and ``cancelled_at``): a cancelled step is a failed
 step, and ``submit`` relaunches both alike.
 """
@@ -34,7 +35,8 @@ METADATA = "metadata.json"
 REGISTRY = "molecule_registry.json"
 
 #: conformers stage 5 (pruning) left out of the DFT on purpose
-SKIPPED_CONFORMER = {"skipped_topology", "skipped_energy_filter", "skipped_no_energy"}
+SKIPPED_CONFORMER = {"skipped_topology", "skipped_energy_filter", "skipped_no_energy", "skipped_duplicate",
+                     "skipped_not_representative"}
 OK_CONFORMER = {"completed"} | SKIPPED_CONFORMER
 PENDING_CONFORMER = {"submitted", "running"}
 BAD_CONFORMER = {"failed", "timeout", "prepared"}
