@@ -50,6 +50,9 @@ DESCRIPYTOR_SCALAR_KEYS: dict[str, Any] = {
 ORCA_XYZ_TERM_ARITY: dict[str, int | None] = {
     "atoms": 1,
     "bonds": 2,
+    # Through-space distances. `bonds` would also give each pair a Sterimol vector, which is
+    # only meaningful along an actual bond.
+    "distances": 2,
     "angles": 3,
     "dihedrals": 4,
     "quadrants": None,  # >= 4 labels
@@ -95,8 +98,16 @@ DEFAULTS: dict[str, Any] = {
         "vbur_radii": [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
         "use_cached_json": True,
         "quadrants": [],
+        "distances": [],
         "angles": [],
         "dihedrals": [],
+        # Ring-level geometry (desc_utils.rings): one entry per ring, its `atoms` written as
+        # the connectivity WALK because the puckering phase is defined against position
+        # around the ring. `ring_pairs` names two declared rings; `ring_probes` puts an atom
+        # against a ring's plane and centroid.
+        "rings": [],
+        "ring_pairs": [],
+        "ring_probes": [],
     },
     "orca_charges": {"basename": "singlepoint"},
     # `spin`: which NBO spin set to read from open-shell blocks (alpha | beta | both); see od.NBOProps.
@@ -130,6 +141,18 @@ DEFAULTS: dict[str, Any] = {
         "skip_classes": ["pyox"],           # N1 is the aromatic nitrogen there by definition
         "class_column": "ligand_class",
         "energy_column": None,              # defaults to numbering.energy.column
+    },
+    # Which donor each hydride sits opposite (desc_utils.trans). Runs after the
+    # hemisphere pass, because it is stated in terms of the N1/N2 it fixes.
+    "trans": {
+        "enabled": False,
+        "centre": "Ni",
+        # the labels to assign; pairs[0][0] is the one trans to trans_to[0]
+        "pairs": [["H1", "H2"]],
+        "trans_to": ["N2", "N1"],
+        # below this the complex has no trans pair and the conformer keeps its
+        # match-order labels rather than being given an invented assignment
+        "min_margin_degrees": 20.0,
     },
     "prune": {
         "enabled": False,
@@ -180,6 +203,7 @@ class Spec:
     aggregate: dict
     prune: dict
     hemisphere: dict
+    trans: dict
     filter: dict
     output: dict
     path: Path | None = None
@@ -279,6 +303,96 @@ def _check_terms(section: str, key: str, terms: Any, arity: int | None, labels: 
         seen.add(tuple(term))
         norm.append(term)
     return norm
+
+
+def _validate_rings(xyz: dict, labels: set[str], problems: list[str]) -> None:
+    """Validate the ``rings`` / ``ring_pairs`` / ``ring_probes`` entries of an xyz block.
+
+    ``homa`` is REQUIRED rather than defaulted. HOMA measures bond lengths against reference
+    lengths for an ideal AROMATIC bond, so on a saturated ring it returns a large negative
+    number rather than failing - a number that would sit in a model beside a real HOMA looking
+    like the same measurement. Whether a ring is aromatic is chemistry the spec author knows
+    and this file cannot infer from a list of labels.
+    """
+    section = "descriptors.orca.xyz"
+    rings = xyz.get("rings") or []
+    if not isinstance(rings, (list, tuple)):
+        problems.append(f"{section}.rings: expected a list, got {type(rings).__name__}")
+        xyz["rings"] = []
+        return
+    norm: list[dict] = []
+    seen: set[str] = set()
+    for i, entry in enumerate(rings):
+        if not isinstance(entry, Mapping):
+            problems.append(f"{section}.rings[{i}]: expected a block with label, atoms and homa, "
+                            f"got {entry!r}")
+            continue
+        bad = [k for k in entry if k not in ("label", "atoms", "homa")]
+        if bad:
+            problems.append(f"{section}.rings[{i}]: unknown setting(s) {bad}; "
+                            f"a ring takes label, atoms, homa")
+        label = str(entry.get("label") or "")
+        if not label:
+            problems.append(f"{section}.rings[{i}]: needs a `label`, used to name its columns")
+        elif label in seen:
+            problems.append(f"{section}.rings[{i}]: duplicate ring label {label!r}")
+        seen.add(label)
+        atoms = list(entry.get("atoms") or [])
+        unknown = [l for l in atoms if l not in labels]
+        if unknown:
+            problems.append(f"{section}.rings[{i}].atoms: unknown atom label(s) {unknown}; "
+                            f"declare them under `atoms`")
+        if len(atoms) < 3:
+            problems.append(f"{section}.rings[{i}].atoms: a ring needs at least 3 labels, "
+                            f"got {len(atoms)}")
+        if len(set(atoms)) != len(atoms):
+            problems.append(f"{section}.rings[{i}].atoms: repeats a label; the atoms are the "
+                            f"ring walk, so each appears once")
+        if "homa" not in entry:
+            problems.append(f"{section}.rings[{i}]: needs `homa: true` or `homa: false`. HOMA is "
+                            f"an aromaticity index; on a saturated ring it returns a confident "
+                            f"large negative number, so it is never defaulted")
+        elif not isinstance(entry.get("homa"), bool):
+            problems.append(f"{section}.rings[{i}].homa: expected true or false, "
+                            f"got {entry.get('homa')!r}")
+        norm.append({"label": label, "atoms": atoms, "homa": bool(entry.get("homa", False))})
+    xyz["rings"] = norm
+
+    pairs = xyz.get("ring_pairs") or []
+    norm_pairs: list[list[str]] = []
+    for i, pair in enumerate(pairs):
+        if not _is_label_list(pair) or len(list(pair)) != 2:
+            problems.append(f"{section}.ring_pairs[{i}]: expected two ring labels, got {pair!r}")
+            continue
+        pair = list(pair)
+        unknown = [r for r in pair if r not in seen]
+        if unknown:
+            problems.append(f"{section}.ring_pairs[{i}]: unknown ring(s) {unknown}; "
+                            f"declared rings are {sorted(seen)}")
+        if pair[0] == pair[1]:
+            problems.append(f"{section}.ring_pairs[{i}]: a ring's angle to itself is always 0")
+        norm_pairs.append(pair)
+    xyz["ring_pairs"] = norm_pairs
+
+    probes = xyz.get("ring_probes") or []
+    norm_probes: list[dict] = []
+    for i, probe in enumerate(probes):
+        if not isinstance(probe, Mapping):
+            problems.append(f"{section}.ring_probes[{i}]: expected a block with ring and atom, "
+                            f"got {probe!r}")
+            continue
+        bad = [k for k in probe if k not in ("ring", "atom")]
+        if bad:
+            problems.append(f"{section}.ring_probes[{i}]: unknown setting(s) {bad}; "
+                            f"a probe takes ring, atom")
+        if probe.get("ring") not in seen:
+            problems.append(f"{section}.ring_probes[{i}].ring: unknown ring "
+                            f"{probe.get('ring')!r}; declared rings are {sorted(seen)}")
+        if probe.get("atom") not in labels:
+            problems.append(f"{section}.ring_probes[{i}].atom: unknown atom label "
+                            f"{probe.get('atom')!r}; declare it under `atoms`")
+        norm_probes.append({"ring": probe.get("ring"), "atom": probe.get("atom")})
+    xyz["ring_probes"] = norm_probes
 
 
 def _validate_smarts_stages(numbering: dict, labels: list[str], problems: list[str]) -> None:
@@ -439,6 +553,7 @@ def _validate_orca(orca: dict | None, labels: set[str], problems: list[str]) -> 
         if not xyz["atoms"]:
             problems.append("descriptors.orca.xyz.atoms must list at least one label")
         xyz["atoms"] = [t[0] for t in xyz["atoms"]]
+        _validate_rings(xyz, labels, problems)
         out["xyz"] = xyz
     for fam, defaults in (("charges", DEFAULTS["orca_charges"]), ("nbo", DEFAULTS["orca_nbo"]), ("redox", DEFAULTS["orca_redox"])):
         cfg = orca.get(fam)
@@ -519,6 +634,36 @@ def _validate_hemisphere(cfg, numbering, labels, problems) -> dict:
             raise ValueError
     except (TypeError, ValueError):
         problems.append("hemisphere.radius must be a positive number of angstrom")
+    return out
+
+def _validate_trans(cfg, labels, problems) -> dict:
+    """The trans block. Every label it names must be one the numbering produces."""
+    out = _merge_defaults(cfg, DEFAULTS["trans"])
+    unknown = [k for k in (cfg or {}) if k not in DEFAULTS["trans"]]
+    if unknown:
+        problems.append(f"trans: unknown key(s) {unknown}; "
+                        f"allowed: {sorted(DEFAULTS['trans'])}")
+    if not out.get("enabled"):
+        return out
+    pairs = [list(p) for p in (out.get("pairs") or [])]
+    if len(pairs) != 1 or len(pairs[0]) != 2:
+        problems.append("trans.pairs: exactly one pair of labels to assign, e.g. [[H1, H2]]")
+    ref = list(out.get("trans_to") or [])
+    if len(ref) != 2:
+        problems.append("trans.trans_to: the two donors the pair sits opposite, in the "
+                        "same order as `pairs[0]`")
+    if len(pairs) == 1 and len(pairs[0]) == 2 and len(ref) == 2 and set(pairs[0]) & set(ref):
+        problems.append("trans: a label cannot be trans to itself")
+    named = [out.get("centre")] + [l for p in pairs for l in p] + ref
+    unknown = sorted({l for l in named if l and l not in labels})
+    if unknown:
+        problems.append(f"trans: unknown atom label(s) {unknown}; "
+                        f"declare them under the numbering `roles`")
+    try:
+        if not 0 < float(out["min_margin_degrees"]) < 180:
+            raise ValueError
+    except (TypeError, ValueError):
+        problems.append("trans.min_margin_degrees must be between 0 and 180")
     return out
 
 
@@ -640,6 +785,7 @@ def validate_spec(raw: Mapping[str, Any], path: Path | None = None) -> Spec:
     prune = _validate_prune(raw.get("prune"), numbering, problems)
     hemisphere = _validate_hemisphere(raw.get("hemisphere"), numbering,
                                       set(labels), problems)
+    trans = _validate_trans(raw.get("trans"), set(labels), problems)
     filt = _merge_defaults(raw.get("filter"), DEFAULTS["filter"])
     output = _validate_output(raw.get("output"), problems)
 
@@ -648,6 +794,7 @@ def validate_spec(raw: Mapping[str, Any], path: Path | None = None) -> Spec:
     return Spec(
         name=name, data=data, atoms=atoms, numbering=numbering, orca=orca,
         descripytor=descripytor, aggregate=aggregate, prune=prune, hemisphere=hemisphere,
+        trans=trans,
         filter=filt, output=output,
         path=path, raw=dict(raw),
     )
