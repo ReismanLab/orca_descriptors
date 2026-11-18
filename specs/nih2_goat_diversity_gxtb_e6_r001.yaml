@@ -154,6 +154,21 @@ hemisphere:
   radius: 6.5                         # the deciding sphere, not the descriptor one
   skip_classes: [pyox]
 
+# Which donor each hydride sits opposite. The SMARTS stages number the two hydrides in match
+# order, which on this library meant the atom's position in the xyz file, so `Ni-H1` named a
+# different site on every molecule. The hemisphere pass above does not touch them: it swaps
+# [N1,N2] and [C1,C2] only, and it EXCLUDES the hydrides from its deciding sphere. Once N1/N2
+# are fixed each hydride has one chemical label left, the donor it is trans to. Per conformer,
+# since that is a discrete geometric fact (~180 degrees against ~90) rather than the steric
+# comparison N1/N2 needs.
+trans:
+  enabled: true
+  centre: Ni
+  pairs: [[H1, H2]]                   # H1 is the one trans to trans_to[0]
+  trans_to: [N2, N1]
+  min_margin_degrees: 20              # below this the complex has no trans pair and the
+                                      # conformer keeps its match-order labels, recorded
+
 prune:                                # which conformers are described; see docs/stages/5_pruning.md
   enabled: true
   energy_column: uma_energy_hartree
