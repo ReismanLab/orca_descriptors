@@ -1393,11 +1393,35 @@ def polar_anisotropy(eigenvalues):
     return math.sqrt(0.5 * ((a - b) ** 2 + (b - c) ** 2 + (c - a) ** 2))
 
 
+def electron_counts(data, dft, atno):
+    """``(charge, multiplicity, n_alpha, n_beta, n_electrons)`` of one property.json, None where unknown.
+
+    ``Calculation_Info`` holds the input's charge, multiplicity and electron count (``NEL``), and they
+    are exact. ``DFT_Energy.nAlphaEl / nBetaEl / nTotalEl`` are not counts: they are the density
+    integrated on the DFT grid, truncated to an integer by ORCA, so 171.9997 electrons is written 171
+    and a neutral singlet would read as a cation. They are the fallback for a file without
+    ``Calculation_Info`` only; rounding cannot repair them (the fraction is gone), and the charge
+    derived there, ``sum(Z) - nTotalEl``, is also wrong for an element with an ECP.
+    """
+    info = data.get("Calculation_Info") or {}
+    n_total, charge, mult = info.get("NumOfElectrons"), info.get("Charge"), info.get("Mult")
+    if n_total is not None and charge is not None and mult is not None:
+        n_total, charge, mult = int(n_total), int(charge), int(mult)
+        # high-spin occupation, as ORCA sets it up for UKS/ROKS: Mult - 1 unpaired alpha electrons
+        return charge, mult, (n_total + mult - 1) // 2, (n_total - mult + 1) // 2, n_total
+    n_alpha, n_beta, n_total = dft.get("nAlphaEl"), dft.get("nBetaEl"), dft.get("nTotalEl")
+    charge = None
+    if atno and all(z is not None for z in atno) and n_total is not None:
+        charge = int(round(sum(atno) - n_total))
+    multiplicity = int(n_alpha - n_beta + 1) if n_alpha is not None and n_beta is not None else None
+    return charge, multiplicity, n_alpha, n_beta, n_total
+
+
 def property_state(conf_dir, basename):
     """Condensed content of ``<basename>.property.json`` (last geometry), or None if absent.
 
-    Keys: ``scf_energy_eh``, electron counts, ``charge`` / ``multiplicity`` (derived from the
-    atomic numbers and electron counts), ``atomic_numbers``, ``charges`` (flat per-atom lists per
+    Keys: ``scf_energy_eh``, electron counts and ``charge`` / ``multiplicity`` (from
+    ``Calculation_Info``, see :func:`electron_counts`), ``atomic_numbers``, ``charges`` (flat per-atom lists per
     scheme, None when ORCA did not print that scheme), ``dipole_au``, ``dipole_magnitude_au``,
     ``polarizability``, ``thermochemistry``, ``nmr`` and a ``mo`` slot filled by the caller.
     The geometry is not copied: every state of a compound job shares ``optimization.xyz``.
@@ -1413,11 +1437,7 @@ def property_state(conf_dir, basename):
     atno = _flat(_nested(G, ["Hirshfeld_Population_Analysis", 0, "ATNO"]))
     if atno is None and symbols:
         atno = [SYMBOL_TO_Z.get(s) for s in symbols]
-    n_alpha, n_beta, n_total = dft.get("nAlphaEl"), dft.get("nBetaEl"), dft.get("nTotalEl")
-    charge = None
-    if atno and all(z is not None for z in atno) and n_total is not None:
-        charge = int(round(sum(atno) - n_total))
-    multiplicity = int(n_alpha - n_beta + 1) if n_alpha is not None and n_beta is not None else None
+    charge, multiplicity, n_alpha, n_beta, n_total = electron_counts(data, dft, atno)
     dip = _nested(G, ["Dipole_Moment", 0]) or {}
     pol = _nested(G, ["Polarizability", 0]) or {}
     thermo = _nested(G, ["THERMOCHEMISTRY_Energies", 0])
