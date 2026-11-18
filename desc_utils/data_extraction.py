@@ -1,3 +1,4 @@
+import math
 import pandas as pd
 import numpy as np
 import re
@@ -288,8 +289,89 @@ def _quadrant_label(quadrant) -> str:
     return "_".join(quadrant)
 
 
+def _atom_index(row, label):
+    """The 1-based index of one label on one conformer's numbering row, or None if it has none.
+
+    None is the ordinary case, not an error: a ring stage is `required: false`, so a ligand
+    of another class simply carries no pyridine labels and every term mentioning one has to be
+    skipped rather than crashing the extraction of the whole library. `int(float(v))` because
+    a numbering column read back from CSV arrives as `5.0`, and sometimes as the string
+    `'5.0'`, which `int()` alone refuses.
+    """
+    if label not in row:
+        return None
+    value = row[label]
+    try:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _ring_keys(rings, ring_pairs, ring_probes):
+    """One representative column name per declared ring term, for the cache check."""
+    keys = []
+    for ring in rings or []:
+        keys.append(f"Ring_{ring['label']}_planarity_rms")
+        if ring.get("homa"):
+            keys.append(f"Ring_{ring['label']}_HOMA")
+    for a, b in ring_pairs or []:
+        keys.append(f"RingPair_{a}_{b}_interplanar_angle")
+    for probe in ring_probes or []:
+        keys.append(f"RingProbe_{probe['ring']}_{probe['atom']}_height")
+    return keys
+
+
+def _add_ring_descriptors(P, row, rings, ring_pairs, ring_probes):
+    """Ring-level geometry (desc_utils.rings) written into ``P.results``.
+
+    A ring whose labels are not all present on this conformer is skipped and NAMED in
+    ``Ring_<label>_note`` rather than left silently absent, because "this column is blank"
+    and "this ring was never asked for" look identical in a finished table.
+    """
+    from desc_utils import rings as ring_math
+
+    coords = {}
+    for ring in rings or []:
+        idx = [_atom_index(row, label) for label in ring["atoms"]]
+        if any(i is None for i in idx):
+            missing = [l for l, i in zip(ring["atoms"], idx) if i is None]
+            P.results[f"Ring_{ring['label']}_note"] = f"not numbered on this conformer: {missing}"
+            continue
+        X = [P.coordinates[i - 1] for i in idx]
+        symbols = [P.elements[i - 1] for i in idx]
+        coords[ring["label"]] = X
+        try:
+            values = ring_math.ring_descriptors(X, symbols, with_homa=bool(ring.get("homa")))
+        except ValueError as exc:                     # e.g. HOMA has no parameters for a bond type
+            P.results[f"Ring_{ring['label']}_note"] = str(exc)
+            values = ring_math.ring_descriptors(X, symbols, with_homa=False)
+        for name, value in values.items():
+            P.results[f"Ring_{ring['label']}_{name}"] = float(value)
+
+    for a, b in ring_pairs or []:
+        if a not in coords or b not in coords:
+            continue
+        P.results[f"RingPair_{a}_{b}_interplanar_angle"] = ring_math.interplanar_angle(coords[a], coords[b])
+        P.results[f"RingPair_{a}_{b}_centroid_distance"] = float(np.linalg.norm(
+            np.mean(np.asarray(coords[a], dtype=float), axis=0)
+            - np.mean(np.asarray(coords[b], dtype=float), axis=0)))
+
+    for probe in ring_probes or []:
+        ring_label, atom_label = probe["ring"], probe["atom"]
+        idx = _atom_index(row, atom_label)
+        if ring_label not in coords or idx is None:
+            continue
+        point = P.coordinates[idx - 1]
+        P.results[f"RingProbe_{ring_label}_{atom_label}_height"] = ring_math.atom_height(coords[ring_label], point)
+        P.results[f"RingProbe_{ring_label}_{atom_label}_centroid_distance"] = ring_math.centroid_distance(
+            coords[ring_label], point)
+
+
 def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, overwrite_json=False, vbur_radii=None,
-                        progress=True, geometry_file=od.PropertiesXYZ.DEFAULT_GEOMETRY_FILE):
+                        progress=True, geometry_file=od.PropertiesXYZ.DEFAULT_GEOMETRY_FILE,
+                        rings=None, ring_pairs=None, ring_probes=None, distances=None):
     """Morfeus descriptors of ``geometry_file`` in every conformer folder of ``df`` (``optimization.xyz`` by default).
 
     Any single-frame xyz works, so a library optimised with UMA (or any ASE calculator) can be described
@@ -306,7 +388,9 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
         # otherwise the atom map changed since it was written and the geometry is recomputed.
         expected_keys = [f"SASA_{a}" for a in atoms] + [f"Bond_{b[0]}_{b[1]}" for b in bonds] \
             + [f"Angle_{x[0]}_{x[1]}_{x[2]}" for x in angles] + [f"Dihed_{'_'.join(d)}" for d in dihedrals] \
-            + [f"%Vbur_{_quadrant_label(q)}_octant_+,+,+" for q in (quadrants or [])]
+            + [f"%Vbur_{_quadrant_label(q)}_octant_+,+,+" for q in (quadrants or [])] \
+            + [f"Dist_{d[0]}_{d[1]}" for d in (distances or [])] \
+            + _ring_keys(rings, ring_pairs, ring_probes)
         # The octant key is in the list because it was NOT, and a library that had been
         # extracted once without quadrants then kept every cached xyz.json and quietly
         # produced no octant column at all. Note what this check still cannot see: it
@@ -328,43 +412,50 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
             P.get_SASA_and_Volume()
 
             # One atom properties
-            atom_map = {atom: int(df.loc[row.Index, atom]) for atom in atoms}
+            numbering_row = df.loc[row.Index]
+            atom_map = {atom: _atom_index(numbering_row, atom) for atom in atoms}
+            atom_map = {a: i for a, i in atom_map.items() if i is not None}
             P.define_atom_list(atom_map)
             P.get_Vbur()
             P.get_atomic_SASA()
             P.get_pyramidalizations()
 
             # Two atom properties
+            # A term is skipped when any of its labels is absent on this conformer rather than
+            # raising: an optional numbering stage (a ring that only a pyox ligand has) leaves
+            # another class's rows without those labels, and one such ligand must not take the
+            # whole library's extraction down with it.
             bond_map = {
-                f"{bond[0]}_{bond[1]}": (int(df.loc[row.Index, bond[0]]), int(df.loc[row.Index, bond[1]]))
+                f"{bond[0]}_{bond[1]}": tuple(_atom_index(numbering_row, l) for l in bond)
                 for bond in bonds
             }
+            bond_map = {k: v for k, v in bond_map.items() if None not in v}
             P.define_bond_list(bond_map)
             P.get_bond_distances()
+
+            distance_map = {
+                "_".join(pair): tuple(_atom_index(numbering_row, l) for l in pair)
+                for pair in (distances or [])
+            }
+            P.define_distance_list({k: v for k, v in distance_map.items() if None not in v})
+            P.get_distances()
             P.get_Sterimol_parameters(morfeus=True)
 
             # Three atom properties
             angle_map = {
-                f"{angle[0]}_{angle[1]}_{angle[2]}": (
-                    int(df.loc[row.Index, angle[0]]),
-                    int(df.loc[row.Index, angle[1]]),
-                    int(df.loc[row.Index, angle[2]]),
-                )
+                "_".join(angle): tuple(_atom_index(numbering_row, l) for l in angle)
                 for angle in angles
             }
+            angle_map = {k: v for k, v in angle_map.items() if None not in v}
             P.define_angle_list(angle_map)
             P.get_angles()
 
             # Four atom properties
             dihedral_map = {
-                f"{dihedral[0]}_{dihedral[1]}_{dihedral[2]}_{dihedral[3]}": (
-                    int(df.loc[row.Index, dihedral[0]]),
-                    int(df.loc[row.Index, dihedral[1]]),
-                    int(df.loc[row.Index, dihedral[2]]),
-                    int(df.loc[row.Index, dihedral[3]]),
-                )
+                "_".join(dihedral): tuple(_atom_index(numbering_row, l) for l in dihedral)
                 for dihedral in dihedrals
             }
+            dihedral_map = {k: v for k, v in dihedral_map.items() if None not in v}
             P.define_dihedral_list(dihedral_map)
             P.get_dihedrals()
 
@@ -373,13 +464,18 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
                 quadrant_map = {}
                 for quadrant in quadrants:
                     if isinstance(quadrant, dict):
-                        atoms = list(quadrant["atoms"])
+                        # NOT `atoms`: that is the loop-wide list of labels this function was
+                        # called with, and rebinding it here narrowed `atom_map` to the
+                        # quadrant frame for every LATER row - silently dropping %Vbur, SASA
+                        # and pyramidalization for the other atoms on every conformer but the
+                        # first. Never fired, because every ORCA spec ships `quadrants: []`.
+                        quadrant_atoms = list(quadrant["atoms"])
                         # The label defaults to the metal rather than to every atom in the
                         # frame, so the column is `%Vbur_Ni_octant_+,+,+` as BUNNY names it
                         # and not `%Vbur_Ni_N1_N2_N2_octant_+,+,+`.
-                        label = str(quadrant.get("label") or atoms[0])
+                        label = str(quadrant.get("label") or quadrant_atoms[0])
                         quadrant_map[label] = {
-                            "atoms": tuple(int(df.loc[row.Index, a]) for a in atoms),
+                            "atoms": tuple(int(df.loc[row.Index, a]) for a in quadrant_atoms),
                             "exclude": tuple(int(df.loc[row.Index, a])
                                              for a in (quadrant.get("exclude") or [])) or None,
                             "radius": quadrant.get("radius"),
@@ -390,6 +486,8 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
                 P.define_quadrant_list(quadrant_map)
                 P.get_vbur_quadrants()
                 P.get_vbur_octants()
+
+            _add_ring_descriptors(P, numbering_row, rings, ring_pairs, ring_probes)
 
             results = P.results
             results["path"] = conf_key(df.loc[row.Index, "path"], repo_root)

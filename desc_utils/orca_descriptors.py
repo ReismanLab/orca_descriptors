@@ -134,6 +134,8 @@ class PropertiesXYZ:
         self.bond_labels_map = {}
         self.angle_labels_map = {}
         self.dihedral_labels_map = {}
+        self.distance_labels_map = {}
+        self.distance_list = None
         self.quadrant_labels_map = {}
 
         # default radius list for Vbur calculation
@@ -270,6 +272,27 @@ class PropertiesXYZ:
         """Define bonds via dict[label, (atom1, atom2)] or a legacy list of atom-index pairs."""
         self.bond_labels_map = self._normalize_group_map(bond_list, expected_len=2, item_name="bond")
         self.bond_list = list(self.bond_labels_map.values())
+
+    def define_distance_list(self, distance_list):
+        """Define through-space distances via dict[label, (atom1, atom2)].
+
+        Separate from `define_bond_list` because a bond entry ALSO produces Sterimol
+        parameters, and Sterimol on a pair that is not bonded - a 1-3 or 1-4 contact across a
+        ring - builds a substituent along an axis that is not a bond and reports its extent as
+        if it were one. The column prefix differs too (`Dist_` against `Bond_`), so a reader
+        cannot mistake a cross-ring contact for a bond length.
+        """
+        self.distance_labels_map = self._normalize_group_map(distance_list, expected_len=2, item_name="distance")
+        self.distance_list = list(self.distance_labels_map.values())
+
+    def get_distances(self):
+        """Euclidean distance for every labelled entry in `define_distance_list()`."""
+        if not getattr(self, "distance_list", None):
+            return
+        for label, atoms in self.distance_labels_map.items():
+            a = np.array(self.coordinates[atoms[0] - 1])
+            b = np.array(self.coordinates[atoms[1] - 1])
+            self.results[f'Dist_{label}'] = float(np.linalg.norm(a - b))
 
     def define_angle_list(self, angle_list):
         """Define angles via dict[label, (atom1, atom2, atom3)] or a legacy list of triplets."""

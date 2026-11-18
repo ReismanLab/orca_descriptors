@@ -222,6 +222,42 @@ def _apply_hemisphere(spec, df_num, args, repo_root):
               f"ligand the two donors are equivalent and the label is arbitrary")
     return df_num
 
+def _apply_trans(spec, df_num, args, repo_root):
+    """H1/H2 by the donor each hydride is trans to, applied to the numbering table.
+
+    After the hemisphere pass, since the rule is stated in terms of the N1/N2 that pass
+    fixes, and before the prune, so the record covers every conformer. Written back over
+    the numbering csv for the same reason the hemisphere pass writes its result back: the
+    modelling app reads that table to mark the site atom in 3D, and a table naming one
+    hydride beside a descriptor computed on the other is a silent disagreement.
+    """
+    cfg = spec.trans
+    if not cfg.get("enabled"):
+        return df_num
+    from desc_utils import trans as tr
+
+    df_num, record = tr.relabel(df_num, cfg, geometry_file=spec.data["geometry_file"],
+                                index_base=int(spec.numbering.get("index_base", 1)))
+    out = _resolve(_output_name(spec, "numbering_csv")).with_name(
+        _output_name(spec, "numbering_csv").replace("atom_numbering_results", "trans"))
+    record.to_csv(out, index=False, encoding="utf-8")
+    table = _resolve(_output_name(spec, "numbering_csv"))
+    if table.exists():
+        df_num.to_csv(table, index=False, encoding="utf-8")
+    info = tr.summary(record)
+    first, second = list(cfg["pairs"][0])
+    ref_first, ref_second = list(cfg["trans_to"])
+    print(f"trans: {info['n_swapped']} of {info['n_decided']} conformers swapped so "
+          f"{first} is trans to {ref_first} and {second} to {ref_second}; "
+          f"{info['n_undecided']} undecided "
+          f"({info['n_without_numbering']} had no complete numbering); record in {out}")
+    if info["n_undecided"] > info["n_without_numbering"]:
+        # a complex far from square planar has no trans pair at all, so those conformers
+        # keep their match-order labels and the column means nothing chemical on them
+        print(f"trans: {info['n_undecided'] - info['n_without_numbering']} conformer(s) "
+              f"have no trans pair and keep their match-order labels")
+    return df_num
+
 
 def _apply_prune(spec, df_num, args, repo_root):
     """The prune block, between numbering and extraction, with its record written beside the tables.
@@ -263,6 +299,7 @@ def cmd_extract(args) -> int:
     df_num = read_numbering_table(_resolve(args.numbering) if args.numbering else _existing_output(spec, "numbering_csv"),
                                   spec, usable=False)
     df_num = _apply_hemisphere(spec, df_num, args, REPO_ROOT)
+    df_num = _apply_trans(spec, df_num, args, REPO_ROOT)
     df_num = _apply_prune(spec, df_num, args, REPO_ROOT)
     families = args.families.split(",") if args.families else None
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, families=families,
@@ -304,6 +341,7 @@ def cmd_all(args) -> int:
         write_numbering_table(df_num, num_out)
         print(f"wrote {num_out}  rows={len(df_num)}  status={df_num['numbering_status'].value_counts().to_dict()}")
     df_num = _apply_hemisphere(spec, df_num, args, REPO_ROOT)
+    df_num = _apply_trans(spec, df_num, args, REPO_ROOT)
     df_num = _apply_prune(spec, df_num, args, REPO_ROOT)
     df = run_extraction(spec, df_num, repo_root=REPO_ROOT, jobs=args.jobs)
     per_conf = _resolve(_output_name(spec, "per_conformer_csv"))
