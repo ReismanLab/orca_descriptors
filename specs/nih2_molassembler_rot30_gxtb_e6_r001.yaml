@@ -154,6 +154,17 @@ hemisphere:
   radius: 6.5                         # the deciding sphere, not the descriptor one
   skip_classes: [pyox]
 
+# Which donor each hydride sits opposite; see the pooled7 spec for the full reasoning.
+# NOTE: the hemisphere pass above has NOT been run on this library's tables, so N1/N2 are
+# still the SMARTS match order. The rule below is applied relative to those labels, and must
+# be re-run once the hemisphere pass is (it recomputes from the geometry every time).
+trans:
+  enabled: true
+  centre: Ni
+  pairs: [[H1, H2]]
+  trans_to: [N2, N1]
+  min_margin_degrees: 20
+
 prune:                                # which conformers are described; see docs/stages/5_pruning.md
   enabled: true
   energy_column: uma_energy_hartree
