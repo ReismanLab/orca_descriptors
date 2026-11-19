@@ -34,6 +34,7 @@ before the walltime), and condenses the outputs to `orca_condensed.json` when `c
 | `slurm.orca_cmd` | `orca` on PATH | the ORCA binary, when `module load` is not enough | no |
 | `slurm.orca_batch` | absent (one conformer per element) | several conformers per array element, run side by side on one node: `batch_size`, `workers`, `exclusive` ([below](#packing-conformers-onto-exclusive-nodes-slurmorca_batch)) | no |
 | `condense` (top level) | `true` | write `conf_N/orca_condensed.json` when each job ends | no |
+| `dft.nbo_json` | `false` | `true`: after ORCA, turn `conf_N/singlepoint.nbo` into `conf_N/singlepoint_nbo.json`, the NBOs of the single point as an ORCA JSON wavefunction (~4 MB per conformer; [below](#the-nbos-as-orbitals-dftnbo_json)); ORCA engine only | no: it only adds a file, so an existing library can be continued with it on |
 
 ### Packing conformers onto exclusive nodes (`slurm.orca_batch`)
 
@@ -136,6 +137,41 @@ dft:
     extra_basis: {}
 ```
 
+### The NBOs as orbitals (`dft.nbo_json`)
+
+The single point already writes its MOs as `conf_N/singlepoint.json` (`jsongbwfile true`), which is
+what orbital plots read. Its NBOs go to `conf_N/singlepoint.nbo`, a file in `.gbw` format with the NBOs
+in place of the MOs: orbital *i* is NBO number *i* of `orca_condensed.json` (checked on two BnCl
+conformers, all 330 energies equal). `FILE.47` is no substitute: it has no NBO coefficients and every
+NBO step of the compound job overwrites it. With `dft.nbo_json: true` each ORCA task ends, after
+condensing, with
+
+```bash
+cp singlepoint.nbo singlepoint_nbo.gbw && orca_2json singlepoint_nbo.gbw && rm singlepoint_nbo.gbw
+```
+
+(`orca_2json` only accepts a `.gbw` name), using the `orca_2json` next to the `orca` binary that ran,
+else the one on PATH: the `module load orca/6.1.0` of `slurm.setup` provides both. The outcome is
+recorded per conformer as `nbo_json` (`ok`, `size_bytes`, or the `error`); a failed conversion never
+changes the conformer's status. Off by default: the file is ~4 MB per conformer.
+
+For conformers that ran before, `orcadesc nbo-json` does the same (on a login or compute node, after
+`module load orca/6.1.0`). It takes the library config or the library directory itself, skips
+conformers that already have a `singlepoint_nbo.json` (`--overwrite` to redo them), and adds `nbo_json` to
+`metadata.json` where the molecule has one:
+
+```bash
+module load orca/6.1.0
+orcadesc nbo-json <LIB>.yaml --lowest --dry-run   # what it would convert
+orcadesc nbo-json <LIB>.yaml --lowest             # lowest single point energy conformer per molecule only
+orcadesc nbo-json $LIB --inchikey <InChIKey>      # every conformer of one molecule
+```
+
+`--lowest` picks, per molecule, the conformer with a `singlepoint.nbo` whose single point SCF energy
+(`orca_condensed.json`, the `SCF_energy` of the specs) is lowest; conformers without a condensed file are
+not candidates. `--orca-2json PATH` names the binary when it is not on PATH. Exit code 1 when a
+conversion failed.
+
 ## What is recorded
 
 `metadata.json` of the molecule, `dft`: `engine`, `orca_module`, `charge`, `multiplicity`, `pruning`,
@@ -148,7 +184,7 @@ in seconds), `wall_time_s`, `cpus` (what the SLURM allocation holds on the node:
 else `ntasks` x `cpus_per_task`, else `nprocs`), `cpu_hours` (`wall_time_s` x `cpus`, the allocation's
 cost as in bceg's records), `orca_steps_s` (wall time of every compound step by its `%base` name, from
 ORCA's own `Timings for individual modules` tables; `null` for a step that did not finish), `condensed`
-(`ok` or the error).
+(`ok` or the error), and with `dft.nbo_json` `nbo_json` (`ok`, `size_bytes`, or the error).
 
 ## Cost
 

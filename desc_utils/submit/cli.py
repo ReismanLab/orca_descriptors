@@ -1,4 +1,4 @@
-"""``python -m desc_utils.submit {submit,cancel,status,cost,fetch-weights,prepare-task,orca-task,gxtb-task}``."""
+"""``python -m desc_utils.submit {submit,cancel,status,cost,nbo-json,fetch-weights,prepare-task,orca-task,gxtb-task}``."""
 
 from __future__ import annotations
 
@@ -270,6 +270,30 @@ def cmd_cost(args) -> int:
     return 0
 
 
+def cmd_nbo_json(args) -> int:
+    """singlepoint.nbo -> singlepoint_nbo.json for conformers that already ran (``dft.nbo_json`` after the fact)."""
+    from desc_utils.submit import nbo_json
+    target = Path(args.target)
+    if target.is_file():
+        try:
+            lib = Config.load(target).library_dir
+        except (ValueError, KeyError, FileNotFoundError) as exc:
+            print(f"CONFIG ERROR: {exc}", file=sys.stderr)
+            return 2
+    elif target.is_dir():
+        lib = target
+    else:
+        print(f"ERROR: {target} is neither a library config nor a library directory", file=sys.stderr)
+        return 2
+    try:
+        counts = nbo_json.backfill(lib, lowest_only=args.lowest, overwrite=args.overwrite, dry_run=args.dry_run,
+                                   orca_2json=args.orca_2json, inchikeys=args.inchikey or None)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    return 1 if counts["failed"] else 0
+
+
 def cmd_prepare_task(args) -> int:
     cfg = Config.load(args.config)
     task = slurm.read_task(Path(args.tasks), args.index)
@@ -338,6 +362,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("config")
     p.add_argument("--csv", help="also write the table to this CSV (one row per molecule, joinable on inchikey)")
     p.set_defaults(func=cmd_cost)
+
+    p = sub.add_parser("nbo-json", help="convert finished conformers' singlepoint.nbo to singlepoint_nbo.json "
+                                        "(needs orca_2json: module load orca/6.1.0)")
+    p.add_argument("target", help="library config (YAML) or library directory")
+    p.add_argument("--lowest", action="store_true",
+                   help="only the lowest single point energy conformer of each molecule (~4 MB per file)")
+    p.add_argument("--inchikey", action="append", help="only this molecule (repeatable)")
+    p.add_argument("--overwrite", action="store_true", help="convert again where singlepoint_nbo.json exists")
+    p.add_argument("--dry-run", action="store_true", help="list what would be converted; writes nothing")
+    p.add_argument("--orca-2json", help="path of orca_2json (default: the one on PATH)")
+    p.set_defaults(func=cmd_nbo_json)
 
     p = sub.add_parser("prepare-task", help="(cluster) split one molecule's ensemble and submit its ORCA array")
     p.add_argument("config")

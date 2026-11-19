@@ -5,7 +5,8 @@
     the library, prune it (stage 5: the connectivity check, the energy window and pruning.method, or nothing), split it into conf_N/ folders, render
     calcParam.inp, record everything, submit the ORCA array.
 ``run_orca_conformer``  (ORCA array, one element per conformer)
-    run ORCA in conf_N/, record the outcome (exit code AND the termination banner), condense.
+    run ORCA in conf_N/, record the outcome (exit code AND the termination banner), condense,
+    and with ``dft.nbo_json`` convert singlepoint.nbo to singlepoint_nbo.json (``nbo_json.convert``).
 ``run_orca_chunk``  (ORCA array with ``slurm.orca_batch``, one element per chunk of a molecule's conformers)
     run several of them at once on one (exclusive) node, each as ``run_orca_conformer`` would.
 """
@@ -35,7 +36,7 @@ from bceg.xyz import HARTREE_TO_KCAL, Conformer, write_xyz
 
 from desc_utils import orca_parse as op
 from desc_utils.submit import pruning as pruning_methods
-from desc_utils.submit import records, slurm, template
+from desc_utils.submit import nbo_json, records, slurm, template
 from desc_utils.submit.cancel import REASON, this_job_cancelled, was_cancelled
 from desc_utils.submit.config import Config
 from desc_utils.submit.source import Ensemble, Ensembles
@@ -472,6 +473,8 @@ def run_orca_conformer(cfg: Config, inchikey: str, conformer: str, orca_cmd: str
 
     if cfg.condense:
         outcome["condensed"] = _condense(conf_dir)
+    if cfg.nbo_json:  # singlepoint.nbo -> singlepoint_nbo.json with the orca_2json of this ORCA build
+        outcome["nbo_json"] = nbo_json.convert(conf_dir, orca_2json=nbo_json.find_orca_2json(orca), overwrite=True)
     records.update_metadata(lib, inchikey, {"conformers": {conformer: outcome}})
     print(f"{inchikey}/{conformer}: {outcome['status']} (exit {exit_code}, banner {outcome['orca_terminated_normally']})")
     return outcome["status"]

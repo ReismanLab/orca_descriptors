@@ -97,6 +97,7 @@ how a running ORCA task told to stop records `failed` and not `timeout`.
 ```bash
 orcadesc status <LIB>.yaml                                                                       # per molecule: one status per stage, conformer counts
 orcadesc cost <LIB>.yaml [--csv cost.csv]                                                        # per molecule: core-hours and GPU-hours per stage and per ORCA step, from the records
+orcadesc nbo-json <LIB>.yaml --lowest [--dry-run]                                               # after module load orca/6.1.0: singlepoint_nbo.json for finished conformers (docs/stages/6_dft.md)
 squeue -u $USER                                                                                  # what SLURM really holds
 python3 /groups/ReismanLab/orca_descriptors/scripts-for-orca-computations/check_jobs.py $LIB      # per conformer, from squeue and the ORCA outputs
 python3 -m json.tool $LIB/<InChIKey>/metadata.json                                               # the full record of one molecule

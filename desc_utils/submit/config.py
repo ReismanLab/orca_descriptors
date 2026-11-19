@@ -70,7 +70,10 @@ EMBEDDING_KEYS = {"start_geometry": "start_geometry", "start_ff": "start_ff",
 SEARCH_KEYS = {"name", "searcher", "params", "constraints", "slurm", "replicates"}
 POST_OPT_KEYS = {"refiner", "params", "slurm", "constrained", "continue_from"}
 PRUNING_KEYS = {"energy_window_kcal_mol", "topology", "method", *pruning_methods.METHODS}
-DFT_KEYS = {"calc_param_template", "level_of_theory", "constrained", "engine", "gxtb"}
+DFT_KEYS = {"calc_param_template", "level_of_theory", "constrained", "engine", "gxtb", "nbo_json"}
+#: ``dft`` keys that only add an output file and change no number in the results: kept out of the params hash,
+#: so an existing library can be continued with them switched on (``dft.nbo_json``: singlepoint_nbo.json)
+DFT_OUTPUT_KEYS = {"nbo_json"}
 #: stage-6 engines: the ORCA compound job, or one g-xTB run per conformer (desc_utils.submit.gxtb)
 DFT_ENGINES = ("orca", "gxtb")
 DEFAULT_DFT_ENGINE = "orca"
@@ -463,6 +466,13 @@ def read_raw(path: str | Path) -> dict:
     engine = dft.pop("engine", DEFAULT_DFT_ENGINE)
     if engine not in DFT_ENGINES:
         raise ValueError(f"{path}: dft.engine must be one of {DFT_ENGINES}, got {engine!r}")
+    nbo_json = dft.pop("nbo_json", False)
+    if not isinstance(nbo_json, bool):
+        raise ValueError(f"{path}: dft.nbo_json must be true or false, got {nbo_json!r}")
+    if nbo_json and engine != "orca":
+        raise ValueError(f"{path}: dft.nbo_json converts ORCA's singlepoint.nbo; it is for dft.engine: orca")
+    if nbo_json:  # only stored when on
+        dft["nbo_json"] = True
     if engine == "gxtb":
         # only stored when it is not the default, so an ORCA library's params.json hash is unchanged
         dft["engine"] = engine
@@ -628,6 +638,11 @@ class Config:
         return self.dft.get("gxtb") or {}
 
     @property
+    def nbo_json(self) -> bool:
+        """``dft.nbo_json``: convert each conformer's singlepoint.nbo to singlepoint_nbo.json after ORCA."""
+        return bool(self.dft.get("nbo_json"))
+
+    @property
     def orca_batch(self) -> dict | None:
         """The resolved ``slurm.orca_batch`` block, or None: one ORCA conformer per array element."""
         return self.slurm.get("orca_batch")
@@ -697,7 +712,7 @@ class Config:
             post = {"refiner": bcfg.refiner.name, "lot": bcfg.refiner.lot, "params": bcfg.refiner.compared_params()}
             if bcfg.refine_from:  # left out without it, so a library built before continue_from keeps its hash
                 post["continue_from"] = bcfg.refine_from
-        dft = dict(self.dft)
+        dft = {k: v for k, v in self.dft.items() if k not in DFT_OUTPUT_KEYS}
         if self.dft_engine == "gxtb":
             # the binary's location is a property of the machine, not of the results
             # nor is whether the orbitals were written out

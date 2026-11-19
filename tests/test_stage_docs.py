@@ -44,7 +44,7 @@ CASES = [
      | set(topology.DEFAULTS) | set(topology.KINDS) | {k for d in pruning.DEFAULTS.values() for k in d}
      | set(pruning.MARC_METRICS) | set(pruning.MARC_CLUSTERS) | set(pruning.MARC_PICKS)),
     ("6_dft.md", template.ALL_KEYS | {"orca", "dft.calc_param_template", "dft.level_of_theory", "dft.constrained", "slurm.orca",
-                                      "slurm.orca_cmd", "condense", "optimization", "frequency", "singlepoint",
+                                      "slurm.orca_cmd", "condense", "dft.nbo_json", "singlepoint.nbo", "singlepoint_nbo.json", "optimization", "frequency", "singlepoint",
                                       "nmr", "oxidation", "reduction",
                                       # the g-xTB engine
                                       "dft.engine", "slurm.gxtb", "slurm.gxtb_cmd"}
