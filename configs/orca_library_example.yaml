@@ -77,6 +77,32 @@ dft:
     svp_method: "m06 d4 def2-tzvp"
     property_solvent: ""
     nmr_method: "m06 d4 def2-tzvp"
+    # NBO. "NBO NPA" makes ORCA call NBO 7 (NBOEXE / GENEXE, exported in slurm.setup below) in the
+    # singlepoint, oxidation and reduction steps. Each run leaves:
+    #   - in the ORCA output, and in conf_N/orca_condensed.json after `condense`: NPA charges, NAO
+    #     occupancies, every NBO with its hybrids, and the second-order perturbation (E(2)) table.
+    #     NBO prints E(2) rows of 0.50 kcal/mol and above in the closed-shell singlepoint, 0.25
+    #     per spin in the open-shell oxidation/reduction (0.05 is only the between-units threshold).
+    #   - <step>.nbo: the NBOs themselves in gbw format. Plot one with `orca_plot <step>.nbo -i`
+    #     (menu: 1, 1, 2, <NBO number - 1>, 4, <grid>, 11, 12).
+    # Which descriptors are built from it (rank-named or chemically named NBOs, E(2) per pair) is
+    # chosen in the spec, descriptors.orca.nbo.naming, not here.
+    # NLMOs: not computed by "NBO NPA", and nbo_run cannot ask for them (it only fills the "!" line;
+    # NLMO needs a %nbo NBOKEYLIST block the template does not write). For a finished library, rerun
+    # only NBO from the saved singlepoint orbitals, per conformer, with the exports above:
+    #     %pal nprocs 4 end
+    #     ! <svp_method> <property_solvent> TightSCF NBO MORead NoIter
+    #     %moinp "guess.gbw"                          # a copy of conf_N/singlepoint.gbw
+    #     %nbo NBOKEYLIST = "$NBO NPA NBO NLMO $END" end
+    #     *xyzfile <charge> <multiplicity> optimization.xyz
+    # About 3 min on 4 cores for an L-NiH2 at def2-TZVP (tested 2026-11-26). The density is the
+    # singlepoint's (same NPA charges and NBO occupancies); the output gains an NLMO section with,
+    # per NLMO, its occupancy, % from the parent NBO and the % on every other atom. With NoIter there
+    # is no Fock matrix: NBO energies print as 0, the E(2) table is empty and FINAL SINGLE POINT
+    # ENERGY is meaningless; take those from the singlepoint run. Save the output as conf_N/nlmo.out
+    # and set descriptors.orca.nbo.nlmo_basename: nlmo in the spec to get the NLMO columns.
+    # conf_N/FILE.47 cannot be used instead: every NBO step overwrites it, so it holds the last
+    # step that ran NBO (the reduction).
     nbo_run: "NBO NPA"
     extra_basis: {Ni: def2-tzvp}                 # full def2-TZVP on Ni in the optimization and frequency steps; {} for none
 

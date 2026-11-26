@@ -988,9 +988,10 @@ class NBOProps:
             #      or: "               ( 39.78%)   0.6307*Ni  2 s( 48.78%)p 0.01(  0.41%)d 1.04( 50.81%)"
             # (two-letter elements abut the "*", so no whitespace may be required there)
             contrib_pattern = r'\(\s*([\d.]+)%\)\s+([-\d.]+)\*\s*([A-Z][a-z]?)\s*(\d+|\*{3,})\s+s\(\s*([\d.]+)%\)p\s*([\d.]+)\(\s*([\d.]+)%\)'
-            contributions = re.finditer(contrib_pattern, atoms_and_contrib)
+            contributions = list(re.finditer(contrib_pattern, atoms_and_contrib))
 
-            for contrib in contributions:
+            for k, contrib in enumerate(contributions):
+                end = contributions[k + 1].start() if k + 1 < len(contributions) else len(atoms_and_contrib)
                 bond_info['contributions'].append({
                     'percentage': float(contrib.group(1)),
                     'coefficient': float(contrib.group(2)),
@@ -998,11 +999,56 @@ class NBOProps:
                     'atom_num': _fortran_int(contrib.group(4)),
                     's_percent': float(contrib.group(5)),
                     'p_power': float(contrib.group(6)),
-                    'p_percent': float(contrib.group(7))
+                    'p_percent': float(contrib.group(7)),
+                    **cls._hybrid(atoms_and_contrib[contrib.start():end]),
                 })
+
+            # A one-centre NBO (CR, LP, LV, RY) prints its hybrid on the NBO line itself
+            # ("LP ( 1)Ni  2   s(  1.76%)p 0.00(  0.00%)d55.92( 98.24%)"), which the pattern
+            # above never matched: it is recorded as one contribution of 100 % on that atom,
+            # flagged ``one_centre`` so the rank-named columns stay what they were.
+            if not contributions and len(atom_numbers) == 1:
+                hyb = cls._hybrid(atoms_and_contrib)
+                if hyb.get('s_percent') is not None:
+                    element = re.match(r'\s*([A-Z][a-z]?)', atoms_line)
+                    bond_info['contributions'].append({
+                        'percentage': 100.0, 'coefficient': 1.0,
+                        'atom': element.group(1) if element else None,
+                        'atom_num': atom_numbers[0], 'one_centre': True, **hyb,
+                    })
 
             bond_orbital_details.append(bond_info)
         return bond_orbital_details
+
+    # One natural hybrid: "s( 48.94%)p 0.01(  0.40%)d 1.04( 50.65%)\n   f 0.00(  0.00%)" then its
+    # coefficients over the atom's NAOs, in NAO order, five per line. The powers can abut the
+    # letter ("d55.92( 98.24%)"), and the f (and g) term can wrap onto the next line.
+    _HYBRID = re.compile(r's\(\s*([\d.]+)%\)'
+                         r'(?:\s*p\s*[\d.]+\(\s*([\d.]+)%\))?'
+                         r'(?:\s*d\s*[\d.]+\(\s*([\d.]+)%\))?'
+                         r'(?:\s*f\s*[\d.]+\(\s*([\d.]+)%\))?'
+                         r'(?:\s*g\s*[\d.]+\(\s*([\d.]+)%\))?')
+    _NAO_COEF = re.compile(r'(?<![\d.])-?\d+\.\d{4}(?![\d.%])')
+    #: NAO coefficients are kept only for a hybrid with at least this much d character: they are
+    #: what a ligand-frame d decomposition needs, and keeping them for every hybrid would double
+    #: the condensed file.
+    NAO_COEF_MIN_D_PERCENT = 5.0
+
+    @classmethod
+    def _hybrid(cls, text):
+        """s/p/d/f(/g) percentages of the first hybrid in ``text``, and its NAO coefficients when
+        the hybrid has real d character (``NAO_COEF_MIN_D_PERCENT``)."""
+        m = cls._HYBRID.search(text)
+        if not m:
+            return {}
+        out = {'s_percent': float(m.group(1)),
+               'd_percent': float(m.group(3)) if m.group(3) else 0.0,
+               'f_percent': float(m.group(4)) if m.group(4) else 0.0}
+        if m.group(2) is not None:
+            out['p_percent'] = float(m.group(2))
+        if out['d_percent'] >= cls.NAO_COEF_MIN_D_PERCENT:
+            out['nao_coefficients'] = [float(x) for x in cls._NAO_COEF.findall(text[m.end():])]
+        return out
 
     _NHO_END_MARKERS = (
         "\n SECOND ORDER PERTURBATION", "\n\n NATURAL BOND ORBITALS",
@@ -1142,6 +1188,44 @@ class NBOProps:
                 'energy_diff': float(g[9]),    # E(j) - E(i) in a.u.
                 'fock_element': float(g[10]),  # F(i,j) in a.u.
             })
+        return rows
+
+    _NLMO_HEAD_RE = re.compile(r"^\s*(\d+)\.\s+\(\s*([\d.]+)\)\s+([\d.]+)%\s+([A-Z0-9]+\*?)\s*\(\s*(\d+)\)(.*)$")
+    _NLMO_ATOM_RE = re.compile(r"^\s+([\d.]+)%\s+([A-Z][a-z]?)\s*(\d+)\s+s\(")
+
+    def get_NLMO(self):
+        """Parse "NATURAL LOCALIZED MOLECULAR ORBITAL (NLMO) ANALYSIS" (``$NBO NLMO $END``).
+
+        Fills ``self.results['nlmo']`` with one dict per NLMO: ``nlmo_num`` (= the number of its
+        parent NBO), ``occupancy``, ``parent_percent`` (% of the NLMO that is the parent NBO),
+        ``parent_type`` / ``parent_index`` / ``parent_atoms`` (the parent's label, e.g. ``LP``, 1,
+        ``"Ni  2"``) and ``atoms``: ``{atom_num: percent}`` over every atom NBO prints (the
+        delocalization tails). Open-shell rows carry ``spin``. An output without the section
+        leaves the list empty.
+        """
+        rows = []
+        for spin_label, section in self._orbital_sections():
+            start = section.find("NATURAL LOCALIZED MOLECULAR ORBITAL (NLMO) ANALYSIS")
+            if start == -1:
+                continue
+            cur, spin_rows = None, []
+            for line in section[start:].splitlines()[1:]:
+                m = self._NLMO_HEAD_RE.match(line)
+                if m:
+                    cur = {"nlmo_num": int(m.group(1)), "occupancy": float(m.group(2)),
+                           "parent_percent": float(m.group(3)), "parent_type": m.group(4),
+                           "parent_index": int(m.group(5)), "parent_atoms": m.group(6).strip(),
+                           "atoms": {}}
+                    spin_rows.append(cur)
+                    continue
+                a = self._NLMO_ATOM_RE.match(line)
+                if a and cur is not None:
+                    n = int(a.group(3))
+                    cur["atoms"][n] = cur["atoms"].get(n, 0.0) + float(a.group(1))
+                elif not line.strip() and spin_rows:
+                    break       # the blank line after the last NLMO ends the section
+            rows.extend(self._tag_spin(spin_rows, spin_label))
+        self.results['nlmo'] = rows
         return rows
 
     def get_cycle_info(self):
