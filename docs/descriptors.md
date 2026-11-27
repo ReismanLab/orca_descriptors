@@ -22,6 +22,7 @@ enabled in the shipped specs. :x: not implemented yet.
 - Bond length: `Bond_X_X` :white_check_mark: / matches DescriPyTor `dist_X-X`
 - Angle: `Angle_X_X_X` :white_check_mark: / matches DescriPyTor `angle_X-X-X`
 - Dihedral: `Dihed_X_X_X_X` :white_check_mark:
+- Handed dihedral (`handed_dihedrals: [{atoms: [a, b, c, d], chirality: [center, p, q, r]}]`): `Dihed_X_X_X_X_handed` = the dihedral times `Handedness_X_X_X_X`, the sign of (p-center).((q-center)x(r-center)), NaN at a planar center. Use it when the dihedral runs through a stereocentre and the ensembles are not all the same enantiomer (an achiral SMILES embedded at random): the raw sign then means opposite things in different molecules. The reference hand is set by the three neighbours named, not by CIP R/S :white_check_mark:
 - %Vbur quadrants and octants (`quadrants: [[metal, z1, z2, xz_plane, ...]]`): `%Vbur_X_X_X_X_quadrant_+,+`, ..., `%Vbur_X_X_X_X_octant_+,+,+`, ... :hourglass:
 - Bite angle (morfeus `BiteAngle`, method present, not wired to the spec) :x: not implemented yet
 

@@ -101,6 +101,10 @@ DEFAULTS: dict[str, Any] = {
         "distances": [],
         "angles": [],
         "dihedrals": [],
+        # Dihedrals made comparable across enantiomers: each entry {atoms: [4 labels],
+        # chirality: [center, a, b, c]} also gives Dihed_<atoms>_handed, the dihedral times the
+        # sign of (a-center).((b-center)x(c-center)). See _validate_handed_dihedrals.
+        "handed_dihedrals": [],
         # Ring-level geometry (desc_utils.rings): one entry per ring, its `atoms` written as
         # the connectivity WALK because the puckering phase is defined against position
         # around the ring. `ring_pairs` names two declared rings; `ring_probes` puts an atom
@@ -303,6 +307,49 @@ def _check_terms(section: str, key: str, terms: Any, arity: int | None, labels: 
         seen.add(tuple(term))
         norm.append(term)
     return norm
+
+
+def _validate_handed_dihedrals(xyz: dict, labels: set[str], problems: list[str]) -> None:
+    """Validate ``handed_dihedrals``: ``{atoms: [4 labels], chirality: [center, a, b, c]}`` entries.
+
+    A signed dihedral around a stereocentre has the opposite sign in the mirror image, so a library
+    whose ensembles are one enantiomer for some molecules and the other for the rest (an achiral
+    SMILES embedded at random) gets values that mean opposite things in different rows. The
+    handedness of ``center`` is the sign of ``(a-center).((b-center)x(c-center))``; multiplying by it
+    reports every molecule as if it were the enantiomer where that triple product is positive.
+    This is a reference hand, not CIP R/S: it depends on which three neighbours are named.
+    """
+    section = "descriptors.orca.xyz.handed_dihedrals"
+    entries = xyz.get("handed_dihedrals") or []
+    if not isinstance(entries, (list, tuple)):
+        problems.append(f"{section}: expected a list, got {type(entries).__name__}")
+        xyz["handed_dihedrals"] = []
+        return
+    norm: list[dict] = []
+    seen: set[tuple[str, ...]] = set()
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            problems.append(f"{section}[{i}]: expected {{atoms: [4 labels], chirality: [center, a, b, c]}}, "
+                            f"got {entry!r}")
+            continue
+        bad = [k for k in entry if k not in ("atoms", "chirality")]
+        if bad:
+            problems.append(f"{section}[{i}]: unknown setting(s) {bad}; an entry takes atoms, chirality")
+        atoms = [str(l) for l in (entry.get("atoms") or [])]
+        chir = [str(l) for l in (entry.get("chirality") or [])]
+        for key, vals in (("atoms", atoms), ("chirality", chir)):
+            if len(vals) != 4:
+                problems.append(f"{section}[{i}].{key}: needs exactly 4 labels, got {len(vals)}")
+            if len(set(vals)) != len(vals):
+                problems.append(f"{section}[{i}].{key}: repeats a label")
+            unknown = [l for l in vals if l not in labels]
+            if unknown:
+                problems.append(f"{section}[{i}].{key}: unknown atom label(s) {unknown}; declare them under `atoms`")
+        if tuple(atoms) in seen:
+            problems.append(f"{section}[{i}]: duplicate dihedral {atoms}")
+        seen.add(tuple(atoms))
+        norm.append({"atoms": atoms, "chirality": chir})
+    xyz["handed_dihedrals"] = norm
 
 
 def _validate_rings(xyz: dict, labels: set[str], problems: list[str]) -> None:
@@ -554,6 +601,7 @@ def _validate_orca(orca: dict | None, labels: set[str], problems: list[str]) -> 
             problems.append("descriptors.orca.xyz.atoms must list at least one label")
         xyz["atoms"] = [t[0] for t in xyz["atoms"]]
         _validate_rings(xyz, labels, problems)
+        _validate_handed_dihedrals(xyz, labels, problems)
         out["xyz"] = xyz
     for fam, defaults in (("charges", DEFAULTS["orca_charges"]), ("nbo", DEFAULTS["orca_nbo"]), ("redox", DEFAULTS["orca_redox"])):
         cfg = orca.get(fam)
