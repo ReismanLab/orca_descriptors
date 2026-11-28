@@ -371,7 +371,7 @@ def _add_ring_descriptors(P, row, rings, ring_pairs, ring_probes):
 
 def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, overwrite_json=False, vbur_radii=None,
                         progress=True, geometry_file=od.PropertiesXYZ.DEFAULT_GEOMETRY_FILE,
-                        rings=None, ring_pairs=None, ring_probes=None, distances=None):
+                        rings=None, ring_pairs=None, ring_probes=None, distances=None, handed_dihedrals=None):
     """Morfeus descriptors of ``geometry_file`` in every conformer folder of ``df`` (``optimization.xyz`` by default).
 
     Any single-frame xyz works, so a library optimised with UMA (or any ASE calculator) can be described
@@ -390,7 +390,8 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
             + [f"Angle_{x[0]}_{x[1]}_{x[2]}" for x in angles] + [f"Dihed_{'_'.join(d)}" for d in dihedrals] \
             + [f"%Vbur_{_quadrant_label(q)}_octant_+,+,+" for q in (quadrants or [])] \
             + [f"Dist_{d[0]}_{d[1]}" for d in (distances or [])] \
-            + _ring_keys(rings, ring_pairs, ring_probes)
+            + _ring_keys(rings, ring_pairs, ring_probes) \
+            + [k for h in (handed_dihedrals or []) for k in _handed_keys(h)]
         # The octant key is in the list because it was NOT, and a library that had been
         # extracted once without quadrants then kept every cached xyz.json and quietly
         # produced no octant column at all. Note what this check still cannot see: it
@@ -458,6 +459,7 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
             dihedral_map = {k: v for k, v in dihedral_map.items() if None not in v}
             P.define_dihedral_list(dihedral_map)
             P.get_dihedrals()
+            _add_handed_dihedrals(P, numbering_row, handed_dihedrals)
 
             # Quadrant properties
             if quadrants is not None:
@@ -495,6 +497,39 @@ def get_xyz_descriptors(df, atoms, bonds, angles, dihedrals, quadrants=None, ove
 
             P.save_results_to_json() # save results to json file in same directory as xyz file for later use if needed
     return results_dict
+
+def _handed_keys(entry) -> list[str]:
+    """Column names of one ``handed_dihedrals`` entry (see ``desc_utils.spec._validate_handed_dihedrals``)."""
+    return [f"Dihed_{'_'.join(entry['atoms'])}_handed", f"Handedness_{'_'.join(entry['chirality'])}"]
+
+
+def _add_handed_dihedrals(P, numbering_row, entries) -> None:
+    """``Dihed_<atoms>_handed`` = dihedral x handedness, ``Handedness_<center>_<a>_<b>_<c>`` = +1 / -1.
+
+    The handedness is the sign of ``(a-center).((b-center)x(c-center))``. A conformer missing any of the
+    eight labels gets neither column (as for every other term), and a planar ``center`` (triple
+    product ~0, no stereocentre) gets NaN rather than an arbitrary sign.
+    """
+    xyz = np.asarray(P.coordinates, dtype=float)
+    for entry in entries or []:
+        dih_idx = [_atom_index(numbering_row, l) for l in entry["atoms"]]
+        chi_idx = [_atom_index(numbering_row, l) for l in entry["chirality"]]
+        if None in dih_idx or None in chi_idx:
+            continue
+        dih_key, hand_key = _handed_keys(entry)
+        p0, p1, p2, p3 = (xyz[i - 1] for i in dih_idx)
+        b1, b2, b3 = p1 - p0, p2 - p1, p3 - p2
+        n1, n2 = np.cross(b1, b2), np.cross(b2, b3)
+        dihedral = float(np.degrees(np.arctan2(np.dot(np.cross(n1, n2), b2 / np.linalg.norm(b2)), np.dot(n1, n2))))
+        c, a, b, d = (xyz[i - 1] for i in chi_idx)
+        u, v, w = a - c, b - c, d - c
+        triple = float(np.dot(u, np.cross(v, w)))
+        # |triple| / (|u||v||w|) is ~0.8 at a tetrahedral centre and 0 at a planar one.
+        scale = float(np.linalg.norm(u) * np.linalg.norm(v) * np.linalg.norm(w))
+        hand = float(np.sign(triple)) if scale > 0 and abs(triple) / scale > 0.05 else float("nan")
+        P.results[hand_key] = hand
+        P.results[dih_key] = dihedral * hand
+
 
 def _load_nbo_results(calc_path, basename="singlepoint", nbo_block_index=0, spin="alpha",
                       condensed_file=CONDENSED_FILENAME, full=True):

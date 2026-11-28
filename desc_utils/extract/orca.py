@@ -69,7 +69,7 @@ def extract_xyz(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path, overwrite_j
         overwrite_json=overwrite_json or not cfg.get("use_cached_json", True),
         vbur_radii=cfg.get("vbur_radii"), progress=progress, geometry_file=geometry_file,
         rings=cfg.get("rings"), ring_pairs=cfg.get("ring_pairs"), ring_probes=cfg.get("ring_probes"),
-        distances=cfg.get("distances"),
+        distances=cfg.get("distances"), handed_dihedrals=cfg.get("handed_dihedrals"),
     )
     return _to_frame(res, repo_root)
 
