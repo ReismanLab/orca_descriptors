@@ -91,6 +91,34 @@ descriptors:
     charges:
       atoms: [H1, H2, C1, C2, N1, N2, Ni]
       basename: singlepoint
+    # NBO descriptors. `naming: rank` (the default, kept so the 20260423 CSV reproduces) names an
+    # NBO by its number counted from the highest occupied one, which is not the same orbital from
+    # one ligand to the next. `naming: chemical` (desc_utils/nbo_keys.py, docs/descriptors.md) names
+    # it by type, sigma/pi/d class and labelled atoms, and adds E(2) per orbital pair:
+    #   nbo_<TYPE>_<class>_<atoms>_<field>     e.g. nbo_LP_dz2_Ni_occupancy_mean, nbo_BD_pi_C2_N2_energy_mean,
+    #                                               nbo_BDstar_pi_N1_any_occupancy_mean (pyridine pi*, partner unlabelled)
+    #   nbo_e2_<donor>_to_<acceptor>           kcal/mol, summed over NBOs sharing a name, e.g.
+    #                                               nbo_e2_BD_pi_C1_any_to_BDstar_pi_C2_N2 (pyridine -> oxazoline conjugation)
+    #                                               nbo_e2_LP_sp_N1_to_BDstar_sigma_Ni_H2  (trans influence; needs the trans block below)
+    #                                               nbo_e2_LP_dxz_Ni_to_BDstar_pi_C2_N2    (Ni back-donation into C=N pi*)
+    # The atom order inside a name follows `atoms:` below. NBO prints E(2) pairs from 0.50 kcal/mol
+    # (closed shell; 0.25 per spin open shell): a missing pair is 0 when the conformer has both
+    # orbitals, NaN only when one of them does not exist there. With `frame: [Ni, N1, N2]` the Ni d
+    # lone pairs are named dz2/dxy/dxz/dyz (x towards N1, y towards N2, z perpendicular); a d
+    # orbital with no component >= 60 % keeps the plain `d` class. To switch on:
+    #     naming: chemical
+    #     frame: [Ni, N1, N2]
+    # (homo_lumo_rank_range and drop_analysis_info then do nothing). The lone-pair classes need the
+    # one-centre hybrids that `condense` records since this change: re-run
+    #     python -m desc_utils.condense --root DATA/<library> --overwrite
+    # on condensed files written before it (the ORCA output is read instead when it is beside them).
+    # Checked 2026-11-26 on 12 LNiH2_library_002 complexes: the same names in all 12, orbitals plotted
+    # from singlepoint.nbo matched (desc_utils.nbo_keys; NBO number - 1 = orca_plot orbital index).
+    # NLMOs need one NBO rerun per conformer, saved as conf_N/nlmo.out (recipe in
+    # configs/orca_library_example.yaml). Then `nlmo_basename: nlmo` adds per key
+    #   nbo_<key>_nlmo_parent      % of the NLMO that is its parent NBO (100 = fully localized)
+    #   nbo_<key>_nlmo_on_<label>  % of it on each other labelled atom, e.g. nbo_LP_sp_N1_nlmo_on_H2
+    # A conformer without the file gets nbo_nlmo_error and NaN NLMO columns.
     nbo:
       atoms: [H1, H2, C1, C2, N1, N2, Ni]
       basename: singlepoint
@@ -119,6 +147,20 @@ descriptors:
     bond_angle: *angles
     radii: CPK
     drop_atoms: []
+
+# H1/H2 by the donor each hydride is trans to (desc_utils/trans.py). Off here so the 20260423 CSV
+# reproduces: without it H1/H2 follow xyz order, so any hydride column (Ni-H1, the E(2) of an N
+# lone pair into a Ni-H sigma*) names a different site on different molecules. On 12
+# LNiH2_library_002 complexes it swapped 9 and made N1 LP -> sigma* Ni-H2 50-54 kcal/mol in all 12
+# (0.0-53 without). To switch on, uncomment:
+# trans:
+#   enabled: true
+#   centre: Ni
+#   pairs: [[H1, H2]]                   # H1 is the one trans to trans_to[0]
+#   trans_to: [N2, N1]
+#   min_margin_degrees: 20              # below this the conformer keeps its match-order labels
+# Keep output.numbering_csv a bare file name with it on: the trans record is written next to it
+# with Path.with_name, which refuses a name containing a folder.
 
 aggregate:
   group_by: inchikey

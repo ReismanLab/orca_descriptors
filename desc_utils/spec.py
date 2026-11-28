@@ -111,8 +111,16 @@ DEFAULTS: dict[str, Any] = {
     },
     "orca_charges": {"basename": "singlepoint"},
     # `spin`: which NBO spin set to read from open-shell blocks (alpha | beta | both); see od.NBOProps.
+    # `naming`: `rank` names an NBO by its number relative to the highest occupied one (the
+    # historical columns, kept so existing libraries reproduce); `chemical` by its type, sigma/pi
+    # class and atoms (desc_utils.nbo_keys), the same orbital under the same name in every
+    # molecule. `frame: [centre, x_atom, y_atom]` (chemical only): d character of the centre's
+    # NBOs in that frame, x towards x_atom, y towards y_atom in their plane, z perpendicular.
+    # `nlmo_basename` (chemical only): read NLMOs from <conf>/<nlmo_basename>.out, an NBO rerun
+    # with $NBO NLMO $END (configs/orca_library_example.yaml has the recipe).
     "orca_nbo": {"basename": "singlepoint", "homo_lumo_rank_range": [1, 2, 3, 4, 5], "drop_analysis_info": True,
-                 "nbo_block_index": 0, "spin": "alpha"},
+                 "nbo_block_index": 0, "spin": "alpha", "naming": "rank", "frame": None,
+                 "nlmo_basename": None},
     "orca_redox": {"prefixes": ["cm5"], "nbo_block_map": {"singlepoint": 1, "oxidation": 2, "reduction": 3}},
     "aggregate": {
         "group_by": "inchikey",
@@ -566,6 +574,23 @@ def _validate_orca(orca: dict | None, labels: set[str], problems: list[str]) -> 
         cfg["atoms"] = [t[0] for t in atoms]
         if fam == "nbo" and cfg.get("spin") not in NBO_SPIN_CHOICES:
             problems.append(f"descriptors.orca.nbo.spin must be one of {list(NBO_SPIN_CHOICES)}, got {cfg.get('spin')!r}")
+        if fam == "nbo":
+            if cfg.get("naming") not in ("rank", "chemical"):
+                problems.append(f"descriptors.orca.nbo.naming must be 'rank' or 'chemical', got {cfg.get('naming')!r}")
+            frame = cfg.get("frame")
+            if frame is not None:
+                if not (isinstance(frame, list) and len(frame) == 3 and all(f in labels for f in frame)
+                        and len(set(frame)) == 3):
+                    problems.append("descriptors.orca.nbo.frame must be three different atom labels "
+                                    f"[centre, x_atom, y_atom], got {frame!r}")
+                elif cfg.get("naming") != "chemical":
+                    problems.append("descriptors.orca.nbo.frame needs naming: chemical")
+            nb = cfg.get("nlmo_basename")
+            if nb is not None:
+                if not isinstance(nb, str) or not nb or "/" in nb:
+                    problems.append(f"descriptors.orca.nbo.nlmo_basename must be a bare file stem, got {nb!r}")
+                elif cfg.get("naming") != "chemical":
+                    problems.append("descriptors.orca.nbo.nlmo_basename needs naming: chemical")
         if fam == "redox":
             bm = cfg.get("nbo_block_map") or {}
             if not isinstance(bm, Mapping) or any(not isinstance(v, int) or isinstance(v, bool) or v < 1 for v in bm.values()):

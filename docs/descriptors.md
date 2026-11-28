@@ -44,10 +44,66 @@ Open-shell (UHF/UKS) NBO blocks hold two complete analyses, one per spin, and NB
 
 - NPA populations: `npa_X_core`, `npa_X_valence`, `npa_X_rydberg`, `npa_X_total`, `npa_totals_*` :white_check_mark:
 - Natural atomic orbital occupancies: `nao_X_Cor-1s_occupancy`, `nao_X_Val-2p_occupancy`, `nao_X_Ryd-3d_occupancy`, ... (`_2`, `_3` suffixes for degenerate sets) :white_check_mark:
+The bullets below with an `R` token are the `naming: rank` columns (the default, kept so existing
+libraries reproduce). `naming: chemical` replaces them with the block that follows them.
+
 - Natural bond orbitals on labelled atoms: `nbo_R_X_X_type`, `nbo_R_X_X_bond_index`, `nbo_R_X_X_occupancy`, `nbo_R_X_X_energy` (lone pairs: `nbo_R_X_*`) :white_check_mark:
 - Bond orbital composition: `bond_orbital_details_R_X_X_{bond_type,bond_index,occupancy}`, `bond_orbital_details_R_X_X_contrib_k_X_{percentage,coefficient,s_percent,p_power,p_percent}` :white_check_mark:
 - NHO directionality: `nho_directionality_R_X_X_{line_theta,line_phi,hybrid_theta,hybrid_phi,deviation}` :white_check_mark: (φ/θ dropped by the optional filter)
 - Second-order perturbation E(2) between labelled orbitals: `second_order_R_<donor>_to_R_<acceptor>_{donor_type,donor_index,acceptor_type,acceptor_index,e2_energy,energy_diff,fock_element}` :white_check_mark: (NBO 7 numbered rows and the legacy `->` layout; only rows whose donor and acceptor atoms are all labelled are kept; both `R` tokens are subject to `homo_lumo_rank_range`, so widen or disable it to keep these columns)
+
+**NBOs named by what they are** (`naming: chemical`, `desc_utils/nbo_keys.py`) :white_check_mark:
+
+A rank names a position in NBO's list, not an orbital: NBO numbers are not in energy order, the
+reference NBO can be an antibond (an aromatic π* at 0.3–0.4 e in every BnCl conformer), and the
+numbering changes between NBO versions. On BnCl the C1–Cl σ* is anything from `hm24` to `lp4` and
+`homo_lumo_rank_range: [1..5]` keeps it in 47 of 279 conformers. A chemical key is the same in every
+molecule: `nbo_<TYPE>[_<class>]_<atoms>[_any][_alpha|_beta]_<field>`.
+
+- `TYPE`: `CR`, `LP`, `LV`, `BD`, `BDstar`, `3C`... (Rydberg orbitals dropped).
+- `class`: two-centre `sigma` / `pi` (`pi` when every centre's hybrid is under 2 % s); lone pair or
+  vacancy `sp` / `p` (`p` when p% − s% > 80, the rule of SIMG, Boiko et al., *Nat. Mach. Intell.*
+  **2025**, [10.1038/s42256-025-01031-9](https://doi.org/10.1038/s42256-025-01031-9)) or `d` (≥ 50 %
+  d), refined to `dz2`, `dxz`, `dyz`, `dx2y2`, `dxy` (≥ 60 % of the d part) when `frame` is set; cores
+  have none.
+- `atoms`: spec labels in spec order (`Cl_C1` whatever order NBO printed them in). Labels are
+  positions, so a ring atom is the same key whether it is C or N.
+- `_any`: every π NBO is also keyed per labelled atom with any partner (`BD_pi_A1_any`), which
+  survives NBO choosing a different Kekulé structure in different molecules.
+- A BD (BD*) with ≥ 90 % on one labelled atom is keyed as that atom's `LP` (`LV`) with
+  `_from_bond` = how many: NBO turns a bond polarised beyond ~95 % into LP + LV, so a metal–ligand
+  bond can be either from one complex to the next.
+- Open-shell blocks key the alpha and beta sets separately: their Lewis structures can differ.
+
+Fields: `_n` (NBOs sharing the key: the two p lone pairs of Cl, the cores of Cl...),
+`_energy_{mean,min,max}` (Eh), `_occupancy_{mean,min,max}` (min/max/mean over equivalent orbitals as
+in kraken, Gensch et al., *JACS* **2022**, [10.1021/jacs.1c09718](https://doi.org/10.1021/jacs.1c09718),
+and Dotson et al., *JACS* **2023**, [10.1021/jacs.2c08513](https://doi.org/10.1021/jacs.2c08513)),
+`_pol_X` (% of the NBO on X, two-centre), `_s_X`, `_p_X`, `_d_X` (hybrid character on X, %), and with
+`frame: [M, A, B]` the d character of M's hybrid in that frame, `_dz2_M` ... `_dxy_M` (fractions; x
+from M towards A, y towards B in their plane, z perpendicular, so the axes follow the labels and not
+the input orientation). E(2) is summed per key pair: `nbo_e2_<donor key>_to_<acceptor key>` (kcal/mol).
+NBO prints a pair only from 0.50 kcal/mol (closed shell; 0.25 per spin open shell), so a pair missing
+from a conformer that has both orbitals is set to 0; it stays NaN only when one of the orbitals does not
+exist there.
+
+NLMOs (`nlmo_basename: <stem>`, chemical only) are read from `<conf>/<stem>.out`, an NBO rerun with
+`$NBO NLMO $END` from the singlepoint orbitals (recipe in `configs/orca_library_example.yaml`). Each
+NLMO is keyed through its parent NBO in that run (the parent's type is checked), and per key adds
+`_nlmo_parent` (% of the NLMO that is the parent NBO; 100 = fully localized) and `_nlmo_on_<label>`
+(% on each labelled atom outside the key, 0 when NBO prints nothing there). On LNiH2_library_002 the
+N lone pairs are 89–90 % parent, with 4.5–4.7 % on Ni and 2.8 % on the trans hydride. A conformer
+without the file gets `nbo_nlmo_error` and NaN in these columns.
+Raw coefficients on px/py/pz or on basis functions are not reported: they depend on the input axes or
+the basis set.
+
+On LNiH2_library_002 (`frame: [Ni, N1, N2]`) the four Ni lone pairs come out as `LP_dz2_Ni`
+(97 % dz²), `LP_dxy_Ni`, `LP_dyz_Ni`, `LP_dxz_Ni`; Ni–H is `BD_sigma_Ni_H1` with 97 % dx²−y² on Ni,
+and `nbo_e2_LP_sp_N1_to_BDstar_sigma_Ni_H2` (53 kcal/mol) is the trans influence. The lone-pair
+classes need the one-centre hybrids that `desc_utils.condense` records since this change: an older
+condensed file is read from the ORCA output beside it, else re-run
+`python -m desc_utils.condense --root <library_dir> --overwrite` on the cluster.
+
 - HOMO and LUMO energies (eV, from the singlepoint MOs): `HOMO_energy`, `LUMO_energy` :white_check_mark:
 - Other frontier orbital descriptors (gap, orbital coefficients) :x: not implemented yet
 
