@@ -132,7 +132,11 @@ def test_orbital_details_accept_lv_and_ni_without_space(tmp_path):
     assert sorted(details) == [1, 29, 46, 50, 87, 88, 128, 129, 130, 131, 132]
     lv = details[87]
     assert (lv["bond_type"], lv["bond_index"], lv["atoms"], lv["occupancy"]) == ("LV", 1, [2], 0.26397)
-    assert lv["contributions"] == []          # one-centre orbitals carry no per-atom contribution block
+    # A one-centre orbital's hybrid is on its own line: one 100 % contribution, flagged one_centre
+    # (desc_utils.nbo_keys needs it to tell an s-rich lone pair from a p one).
+    (lv_hyb,) = lv["contributions"]
+    assert lv_hyb["one_centre"] and lv_hyb["atom_num"] == 2 and lv_hyb["s_percent"] == 99.10
+    assert lv_hyb["d_percent"] == 0.59 and lv_hyb["f_percent"] == 0.0
     assert details[29]["bond_type"] == "LP" and details[29]["atoms"] == [2]
     assert details[46]["atoms"] == [1, 2] and [c["atom_num"] for c in details[46]["contributions"]] == [1, 2]
     assert details[50]["bond_type"] == "3C" and details[50]["atoms"] == [5, 6, 7]

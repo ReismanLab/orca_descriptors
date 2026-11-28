@@ -205,7 +205,7 @@ def _collect_selected_nbo_results(nbo_results, atom_index_map):
         contrib_counter = 0
         for contrib in entry.get("contributions", []):
             contrib_atom = contrib.get("atom_num")
-            if contrib_atom not in selected_indices:
+            if contrib_atom not in selected_indices or contrib.get("one_centre"):
                 continue
             contrib_counter += 1
             contrib_label = atom_index_to_label[contrib_atom]
@@ -683,8 +683,75 @@ def get_all_charges(df, atoms, basename="singlepoint", condensed_file=CONDENSED_
         results_dict[row.Index] = results
     return results_dict
 
+def _conformer_coords(calc_path, condensed_file=CONDENSED_FILENAME):
+    """Cartesian coordinates (angstrom, file order) of the geometry the NBO job ran on: the
+    condensed file's ``molecule.atoms`` when present, else ``optimization.xyz``."""
+    from desc_utils.condense import find_condensed, load_condensed
+    cond = find_condensed(calc_path, condensed_file) if condensed_file else None
+    if cond is not None:
+        atoms = (load_condensed(cond).get("molecule") or {}).get("atoms") or []
+        if atoms:
+            return np.array([[float(a["x"]), float(a["y"]), float(a["z"])] for a in atoms])
+    xyz = Path(calc_path) / "optimization.xyz"
+    lines = xyz.read_text(encoding="utf-8").splitlines()
+    return np.array([[float(v) for v in ln.split()[1:4]] for ln in lines[2:2 + int(lines[0])]])
+
+
+def _nlmo_columns(calc_path, atom_map, nlmo_basename, frame, coords):
+    """NLMO columns from ``<calc_path>/<nlmo_basename>.out`` (an NBO rerun with ``$NBO NLMO $END``).
+    The NLMOs are keyed through that output's own NBO section, so they need not share NBO
+    numbers with the singlepoint; its energies and E2 (zero under NoIter) are not used."""
+    from desc_utils import nbo_keys
+    out = Path(calc_path) / f"{nlmo_basename}.out"
+    if not out.is_file():
+        return {"nbo_nlmo_error": f"no {out.name}"}
+    reader = od.NBOProps(out, block_index=0, spin="both")
+    reader.get_NAO()
+    reader.get_NBO_summary()
+    reader.get_orbital_details()
+    nlmo = reader.get_NLMO()
+    if not nlmo:
+        return {"nbo_nlmo_error": f"{out.name} has no NLMO section"}
+    return nbo_keys.nlmo_descriptors(nlmo, reader.results, atom_map, frame, coords)
+
+
+def _chemical_nbo_row(calc_path, atom_map, basename, nbo_block_index, spin, condensed_file, frame,
+                      nlmo_basename=None):
+    """One conformer's NBO descriptors under ``naming: chemical`` (desc_utils.nbo_keys): the NPA and
+    NAO columns as under rank naming, then the chemically keyed NBO, hybrid and E2 columns, and the
+    NLMO columns when ``nlmo_basename`` is set."""
+    from desc_utils import nbo_keys
+    base = _collect_selected_nbo_results(
+        _load_nbo_results(calc_path, basename, nbo_block_index, spin=spin,
+                          condensed_file=condensed_file, full=True), atom_map)
+    flat = {k: v for k, v in base.items() if k.startswith(("npa_", "nao_"))}
+    results = _load_nbo_results(calc_path, basename, nbo_block_index, spin="both",
+                                condensed_file=condensed_file, full=True)
+    if not nbo_keys.has_hybrids(results):
+        # A condensed file written before one-centre hybrids were parsed: read the output itself
+        # when it is there, else say what to do.
+        try:
+            results = _load_nbo_results(calc_path, basename, nbo_block_index, spin="both",
+                                        condensed_file=None, full=True)
+        except Exception:
+            results = None
+        if results is None or not nbo_keys.has_hybrids(results):
+            raise ValueError("the NBO data has no lone-pair hybrids (a condensed file written before "
+                             "they were parsed and no ORCA output beside it): re-run "
+                             "`python -m desc_utils.condense --root <library_dir> --overwrite` on this library")
+    coords = _conformer_coords(calc_path, condensed_file) if frame else None
+    flat.update(nbo_keys.chemical_descriptors(results, atom_map, frame, coords))
+    if nlmo_basename:
+        try:
+            flat.update(_nlmo_columns(calc_path, atom_map, nlmo_basename, frame, coords))
+        except Exception as exc:
+            flat["nbo_nlmo_error"] = f"{type(exc).__name__}: {str(exc)[:100]}"
+    return flat
+
+
 def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0, spin="alpha",
-                           condensed_file=CONDENSED_FILENAME, consolidate_ranks=True):
+                           condensed_file=CONDENSED_FILENAME, consolidate_ranks=True,
+                           naming="rank", frame=None, nlmo_basename=None):
     """Extract all properties available from ``od.NBOProps`` into a flat dataframe.
 
     Parameters
@@ -710,6 +777,14 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0,
         Apply :func:`consolidate_nbo_rank_columns` to the result (default). The parallel extraction
         passes ``False`` and consolidates once over the concatenated table: the decision to merge
         ``_lpN_`` / ``_hmN_`` columns depends on every molecule of the library.
+    naming : {"rank", "chemical"}, optional
+        ``rank`` (default) keeps the historical rank-named columns; ``chemical`` keys every NBO by
+        type, sigma/pi class and atoms (:mod:`desc_utils.nbo_keys`).
+    frame : list[str] | None, optional
+        ``[centre, x_atom, y_atom]`` labels for the ligand-frame d character (chemical only).
+    nlmo_basename : str | None, optional
+        Stem of an NBO rerun with NLMOs in each conformer folder (chemical only): adds the
+        ``_nlmo_parent`` / ``_nlmo_on_<label>`` columns of :func:`desc_utils.nbo_keys.nlmo_descriptors`.
 
     Returns
     -------
@@ -729,19 +804,23 @@ def get_all_nbo_properties(df, atoms, basename="singlepoint", nbo_block_index=0,
         }
 
         try:
-            # Every descriptor family implemented by NBOProps (from the condensed file when present).
-            results = _load_nbo_results(calc_path, basename, nbo_block_index, spin=spin,
-                                        condensed_file=condensed_file, full=True)
+            if naming == "chemical":
+                row_results.update(_chemical_nbo_row(calc_path, atom_map, basename, nbo_block_index,
+                                                     spin, condensed_file, frame, nlmo_basename))
+            else:
+                # Every descriptor family implemented by NBOProps (from the condensed file when present).
+                results = _load_nbo_results(calc_path, basename, nbo_block_index, spin=spin,
+                                            condensed_file=condensed_file, full=True)
 
-            filtered = _collect_selected_nbo_results(results, atom_map)
-            row_results.update(filtered)
+                filtered = _collect_selected_nbo_results(results, atom_map)
+                row_results.update(filtered)
         except Exception as exc:
             row_results["nbo_extraction_error"] = str(exc)
 
         nbo_results[row.Index] = row_results
 
     df_out = pd.DataFrame.from_dict(nbo_results, orient="index")
-    return consolidate_nbo_rank_columns(df_out) if consolidate_ranks else df_out
+    return consolidate_nbo_rank_columns(df_out) if (consolidate_ranks and naming == "rank") else df_out
 
 
 def consolidate_nbo_rank_columns(df_out):

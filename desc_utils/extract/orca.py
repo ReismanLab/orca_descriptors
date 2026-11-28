@@ -88,6 +88,11 @@ def postprocess_nbo(df: pd.DataFrame, cfg: Mapping) -> pd.DataFrame:
     once to the concatenated per-conformer frames (see ``run_extraction(jobs=...)``). The order matters:
     a column dropped by the filter could otherwise change which rank groups are merged.
     """
+    if cfg.get("naming", "rank") == "chemical":
+        # No ranks to merge or filter. A pair missing from a conformer whose donor and acceptor
+        # both exist was under NBO's print threshold: 0, not NaN.
+        from desc_utils.nbo_keys import fill_absent_e2
+        return fill_absent_e2(df)
     df = de.consolidate_nbo_rank_columns(df)
     return filter_nbo_rank_columns(df, cfg.get("homo_lumo_rank_range"), cfg.get("drop_analysis_info", True))
 
@@ -98,6 +103,8 @@ def extract_nbo(df_num: pd.DataFrame, cfg: Mapping, repo_root: Path,
         _with_repo_paths(df_num, repo_root), cfg["atoms"], basename=cfg.get("basename", "singlepoint"),
         nbo_block_index=int(cfg.get("nbo_block_index", 0)), spin=cfg.get("spin", "alpha"),
         condensed_file=condensed_file, consolidate_ranks=False,
+        naming=cfg.get("naming", "rank"), frame=cfg.get("frame"),
+        nlmo_basename=cfg.get("nlmo_basename"),
     )
     df = _to_frame(res, repo_root)
     return postprocess_nbo(df, cfg) if postprocess else df
